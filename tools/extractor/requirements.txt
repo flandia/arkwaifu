@@ -5,7 +5,7 @@ Brotli==1.1.0
 etcpak==0.9.13
 fsspec==2025.3.2
 lz4==4.4.4
-pillow==11.1.0
+pillow==12.1.1
 pyfmodex==0.7.2
 texture2ddecoder==1.0.5
 UnityPy==1.21.3
