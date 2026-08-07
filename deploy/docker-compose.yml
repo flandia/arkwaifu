@@ -21,7 +21,7 @@ services:
     depends_on:
       database:
         condition: service_healthy
-    image: ghcr.io/flandiayingman/arkwaifu/service:latest
+    image: ghcr.io/flandia/arkwaifu/service:latest
     volumes:
       - ./arkwaifu-root:/var/arkwaifu-root
     environment:
@@ -33,7 +33,7 @@ services:
     depends_on:
       database:
         condition: service_healthy
-    image: ghcr.io/flandiayingman/arkwaifu/updateloop:latest
+    image: ghcr.io/flandia/arkwaifu/updateloop:latest
     volumes:
       - ./arkwaifu-root:/var/arkwaifu-root
     environment:

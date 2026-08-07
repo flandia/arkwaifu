@@ -41,5 +41,5 @@ jobs:
           push: ${{ startsWith(github.ref, 'refs/tags/') }}
           # List of tags
           tags: |
-            ghcr.io/flandiayingman/arkwaifu/updateloop:latest
-            ghcr.io/flandiayingman/arkwaifu/updateloop:${{ github.ref_name }}
+            ghcr.io/flandia/arkwaifu/updateloop:latest
+            ghcr.io/flandia/arkwaifu/updateloop:${{ github.ref_name }}
