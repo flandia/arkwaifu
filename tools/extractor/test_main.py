@@ -1,8 +1,15 @@
+import tempfile
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
+from unittest.mock import patch
 
-from main import mono_behaviour_name, normalize_container_path
+from main import (
+    EXTRACTOR_TASKS_PER_WORKER,
+    mono_behaviour_name,
+    normalize_container_path,
+    unpack_assets,
+)
 
 
 class MissingScript:
@@ -35,6 +42,40 @@ class ExtractorIntegrationHelpersTest(unittest.TestCase):
         self.assertEqual(
             mono_behaviour_name(obj, {"m_Script": {}}),
             "MonoBehaviour_123",
+        )
+
+    def test_directory_mode_reports_worker_failures(self):
+        class FailingFuture:
+            def result(self):
+                raise RuntimeError("worker failed")
+
+        class RecordingExecutor:
+            tasks_per_child = None
+
+            def __init__(self, max_workers=None, max_tasks_per_child=None):
+                self.__class__.tasks_per_child = max_tasks_per_child
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, exc_value, traceback):
+                return False
+
+            def submit(self, *args):
+                return FailingFuture()
+
+        with tempfile.TemporaryDirectory() as tmp:
+            source = Path(tmp) / "source"
+            source.mkdir()
+            (source / "bundle.ab").touch()
+
+            with patch("main.ProcessPoolExecutor", RecordingExecutor):
+                with self.assertRaisesRegex(RuntimeError, "worker failed"):
+                    unpack_assets(source, Path(tmp) / "output", workers=1)
+
+        self.assertEqual(
+            RecordingExecutor.tasks_per_child,
+            EXTRACTOR_TASKS_PER_WORKER,
         )
 
 

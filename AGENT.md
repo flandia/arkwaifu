@@ -48,6 +48,12 @@ Go scanner. Character bundles may reference a shared MonoScript CAB that is not
 included in the bundle; the extractor falls back to the serialized type-tree
 shape for character hub names so image data can still be exported.
 
+Directory extraction deliberately recycles a worker after each bundle and waits
+for every submitted future. UnityPy/native image allocations can otherwise
+accumulate over a large art batch; an OOM-killed worker must fail the update
+rather than silently leaving bundles unextracted and advancing the art version
+marker.
+
 Use `-w 1` while debugging extraction so output and failures are deterministic.
 Do not commit downloaded bundles, generated images, virtual environments, or
 credentials. This checkout locally excludes `.cache/` and `.env.local` via

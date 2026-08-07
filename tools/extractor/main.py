@@ -25,6 +25,9 @@ PIL.Image.preinit()
 PIL.Image.init()
 
 
+EXTRACTOR_TASKS_PER_WORKER = 1
+
+
 def normalize_container_path(container: Path) -> Path:
     """Map Arknights' short bundle paths to the tree used by the Go scanner."""
     if container.parts and container.parts[0].lower() == "dyn":
@@ -62,11 +65,32 @@ def unpack_assets(src: Path, dst: Path, workers=None):
     try:
         if src.is_dir():
             print(f"searching files in {src}...")
-            with ProcessPoolExecutor(max_workers=workers) as executor:
-                for it in src.glob('**/*'):
-                    if it.is_file():
-                        print(f"found {it} in {src}...")
-                        executor.submit(unpack_assets, it, dst, None)
+            files = [it for it in src.glob("**/*") if it.is_file()]
+            failures = []
+            with ProcessPoolExecutor(
+                max_workers=workers,
+                max_tasks_per_child=EXTRACTOR_TASKS_PER_WORKER,
+            ) as executor:
+                futures = []
+                for it in files:
+                    print(f"found {it} in {src}...")
+                    futures.append((it, executor.submit(unpack_assets, it, dst, None)))
+
+                for it, future in futures:
+                    try:
+                        future.result()
+                    except Exception as e:
+                        failures.append((it, e))
+
+            if failures:
+                details = "; ".join(
+                    f"{path}: {error}" for path, error in failures[:10]
+                )
+                if len(failures) > 10:
+                    details += f"; ... and {len(failures) - 10} more"
+                raise RuntimeError(
+                    f"{len(failures)} extraction task(s) failed: {details}"
+                )
 
         elif src.is_file():
             env = UnityPy.load(str(src))
@@ -88,6 +112,7 @@ def unpack_assets(src: Path, dst: Path, workers=None):
             print(f"WARN: {src} is not dir neither file; skipping", file=sys.stderr)
     except Exception as e:
         print(f"ERROR: {src} failed to unpack: {e}", file=sys.stderr)
+        raise
 
 
 def export(
