@@ -2,29 +2,38 @@ package updateloop
 
 import (
 	"context"
+	"os"
+	"sort"
+	"strconv"
+	"strings"
+	"time"
+
+	"github.com/Jeffail/gabs/v2"
 	"github.com/flandiayingman/arkwaifu/internal/app/gallery"
 	"github.com/flandiayingman/arkwaifu/internal/pkg/ark"
 	"github.com/flandiayingman/arkwaifu/internal/pkg/arkdata"
 	"github.com/flandiayingman/arkwaifu/internal/pkg/arkjson"
 	"github.com/pkg/errors"
 	"github.com/rs/zerolog/log"
-	"os"
-	"strings"
-	"time"
 )
 
 var (
 	galleryPatterns = []string{
+		"gamedata/excel/activity_table.json",
 		"gamedata/excel/story_review_meta_table.json",
 		"gamedata/excel/replicate_table.json",
 		"gamedata/excel/retro_table.json",
 		"gamedata/excel/roguelike_topic_table.json",
+		"gamedata/excel/stage_table.json",
 	}
 )
 
 func (s *Service) getRemoteGalleryVersion(ctx context.Context, server ark.Server) (ark.Version, error) {
-	v, err := arkdata.GetLatestDataVersion(ctx, server)
-	return v.ResourceVersion, err
+	v, err := arkdata.GetLatestCompositeDataVersion(ctx, server)
+	if err != nil {
+		return "", err
+	}
+	return v.ResourceVersion, nil
 }
 
 func (s *Service) getLocalGalleryVersion(ctx context.Context, server ark.Server) (ark.Version, error) {
@@ -74,7 +83,7 @@ func (s *Service) updateGalleries(ctx context.Context, server ark.Server, versio
 	}
 	defer os.RemoveAll(root)
 
-	err = arkdata.GetGameData(ctx, server, version, galleryPatterns, root)
+	err = arkdata.GetCompositeGameData(ctx, server, version, galleryPatterns, root)
 	if err != nil {
 		return err
 	}
@@ -117,6 +126,14 @@ func ParseToGalleries(server ark.Server, root string) ([]gallery.Gallery, error)
 	if err != nil {
 		return nil, err
 	}
+	jsonStageTable, err := arkjson.Get(root, arkjson.StageTable)
+	if err != nil && !os.IsNotExist(err) {
+		return nil, err
+	}
+	jsonActivityTable, err := arkjson.Get(root, arkjson.ActivityTable)
+	if err != nil && !os.IsNotExist(err) {
+		return nil, err
+	}
 
 	artMap := make(map[string]gallery.Art)
 	for _, c := range jsonStoryReviewMetaTable.S("actArchiveResData", "pics").Children() {
@@ -131,14 +148,30 @@ func ParseToGalleries(server ark.Server, root string) ([]gallery.Gallery, error)
 		}
 	}
 
+	galleryDescriptions := make(map[string]string)
+	if jsonStageTable != nil {
+		for _, c := range jsonStageTable.S("storylineStorySets").Children() {
+			id := strings.ToLower(stringOrEmpty(c.S("relevantActivityId").Data()))
+			if id == "" {
+				continue
+			}
+			galleryDescriptions[id] = storySetDescription(c)
+		}
+	}
+
 	galleryMap := make(map[string]gallery.Gallery)
 	for _, c := range jsonRetroTable.S("retroActList").Children() {
 		for _, actID := range c.S("linkedActId").Children() {
-			galleryMap[strings.ToLower(actID.Data().(string))] = gallery.Gallery{
+			id := strings.ToLower(stringOrEmpty(actID.Data()))
+			description := stringOrEmpty(c.S("detail").Data())
+			if description == "" {
+				description = galleryDescriptions[id]
+			}
+			galleryMap[id] = gallery.Gallery{
 				Server:      server,
-				ID:          strings.ToLower(actID.Data().(string)),
+				ID:          id,
 				Name:        c.S("name").Data().(string),
-				Description: c.S("detail").Data().(string),
+				Description: description,
 				Arts:        nil,
 			}
 		}
@@ -153,20 +186,180 @@ func ParseToGalleries(server ark.Server, root string) ([]gallery.Gallery, error)
 		}
 	}
 
-	galleries := make([]gallery.Gallery, 0)
+	galleriesByID := make(map[string]gallery.Gallery)
 	for id, c := range jsonStoryReviewMetaTable.Search("actArchiveData", "components").ChildrenMap() {
 		if jsonReplicateTable.Exists(id) {
 			continue
 		}
-		if gallery, ok := galleryMap[strings.ToLower(id)]; ok {
+		galleryID := strings.ToLower(id)
+		if gallery, ok := galleryMap[galleryID]; ok {
 			for _, pic := range c.S("pic", "pics").Children() {
-				art := artMap[strings.ToLower(pic.S("picId").Data().(string))]
+				art, ok := artMap[strings.ToLower(stringOrEmpty(pic.S("picId").Data()))]
+				if !ok {
+					continue
+				}
+				art.GalleryID = galleryID
 				art.SortID = int(pic.S("picSortId").Data().(float64))
 				gallery.Arts = append(gallery.Arts, art)
 			}
-			galleries = append(galleries, gallery)
+			galleriesByID[galleryID] = gallery
 		}
 	}
 
+	if jsonStageTable != nil {
+		mergeCGGalleries(server, jsonStageTable, jsonActivityTable, jsonReplicateTable, galleryMap, galleriesByID)
+	}
+
+	galleries := make([]gallery.Gallery, 0, len(galleriesByID))
+	for _, gallery := range galleriesByID {
+		galleries = append(galleries, gallery)
+	}
+	sort.Slice(galleries, func(i, j int) bool {
+		return galleries[i].ID < galleries[j].ID
+	})
+
 	return galleries, nil
+}
+
+func mergeCGGalleries(
+	server ark.Server,
+	stageTable *gabs.Container,
+	activityTable *gabs.Container,
+	replicateTable *gabs.Container,
+	galleryMetadata map[string]gallery.Gallery,
+	galleriesByID map[string]gallery.Gallery,
+) {
+	usedArtIDs := make(map[string]struct{})
+	for _, currentGallery := range galleriesByID {
+		for _, art := range currentGallery.Arts {
+			usedArtIDs[art.ID] = struct{}{}
+		}
+	}
+
+	groups := stageTable.S("cgGalleryGroups").ChildrenMap()
+	groupIDs := make([]string, 0, len(groups))
+	for groupID := range groups {
+		groupIDs = append(groupIDs, groupID)
+	}
+	sort.Strings(groupIDs)
+
+	for _, groupID := range groupIDs {
+		group := groups[groupID]
+		storySet := stageTable.S("storylineStorySets", groupID)
+		galleryID := strings.ToLower(stringOrEmpty(storySet.S("relevantActivityId").Data()))
+		if galleryID == "" || replicateTable.Exists(galleryID) {
+			continue
+		}
+
+		currentGallery, ok := galleriesByID[galleryID]
+		if !ok {
+			currentGallery, ok = galleryMetadata[galleryID]
+		}
+		if !ok {
+			name := activityName(activityTable, galleryID)
+			if name == "" {
+				continue
+			}
+			currentGallery = gallery.Gallery{
+				Server: server,
+				ID:     galleryID,
+				Name:   name,
+			}
+		}
+		if currentGallery.Name == "" {
+			currentGallery.Name = activityName(activityTable, galleryID)
+		}
+		if currentGallery.Description == "" {
+			currentGallery.Description = storySetDescription(storySet)
+		}
+
+		artIndexByAssetID := make(map[string]int, len(currentGallery.Arts))
+		nextSortID := 0
+		for i := range currentGallery.Arts {
+			artIndexByAssetID[currentGallery.Arts[i].ArtID] = i
+			if currentGallery.Arts[i].SortID > nextSortID {
+				nextSortID = currentGallery.Arts[i].SortID
+			}
+		}
+
+		for _, displayIDContainer := range group.S("displays").Children() {
+			displayID := stringOrEmpty(displayIDContainer.Data())
+			if displayID == "" {
+				continue
+			}
+			display := stageTable.S("cgGalleryDisplays", displayID)
+			displayName := stringOrEmpty(display.S("displayName").Data())
+			displayDescription := stringOrEmpty(display.S("displayDesc").Data())
+
+			for cgIndex, cgIDContainer := range display.S("cgList").Children() {
+				assetID := strings.ToLower(stringOrEmpty(cgIDContainer.Data()))
+				if assetID == "" {
+					continue
+				}
+				if artIndex, exists := artIndexByAssetID[assetID]; exists {
+					if currentGallery.Arts[artIndex].Name == "" {
+						currentGallery.Arts[artIndex].Name = displayName
+					}
+					if currentGallery.Arts[artIndex].Description == "" {
+						currentGallery.Arts[artIndex].Description = displayDescription
+					}
+					continue
+				}
+
+				nextSortID++
+				id := uniqueGalleryArtID(
+					strings.ToLower(displayID)+"_"+strconv.Itoa(cgIndex+1),
+					usedArtIDs,
+				)
+				currentGallery.Arts = append(currentGallery.Arts, gallery.Art{
+					Server:      server,
+					GalleryID:   galleryID,
+					SortID:      nextSortID,
+					ID:          id,
+					Name:        displayName,
+					Description: displayDescription,
+					ArtID:       assetID,
+				})
+				artIndexByAssetID[assetID] = len(currentGallery.Arts) - 1
+			}
+		}
+
+		galleriesByID[galleryID] = currentGallery
+	}
+}
+
+func activityName(activityTable *gabs.Container, activityID string) string {
+	if activityTable == nil {
+		return ""
+	}
+	return stringOrEmpty(activityTable.S("basicInfo", activityID, "name").Data())
+}
+
+func storySetDescription(storySet *gabs.Container) string {
+	for _, path := range [][]string{
+		{"ssData", "desc"},
+		{"mainlineData", "desc"},
+		{"collectData", "desc"},
+	} {
+		if description := stringOrEmpty(storySet.S(path...).Data()); description != "" {
+			return description
+		}
+	}
+	return ""
+}
+
+func uniqueGalleryArtID(base string, used map[string]struct{}) string {
+	id := base
+	for suffix := 2; ; suffix++ {
+		if _, exists := used[id]; !exists {
+			used[id] = struct{}{}
+			return id
+		}
+		id = base + "_" + strconv.Itoa(suffix)
+	}
+}
+
+func stringOrEmpty(value interface{}) string {
+	stringValue, _ := value.(string)
+	return stringValue
 }

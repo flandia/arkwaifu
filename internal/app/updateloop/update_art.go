@@ -21,6 +21,7 @@ import (
 var (
 	artPatterns = []string{
 		"avg/imgs/**",
+		"avg/images/**",
 		"avg/bg/**",
 		"avg/items/**",
 		"avg/characters/**",
