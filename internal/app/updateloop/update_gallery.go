@@ -137,14 +137,19 @@ func ParseToGalleries(server ark.Server, root string) ([]gallery.Gallery, error)
 
 	artMap := make(map[string]gallery.Art)
 	for _, c := range jsonStoryReviewMetaTable.S("actArchiveResData", "pics").Children() {
-		artMap[strings.ToLower(c.S("id").Data().(string))] = gallery.Art{
+		id := strings.ToLower(stringOrEmpty(c.S("id").Data()))
+		assetPath := strings.ToLower(stringOrEmpty(c.S("assetPath").Data()))
+		if id == "" || assetPath == "" {
+			continue
+		}
+		artMap[id] = gallery.Art{
 			Server:      server,
 			GalleryID:   "", // Auto Generated
 			SortID:      0,
-			ID:          strings.ToLower(c.S("id").Data().(string)),
-			Name:        c.S("desc").Data().(string),
-			Description: c.S("picDescription").Data().(string),
-			ArtID:       strings.ToLower(c.S("assetPath").Data().(string)),
+			ID:          id,
+			Name:        stringOrEmpty(c.S("desc").Data()),
+			Description: stringOrEmpty(c.S("picDescription").Data()),
+			ArtID:       assetPath,
 		}
 	}
 
@@ -163,6 +168,9 @@ func ParseToGalleries(server ark.Server, root string) ([]gallery.Gallery, error)
 	for _, c := range jsonRetroTable.S("retroActList").Children() {
 		for _, actID := range c.S("linkedActId").Children() {
 			id := strings.ToLower(stringOrEmpty(actID.Data()))
+			if id == "" {
+				continue
+			}
 			description := stringOrEmpty(c.S("detail").Data())
 			if description == "" {
 				description = galleryDescriptions[id]
@@ -170,18 +178,22 @@ func ParseToGalleries(server ark.Server, root string) ([]gallery.Gallery, error)
 			galleryMap[id] = gallery.Gallery{
 				Server:      server,
 				ID:          id,
-				Name:        c.S("name").Data().(string),
+				Name:        stringOrEmpty(c.S("name").Data()),
 				Description: description,
 				Arts:        nil,
 			}
 		}
 	}
 	for _, c := range jsonRoguelikeTopicTable.S("topics").Children() {
-		galleryMap[strings.ToLower(c.S("id").Data().(string))] = gallery.Gallery{
+		id := strings.ToLower(stringOrEmpty(c.S("id").Data()))
+		if id == "" {
+			continue
+		}
+		galleryMap[id] = gallery.Gallery{
 			Server:      server,
-			ID:          strings.ToLower(c.S("id").Data().(string)),
-			Name:        c.S("name").Data().(string),
-			Description: c.S("lineText").Data().(string),
+			ID:          id,
+			Name:        stringOrEmpty(c.S("name").Data()),
+			Description: stringOrEmpty(c.S("lineText").Data()),
 			Arts:        nil,
 		}
 	}
@@ -199,7 +211,7 @@ func ParseToGalleries(server ark.Server, root string) ([]gallery.Gallery, error)
 					continue
 				}
 				art.GalleryID = galleryID
-				art.SortID = int(pic.S("picSortId").Data().(float64))
+				art.SortID = intOrZero(pic.S("picSortId").Data())
 				gallery.Arts = append(gallery.Arts, art)
 			}
 			galleriesByID[galleryID] = gallery
@@ -362,4 +374,19 @@ func uniqueGalleryArtID(base string, used map[string]struct{}) string {
 func stringOrEmpty(value interface{}) string {
 	stringValue, _ := value.(string)
 	return stringValue
+}
+
+func intOrZero(value interface{}) int {
+	switch number := value.(type) {
+	case float64:
+		return int(number)
+	case float32:
+		return int(number)
+	case int:
+		return number
+	case int64:
+		return int(number)
+	default:
+		return 0
+	}
 }

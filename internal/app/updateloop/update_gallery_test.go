@@ -49,7 +49,7 @@ func TestParseToGalleriesAllowsMissingRetroDetail(t *testing.T) {
   }
 }`)
 	writeGalleryFixture(t, root, "replicate_table.json", `{}`)
-	writeGalleryFixture(t, root, "roguelike_topic_table.json", `{"topics": {}}`)
+	writeGalleryFixture(t, root, "roguelike_topic_table.json", `{"topics": {"0": {}, "1": null}}`)
 	writeGalleryFixture(t, root, "stage_table.json", `{
   "storylineStorySets": {
     "set1": {
