@@ -3,7 +3,6 @@
 
 # Arkwaifu (arkwaifu)
 
-[![](https://pkg.go.dev/badge/github.com/flandiayingman/arkwaifu.svg)](https://pkg.go.dev/github.com/flandiayingman/arkwaifu)
 ![](https://img.shields.io/github/license/FlandiaYingman/arkwaifu?style=flat-square)
 ![](https://img.shields.io/github/v/release/FlandiaYingman/arkwaifu?style=flat-square)
 
@@ -11,30 +10,33 @@
 ![](https://img.shields.io/github/actions/workflow/status/FlandiaYingman/arkwaifu/docker-image-updateloop.yml?style=flat-square&label=build%3A%20updateloop)
 ![](https://img.shields.io/website?style=flat-square&url=https%3A%2F%2Farkwaifu.cc%2F)
 
-Arkwaifu is a website which, arranges and provides almost all artworks extracted from Arknights (the game). Arkwaifu
-also enlarges (4x) the artworks with super-resolution neural networks - Real-ESRGAN.
+Arkwaifu is a website which arranges and provides artwork and localized story
+metadata extracted from Arknights.
+
+This branch is a breaking rewrite. A Python 3.14 updateloop publishes native
+PNG artwork and one SQLite database to S3-compatible storage, and an OCaml 5.5
+Dream service provides the HTTP API. Search is deferred. The JavaScript
+frontend will be rewritten later; until then, its source remains in the
+[frontend repo](https://github.com/FlandiaYingman/arkwaifu-frontend).
 
 🎉 Arkwaifu v1 has released! Check it at [arkwaifu.cc](https://arkwaifu.cc/)!
 
-🇨🇳 The China mirror has been suspended due to the v0 → v1 upgrade. We will make our best efforts to get it back soon.
-
-For more information of the frontend of Arkwaifu, please refer to
-the [frontend repo](https://github.com/FlandiaYingman/arkwaifu-frontend).
-
 ## Features
 
-- The arts are automatically updated as soon as the game updates.
-- Assets are enlarged with super-resolution neural networks (Real-ESRGAN).
+- Art and all supported locales can be updated automatically.
+- Final PNG compositions and original character body, face, and whole-body
+  layers are retained.
+- Story and gallery metadata is available in CN, EN, JP, KR, and TW.
 
 ## Available Arts
 
-Now, only arts that appear in the "in-game stories", are available, including **images**, **backgrounds** and *
-*characters**.
+Arts that appear in in-game stories are available, including **images**,
+**backgrounds**, **items**, and **characters**. The examples below use the v1
+website interface; the rewrite is intentionally not API-compatible.
 
 ### Images
 
 Images are the exquisite artworks that appear when some special events in the stories happen.
-
 
 <img src="https://arkwaifu.cc/api/v1/arts/32_i18/variants/origin/content" width="800"/>
 
@@ -44,16 +46,29 @@ Backgrounds are the artworks that always appear during dialogue between characte
 
 <img src="https://arkwaifu.cc/api/v1/arts/bg_courtyard/variants/origin/content" width="800"/>
 
+### Items
+
+Items are illustrations of objects that appear in stories.
+
 ### Characters
 
-Characters are the artworks that represents characters that appear during dialogue.
+Characters are the artworks that represent characters who appear during
+dialogue. The rewrite retains both the final composition and its original
+source layers.
 
 <img src="https://arkwaifu.cc/api/v1/arts/char_250_phantom_1%233%241/variants/origin/content" width="800"/>
 
-## V1 Roadmap
+## Roadmap
 
 - [x] Switchable language.
+- [ ] Rewrite the frontend.
 - [ ] Support searching.
+
+## Development
+
+See the [updateloop documentation](apps/updateloop/README.md) and [service
+documentation](apps/service/README.md).
+The `apps/web/` directory is reserved for the later frontend rewrite.
 
 ## Acknowledgements
 
@@ -73,8 +88,8 @@ Statistics' [backend v3](https://github.com/penguin-statistics/backend-next).
 
 Thanks to [xinntao](https://github.com/xinntao), [nihui](https://github.com/nihui), and the other contributors
 of [Real-ESRGAN](https://github.com/xinntao/Real-ESRGAN)
-and [Real-CUGAN](https://github.com/bilibili/ailab/tree/main/Real-CUGAN)! They created the neural networks this project
-utilizes for enlarging assets.
+and [Real-CUGAN](https://github.com/bilibili/ailab/tree/main/Real-CUGAN)!
+Earlier versions of Arkwaifu used their neural networks for enlarging assets.
 
 ## License
 
@@ -86,11 +101,11 @@ The assets of this project are licensed under
 This project utilizes resources and other works from the game Arknights. The copyright of such works belongs to the
 provider of the game, 上海鹰角网络科技有限公司 (Shanghai Hypergryph Network Technology Co., Ltd).
 
-This project utilizes [Real-ESRGAN](https://github.com/xinntao/Real-ESRGAN)
+Earlier versions utilized [Real-ESRGAN](https://github.com/xinntao/Real-ESRGAN)
 and [Real-ESRGAN-ncnn-vulkan](https://github.com/xinntao/Real-ESRGAN-ncnn-vulkan), which are respectively licensed under
 the BSD-3-Clause license and the MIT License.
 
-This project utilizes [Real-CUGAN](https://github.com/bilibili/ailab/tree/main/Real-CUGAN)
+Earlier versions utilized [Real-CUGAN](https://github.com/bilibili/ailab/tree/main/Real-CUGAN)
 and [Real-CUGAN-ncnn-vulkan](https://github.com/nihui/realcugan-ncnn-vulkan), which are both licensed under the MIT
 License.
 

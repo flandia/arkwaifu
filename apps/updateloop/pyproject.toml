@@ -1,0 +1,45 @@
+[project]
+name = "arkwaifu-updateloop"
+version = "0.1.0"
+description = "Update Arkwaifu art and locale data"
+readme = "README.md"
+requires-python = ">=3.14,<3.15"
+dependencies = [
+  "boto3>=1.40,<2",
+  "httpx>=0.28,<1",
+  "lz4>=4.4,<5",
+  "pillow>=11.3,<13",
+  "unitypy>=1.23,<2",
+]
+
+[project.scripts]
+updateloop = "arkwaifu_updateloop.cli:main"
+
+[dependency-groups]
+dev = [
+  "pytest>=8.4,<10",
+  "pytest-asyncio>=1.1,<2",
+  "ruff>=0.12,<1",
+]
+
+[build-system]
+requires = ["setuptools>=80"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.package-dir]
+arkwaifu_updateloop = "src"
+
+[tool.setuptools.package-data]
+arkwaifu_updateloop = ["arkwaifu.sql"]
+
+[tool.pytest.ini_options]
+addopts = "-ra"
+testpaths = ["tests"]
+asyncio_mode = "auto"
+
+[tool.ruff]
+target-version = "py314"
+line-length = 100
+
+[tool.ruff.lint.isort]
+known-first-party = ["arkwaifu_updateloop"]
