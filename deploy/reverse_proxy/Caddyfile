@@ -1,4 +1,0 @@
-http://
-
-reverse_proxy * {$FRONTEND_ADDRESS}
-reverse_proxy /api* {$BACKEND_ADDRESS}
