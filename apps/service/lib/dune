@@ -1,0 +1,4 @@
+(library
+ (name arkwaifu_service)
+ (public_name arkwaifu_service)
+ (libraries caqti-lwt.unix caqti-driver-sqlite3 cohttp-lwt-unix dream lwt uri yojson))

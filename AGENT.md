@@ -1,92 +1,123 @@
-# Working notes for arkwaifu
+# Working notes for Arkwaifu
 
-## Project overview
+## Scope
 
-`arkwaifu` is the Go backend for serving Arknights story data and extracted
-story art. The update loop downloads game resources and game data, extracts
-images, processes them, and writes art/story records to PostgreSQL. The
-frontend is maintained separately.
+Arkwaifu is undergoing a breaking rewrite. The repository has three
+application packages:
 
-The Go module path is `github.com/flandiayingman/arkwaifu` and the project
-currently targets Go 1.24.
+- `apps/updateloop/` is the Python 3.14 writer and art/locale pipeline.
+- `apps/service/` is the OCaml 5.5 Dream read service.
+- `apps/web/` reserves space for a later JavaScript frontend rewrite.
 
-## Repository map
+Search, frontend implementation, and compatibility with the Go v1 API are
+outside the current scope. Use v1.9.4 as a behavioral reference when a rewrite
+detail is unclear.
 
-- `cmd/` contains service and update-loop entrypoints.
-- `internal/app/` contains application services, the update loop, and art/story
-  persistence logic.
-- `internal/pkg/arkassets/` downloads and unpacks the official Android asset
-  bundles from the Arknights CDN.
-- `internal/pkg/arkdata/` downloads story data from the game-data repository.
-- `internal/pkg/arkparser/` parses story directives and character references.
-- `internal/pkg/arkscanner/` converts extracted JSON/type-tree files into art
-  models.
-- `internal/pkg/arkprocessor/` decodes, composites, and resizes art images.
-- `tools/extractor/` is the Python UnityPy-based asset extractor.
-- `deploy/docker-compose.yml` describes the service, update loop, PostgreSQL,
-  frontend, and reverse proxy containers.
+Other important paths are:
 
-## Asset extraction details
+- `apps/updateloop/src/arkwaifu.sql` — the sole SQLite schema source, embedded
+  in the updater package.
+- `infra/compose.yaml` — versioned MinIO for local development.
 
-The asset flow is:
+## Persistence and publication
 
-1. Download CDN `.dat` files.
-2. Extract the outer ZIP into Unity asset bundles (`.ab`).
-3. Run `tools/extractor/main.py`.
-4. Scan the resulting `assets/torappu/dynamicassets/...` tree and process the
-   referenced images.
+The persisted database is the fixed S3 object `arkwaifu.sqlite3`. There is no
+PostgreSQL service, release table, staging state, or activation pointer.
+`updateloop run` is the updater's only public command; it accepts `art`,
+`CN`, `EN`, `JP`, `KR`, and `TW`, and requests all six when no units
+are supplied.
 
-Arknights resource bundles after the Unity upgrade use the custom LZ4AK format.
-`tools/extractor/lz4ak.py` patches UnityPy's reserved compression flags 4 and 5:
-the token nibbles are reversed and match offsets are big-endian. Keep this
-patch active when changing the UnityPy version; the standard UnityPy LZHAM
-decoder is not compatible with these bundles.
+Keep this publication order:
 
-Some current bundles use an internal `dyn/...` container prefix. The extractor
-maps it to `assets/torappu/dynamicassets/...`, which is the path expected by the
-Go scanner. Character bundles may reference a shared MonoScript CAB that is not
-included in the bundle; the extractor falls back to the serialized type-tree
-shape for character hub names so image data can still be exported.
+1. Detect every requested unit's current upstream `resVersion` concurrently.
+2. Pull or initialize `arkwaifu.sqlite3` and compare its unit versions.
+3. Prepare every changed requested unit concurrently.
+4. Apply the requested changes in one local SQLite transaction.
+5. Batch-upload all required PNGs with bounded concurrency.
+6. Upload `arkwaifu.sqlite3` last.
 
-Directory extraction deliberately recycles a worker after each bundle and waits
-for every submitted future. UnityPy/native image allocations can otherwise
-accumulate over a large art batch; an OOM-killed worker must fail the update
-rather than silently leaving bundles unextracted and advancing the art version
-marker.
+The final database PUT is the publication point. SQLite statement and commit
+constraints validate writes; runtime code checks `user_version` but does not
+run a separate `quick_check`, `integrity_check`, or
+`foreign_key_check`.
 
-Use `-w 1` while debugging extraction so output and failures are deterministic.
-Do not commit downloaded bundles, generated images, virtual environments, or
-credentials. This checkout locally excludes `.cache/` and `.env.local` via
-`.git/info/exclude`; keep those patterns local rather than adding them to the
-shared `.gitignore`. The `.cache/` directory is the preferred location for
-temporary CDN/debug artifacts and should be reused to avoid duplicate fetches.
+Art object keys are
+`ART/<resVersion>/<variant>/<category>/<name>.png`, where `variant` is
+`composition` or `source`. Names are logical identifiers, not content
+hashes. Persist only upstream `resVersion` values, not repository URLs or
+commit identifiers.
 
-## Common commands
+Retain history. Bucket versioning is the rollback mechanism for overwritten
+objects, and updater code must not garbage-collect old versions or unreachable
+PNGs. Do not run more than one logical writer against the same bucket.
+
+Incomplete upstream data is normal. Empty locale sections, missing story text,
+or missing art references should warn and continue.
+`--suppress-incomplete-upstream-warnings` suppresses only those expected
+warnings. `--force` can rebuild locales at their current version and can force a
+full art build for a new version. It cannot replace art at the already-published
+`resVersion`, because those PNG keys are live before the database changes.
+
+## Upstreams, extraction, and cache
+
+Art comes from the official Windows client CDN. Locale data comes from the
+unpinned `master` branch of `ArknightsAssets/ArknightsGamedata`; the
+detected `versionId` is the locale's `resVersion`.
+
+The default cache is `.cache/`. Art resources live below their `resVersion` and
+retain four independently reusable products:
+
+1. `fetched` — downloaded CDN wrapper.
+2. `unwrapped` — inner Unity bundle.
+3. `extracted` — uncomposed Unity exports.
+4. `rendered` — composition/source PNGs and a resource manifest.
+
+One run-scoped locale source owns the all-server game-data snapshot. It caches
+exactly one `.cache/game-data/archive.zip`, admitted against all requested
+locale `versionId` values, while locale-specific extracted files remain below
+`.cache/<resVersion>/game-data/<unit>/extracted/`.
+
+`--no-cache` uses the same layout under a run-scoped temporary directory that
+must remain alive through PNG and database upload. Keep rendered PNGs
+file-backed; do not retain the full art set in parent-process memory.
+
+Downloads and extraction processes are independently bounded. Each process
+handles one resource, invokes the extractor with one inner worker, and is
+recycled with `max_tasks_per_child=1`. Preserve the LZ4AK decoder patch, the
+`dyn/...` path normalization, and the missing-MonoScript fallback when
+updating UnityPy.
+
+## Read service
+
+The service downloads `arkwaifu.sqlite3` before accepting traffic, requires
+schema version 1, and opens it read-only. It polls with `If-None-Match`; a
+successful replacement becomes the new local generation, while refresh errors
+leave the last compatible generation serving. Each process owns a private
+writable database cache directory. See `apps/service/README.md` for routes and
+configuration.
+
+## Development
 
 ```powershell
-# Go formatting and tests
-gofmt -w <changed-go-files>
-go test ./...
+# Python updater
+Push-Location apps/updateloop
+uv sync --group dev
+uv run ruff check .
+uv run pytest
+Pop-Location
 
-# Python extractor tests (from the repository root)
-python -m unittest discover -s tools/extractor -p 'test_*.py' -v
+# Local object storage
+docker compose -f infra/compose.yaml up -d minio minio-init
 
-# Extract a cached/debug bundle set
-python tools/extractor/main.py -w 1 <bundle-root> <output-root>
+# OCaml service without a host OCaml installation
+docker build --target build -t arkwaifu-service-build:dev apps/service
+docker compose -f infra/compose.yaml --profile service up -d --build
 ```
 
-The existing Go asset/data tests perform network-backed fetches. For an
-offline compile-only check, use `go test ./... -run '^$'` with Go caches under
-`.cache/`. The update loop expects `POSTGRES_DSN` and `ROOT`; a temporary
-PostgreSQL container can be used for local integration debugging, but do not
-modify the live deployment unless explicitly requested.
+Ordinary tests must remain deterministic and offline. Live CDN/game-data smoke
+updates are manual pre-deployment checks. Add focused regressions for parser,
+extraction, image processing, SQLite writes, object publication, and refresh
+behavior.
 
-## Change guidelines
-
-- Preserve unrelated working-tree changes, especially local environment files.
-- Keep CDN and database operations bounded and cache repeated downloads.
-- When changing extraction, verify both the Python extractor and the Go
-  scanner/processor path; successful UnityPy object loading alone is not
-  sufficient.
-- Add a focused regression test for parser, extraction, or processing behavior
-  that changes.
+Do not commit downloaded bundles, generated PNGs, local databases, caches,
+virtual environments, or credentials. Preserve unrelated working-tree changes.

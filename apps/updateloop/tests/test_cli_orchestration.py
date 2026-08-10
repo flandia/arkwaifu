@@ -1,0 +1,216 @@
+import asyncio
+from pathlib import Path
+from types import SimpleNamespace
+
+import pytest
+from PIL import Image
+
+from arkwaifu_updateloop import Update, UpdateResult, cli
+from arkwaifu_updateloop.domain import ArtManifest, ArtRecord, FilePngArtifact, LocaleManifest
+from arkwaifu_updateloop.upstream import UpstreamCache
+
+
+class _FakeUpdateloop:
+    def __init__(self) -> None:
+        self.calls: list[tuple[tuple[Update, ...], bool]] = []
+
+    async def run(self, requests, *, force=False):
+        values = tuple(requests)
+        self.calls.append((values, force))
+        return tuple(UpdateResult(value.unit, value.res_version, "updated") for value in values)
+
+
+class _FakeLocaleBuilder:
+    def __init__(self) -> None:
+        self.closed = False
+
+    async def aclose(self) -> None:
+        self.closed = True
+
+
+def _patch_runtime(monkeypatch: pytest.MonkeyPatch) -> _FakeUpdateloop:
+    settings = object()
+    updater = _FakeUpdateloop()
+    locale_builder = _FakeLocaleBuilder()
+    monkeypatch.setattr(cli.Settings, "from_environment", staticmethod(lambda: settings))
+    monkeypatch.setattr(cli, "_updateloop", lambda received: updater)
+    monkeypatch.setattr(cli, "_locale_builder", lambda settings, cache: locale_builder)
+    return updater
+
+
+async def _wait_for(event: asyncio.Event) -> None:
+    await asyncio.wait_for(event.wait(), timeout=2)
+
+
+def _update(unit: str) -> Update:
+    async def build(_active: str | None, _force: bool):
+        if unit == "art":
+            return ArtManifest(f"{unit}-v1", (), ())
+        return LocaleManifest(unit, f"{unit}-v1", (), ())
+
+    return Update(unit, f"{unit}-v1", build)
+
+
+@pytest.mark.asyncio
+async def test_run_starts_all_version_preparations_concurrently(monkeypatch):
+    updater = _patch_runtime(monkeypatch)
+    preparation_gate = asyncio.Event()
+    all_preparations_started = asyncio.Event()
+    started: set[str] = set()
+    locale_builders: set[int] = set()
+    requested = {"art", "EN", "JP"}
+
+    async def prepare(unit: str):
+        started.add(unit)
+        if started == requested:
+            all_preparations_started.set()
+        await preparation_gate.wait()
+        return _update(unit)
+
+    def prepare_locale(builder, unit):
+        locale_builders.add(id(builder))
+        return prepare(unit)
+
+    monkeypatch.setattr(cli, "_prepare_art", lambda settings, cache: prepare("art"))
+    monkeypatch.setattr(cli, "_prepare_locale", prepare_locale)
+
+    run = asyncio.create_task(cli._run(["art", "EN", "JP"], force=False, use_cache=False))
+    await _wait_for(all_preparations_started)
+
+    assert started == requested
+    assert len(locale_builders) == 1
+    assert not run.done()
+    preparation_gate.set()
+    assert await run == 0
+    assert [request.unit for request in updater.calls[0][0]] == ["art", "EN", "JP"]
+
+
+@pytest.mark.asyncio
+async def test_run_publishes_all_requested_units_in_one_atomic_call(monkeypatch):
+    updater = _patch_runtime(monkeypatch)
+    monkeypatch.setattr(cli, "_prepare_art", lambda settings, cache: _ready(_update("art")))
+    monkeypatch.setattr(
+        cli,
+        "_prepare_locale",
+        lambda builder, unit: _ready(_update(unit)),
+    )
+
+    assert await cli._run(["art", "EN", "JP"], force=True, use_cache=False) == 0
+
+    assert len(updater.calls) == 1
+    requests, force = updater.calls[0]
+    assert [request.unit for request in requests] == ["art", "EN", "JP"]
+    assert force is True
+
+
+async def _ready(value):
+    return value
+
+
+@pytest.mark.asyncio
+async def test_any_preparation_failure_prevents_database_publication(monkeypatch, caplog):
+    updater = _patch_runtime(monkeypatch)
+
+    async def fail(settings, cache):
+        raise RuntimeError("art version failed")
+
+    monkeypatch.setattr(cli, "_prepare_art", fail)
+    monkeypatch.setattr(
+        cli,
+        "_prepare_locale",
+        lambda builder, unit: _ready(_update(unit)),
+    )
+
+    with caplog.at_level("ERROR"):
+        result = await cli._run(["art", "EN", "JP"], force=False, use_cache=False)
+
+    assert result == 1
+    assert updater.calls == []
+    assert "unit=art status=failed" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_database_failure_returns_nonzero_without_a_second_attempt(monkeypatch, caplog):
+    updater = _patch_runtime(monkeypatch)
+
+    async def fail(requests, *, force=False):
+        updater.calls.append((tuple(requests), force))
+        raise RuntimeError("database upload failed")
+
+    updater.run = fail
+    monkeypatch.setattr(cli, "_prepare_art", lambda settings, cache: _ready(_update("art")))
+
+    with caplog.at_level("ERROR"):
+        result = await cli._run(["art"], force=False, use_cache=False)
+
+    assert result == 1
+    assert len(updater.calls) == 1
+    assert "database status=failed" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_prepare_art_exposes_one_batch_build(monkeypatch, tmp_path: Path):
+    resource = ArtManifest("art-v1", (), ())
+    cache = UpstreamCache(tmp_path / ".cache")
+
+    class Builder:
+        def __init__(self, **kwargs) -> None:
+            assert kwargs["cache"] is cache
+
+        async def detect_version(self):
+            return "art-v1"
+
+        async def build(self, upstream_version, active_version, force):
+            assert (upstream_version, active_version, force) == ("art-v1", None, False)
+            return resource
+
+    monkeypatch.setattr(cli, "LiveArtBuilder", Builder)
+    settings = SimpleNamespace(
+        art_version_url="https://version.example",
+        art_asset_base_url="https://assets.example",
+        download_workers=2,
+        extraction_workers=1,
+    )
+    update = await cli._prepare_art(settings, cache)
+    manifest = await update.build(None, False)
+
+    assert manifest is resource
+
+
+@pytest.mark.asyncio
+async def test_no_cache_workspace_outlives_batch_build_and_is_removed_after_run(monkeypatch):
+    updater = _patch_runtime(monkeypatch)
+    observed_root: Path | None = None
+
+    async def prepare(_settings, cache: UpstreamCache):
+        nonlocal observed_root
+        observed_root = cache.root
+        image_path = cache.root / "fixture.png"
+        image_path.parent.mkdir(parents=True, exist_ok=True)
+        Image.new("RGBA", (2, 3), (1, 2, 3, 255)).save(image_path, format="PNG")
+        manifest = ArtManifest(
+            "art-v1",
+            (ArtRecord("fixture", "image", FilePngArtifact.from_path(image_path)),),
+            (),
+        )
+
+        async def build(_active, _force):
+            return manifest
+
+        return Update("art", "art-v1", build)
+
+    async def run(requests, *, force=False):
+        values = tuple(requests)
+        updater.calls.append((values, force))
+        manifest = await values[0].build(None, force)
+        path = manifest.arts[0].image.path
+        assert path is not None and path.is_file()
+        return (UpdateResult("art", "art-v1", "updated"),)
+
+    updater.run = run
+    monkeypatch.setattr(cli, "_prepare_art", prepare)
+
+    assert await cli._run(["art"], force=False, use_cache=False) == 0
+
+    assert observed_root is not None
+    assert not observed_root.exists()
