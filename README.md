@@ -8,7 +8,7 @@
 
 ![](https://img.shields.io/github/actions/workflow/status/flandia/arkwaifu/docker-image-service.yml?style=flat-square&label=build%3A%20service)
 ![](https://img.shields.io/github/actions/workflow/status/flandia/arkwaifu/docker-image-updateloop.yml?style=flat-square&label=build%3A%20updateloop)
-![](https://img.shields.io/github/actions/workflow/status/flandia/arkwaifu/web.yml?style=flat-square&label=build%3A%20web)
+![](https://img.shields.io/github/actions/workflow/status/flandia/arkwaifu/docker-image-web.yml?style=flat-square&label=build%3A%20web)
 ![](https://img.shields.io/website?style=flat-square&url=https%3A%2F%2Farkwaifu.cc%2F)
 
 Arkwaifu is a website which arranges and provides artwork and localized story
