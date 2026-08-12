@@ -50,6 +50,11 @@ val source_art : t -> string -> (Model.source_art, error) result Lwt.t
 (** List ordered story groups for a locale such as ["CN"] or ["EN"]. *)
 val story_groups : t -> string -> (Model.story_group list, error) result Lwt.t
 
+(** List ordered story summaries in one localized group. Summary art-reference
+    lists are empty. A missing group returns [`Not_found]. *)
+val stories_by_group :
+  t -> string -> string -> (Model.story list, error) result Lwt.t
+
 (** Get one story from the selected locale. *)
 val story : t -> string -> string -> (Model.story, error) result Lwt.t
 

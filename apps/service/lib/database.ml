@@ -11,6 +11,7 @@ type t = {
   art : string -> string -> (Model.art, error) result Lwt.t;
   source_art : string -> (Model.source_art, error) result Lwt.t;
   story_groups : string -> (Model.story_group list, error) result Lwt.t;
+  stories_by_group : string -> string -> (Model.story list, error) result Lwt.t;
   story : string -> string -> (Model.story, error) result Lwt.t;
   galleries : string -> (Model.gallery list, error) result Lwt.t;
   gallery : string -> string -> (Model.gallery, error) result Lwt.t;
@@ -55,6 +56,20 @@ let memory snapshot =
              snapshot.source_arts));
     story_groups =
       (fun locale -> Lwt.return (Ok (locale_values locale snapshot.story_groups)));
+    stories_by_group =
+      (fun locale group_id ->
+        if
+          locale_values locale snapshot.story_groups
+          |> List.exists (fun (group : Model.story_group) ->
+                 String.equal group_id group.id)
+        then
+          locale_values locale snapshot.stories
+          |> List.filter_map (fun (story : Model.story) ->
+                 if String.equal group_id story.group_id then
+                   Some { story with art_references = [] }
+                 else None)
+          |> Result.ok |> Lwt.return
+        else Lwt.return (Error `Not_found));
     story =
       (fun locale id ->
         Lwt.return
@@ -122,6 +137,28 @@ module Query = struct
         FROM story_groups
         WHERE locale = ?
         ORDER BY position
+      |}
+
+  let stories_by_group =
+    let row =
+      t2 string
+        (t2 string
+           (t2 string (t2 string (t2 string (t2 string string)))))
+    in
+    (t2 string string ->* row)
+      {|
+        SELECT story_id, group_id, tag, tag_text, code, name, info
+        FROM stories
+        WHERE locale = ? AND group_id = ?
+        ORDER BY position
+      |}
+
+  let story_group_exists =
+    (t2 string string ->? int)
+      {|
+        SELECT 1
+        FROM story_groups
+        WHERE locale = ? AND group_id = ?
       |}
 
   let story =
@@ -274,6 +311,37 @@ let sqlite path =
                   (fun (id, (name, group_type)) -> Model.{ id; name; group_type })
                   rows)
       in
+      let stories_by_group locale group_id =
+        use (fun (module Db) ->
+            Db.collect_list Query.stories_by_group (locale, group_id)
+            >>= fun rows ->
+            match rows with
+            | Error error -> Lwt.return (Error error)
+            | Ok (_ :: _ as values) -> Lwt.return (Ok (`Stories values))
+            | Ok [] ->
+                Db.find_opt Query.story_group_exists (locale, group_id)
+                >|= Result.map (fun parent -> `Empty parent))
+        >|= function
+        | Error error -> Error error
+        | Ok (`Empty None) -> Error `Not_found
+        | Ok (`Empty (Some _)) -> Ok []
+        | Ok (`Stories rows) ->
+            rows
+            |> List.map
+                 (fun (id, (group_id, (tag, (tag_text, (code, (name, info)))))) ->
+                   Model.
+                     {
+                       id;
+                       group_id;
+                       tag;
+                       tag_text;
+                       code;
+                       name;
+                       info;
+                       art_references = [];
+                     })
+            |> Result.ok
+      in
       let names_from_json = function
         | None -> []
         | Some raw ->
@@ -365,6 +433,7 @@ let sqlite path =
           art;
           source_art;
           story_groups;
+          stories_by_group;
           story;
           galleries;
           gallery;
@@ -536,6 +605,9 @@ let live ~url ~cache_dir ~poll_seconds ~download_timeout_seconds =
               (fun id -> with_current (fun value -> value.source_art id));
             story_groups =
               (fun locale -> with_current (fun value -> value.story_groups locale));
+            stories_by_group =
+              (fun locale group_id ->
+                with_current (fun value -> value.stories_by_group locale group_id));
             story =
               (fun locale id -> with_current (fun value -> value.story locale id));
             galleries =
@@ -552,6 +624,9 @@ let health (database : t) = database.health ()
 let art (database : t) category id = database.art category id
 let source_art (database : t) id = database.source_art id
 let story_groups (database : t) locale = database.story_groups locale
+let stories_by_group (database : t) locale group_id =
+  database.stories_by_group locale group_id
+
 let story (database : t) locale id = database.story locale id
 let galleries (database : t) locale = database.galleries locale
 let gallery (database : t) locale id = database.gallery locale id

@@ -16,6 +16,7 @@ images, or needs updater/S3 credentials.
 | `GET /api/source-arts/:id` | Original body, face, or whole-body layer metadata |
 | `GET /api/source-arts/:id/content` | `303` redirect to the original PNG |
 | `GET /api/:locale/story-groups` | Ordered story groups |
+| `GET /api/:locale/story-groups/:id/stories` | Ordered story summaries for one group; `artReferences` is empty |
 | `GET /api/:locale/stories/:id` | Story metadata and ordered art references |
 | `GET /api/:locale/galleries` | Gallery summaries |
 | `GET /api/:locale/galleries/:id` | Gallery and ordered entries |
@@ -23,6 +24,10 @@ images, or needs updater/S3 credentials.
 Locales are explicit and case-insensitive: `CN`, `EN`, `JP`, `KR`, and `TW`.
 Unknown resources and locales return `404`. A database/schema failure returns a
 small `503` response without exposing local paths or connection details.
+An existing story group with no stories returns `200` with an empty JSON list.
+All responses allow public cross-origin reads with
+`Access-Control-Allow-Origin: *`. `OPTIONS` requests return `204` and advertise
+the supported `GET, OPTIONS` methods.
 
 Content endpoints redirect instead of proxying PNG bytes. This keeps the
 service out of the image data path. Configure the bucket or CDN for public

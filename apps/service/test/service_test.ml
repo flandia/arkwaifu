@@ -39,6 +39,49 @@ let source_art =
       image = source_image;
     }
 
+let story_reference =
+  Model.
+    {
+      art_id = "event";
+      kind = "picture";
+      category = "image";
+      title = Some "Title";
+      subtitle = None;
+      names = [ "Alias" ];
+    }
+
+let story =
+  Model.
+    {
+      id = "story";
+      group_id = "group";
+      tag = "before";
+      tag_text = "Before";
+      code = "S1";
+      name = "Story";
+      info = "Info";
+      art_references = [ story_reference ];
+    }
+
+let later_story =
+  Model.
+    {
+      id = "aaa-later";
+      group_id = "group";
+      tag = "after";
+      tag_text = "After";
+      code = "S2";
+      name = "Later story";
+      info = "Later info";
+      art_references = [];
+    }
+
+let story_group =
+  Model.{ id = "group"; name = "Group"; group_type = "main_story" }
+
+let empty_story_group =
+  Model.{ id = "empty"; name = "Empty group"; group_type = "other" }
+
 let test_art_json () =
   let json = Model.art_json ~object_base_url:"https://objects.example/bucket/" art in
   let open Yojson.Safe.Util in
@@ -91,15 +134,25 @@ let test_memory_database () =
       }
   in
   let snapshot : Database.snapshot =
-    { Database.empty_snapshot with
-      arts = [ art ];
+    { Database.arts = [ art ];
       source_arts = [ source_art ];
+      story_groups = [ ("CN", [ story_group; empty_story_group ]) ];
+      stories = [ ("CN", [ story; later_story ]) ];
       galleries = [ ("CN", [ gallery ]) ];
     }
   in
   let database = Database.memory snapshot in
   let found = Lwt_main.run (Database.art database "character" "event") in
   let wrong_category = Lwt_main.run (Database.art database "image" "event") in
+  let stories =
+    Lwt_main.run (Database.stories_by_group database "CN" "group")
+  in
+  let empty_stories =
+    Lwt_main.run (Database.stories_by_group database "CN" "empty")
+  in
+  let missing_stories =
+    Lwt_main.run (Database.stories_by_group database "CN" "missing")
+  in
   let summaries = Lwt_main.run (Database.galleries database "CN") in
   let detailed = Lwt_main.run (Database.gallery database "CN" "gallery") in
   Alcotest.(check bool) "found" true (Result.is_ok found);
@@ -107,6 +160,26 @@ let test_memory_database () =
     "missing"
     true
     (match wrong_category with Error `Not_found -> true | _ -> false);
+  Alcotest.(check (list string))
+    "story summary order"
+    [ "story"; "aaa-later" ]
+    (match stories with
+    | Ok values -> List.map (fun (value : Model.story) -> value.id) values
+    | Error _ -> []);
+  Alcotest.(check bool)
+    "story summaries have empty references"
+    true
+    (match stories with
+    | Ok values -> List.for_all (fun (value : Model.story) -> value.art_references = []) values
+    | Error _ -> false);
+  Alcotest.(check bool)
+    "existing empty story group"
+    true
+    (match empty_stories with Ok [] -> true | _ -> false);
+  Alcotest.(check bool)
+    "missing story group"
+    true
+    (match missing_stories with Error `Not_found -> true | _ -> false);
   Alcotest.(check bool)
     "summary entries are empty"
     true
@@ -238,9 +311,14 @@ let sqlite_rows =
       VALUES ('source', 'character', 'body', '1',
               'ART/art-v1/source/character/source.png', 43, 11, 21);
     INSERT INTO art_source_refs VALUES ('character', 'event', 0, 'source');
-    INSERT INTO story_groups VALUES ('CN', 'group', 'Group', 'main_story', 0);
+    INSERT INTO story_groups VALUES
+      ('CN', 'group', 'Group', 'main_story', 0),
+      ('CN', 'empty', 'Empty group', 'other', 1);
     INSERT INTO stories
       VALUES ('CN', 'story', 'group', 'before', 'Before', 'S1', 'Story', 'Info', 0);
+    INSERT INTO stories
+      VALUES ('CN', 'aaa-later', 'group', 'after', 'After', 'S2', 'Later story',
+              'Later info', 1);
     INSERT INTO story_art_references
       VALUES ('CN', 'story', 0, 'event', 'picture', 'image', 'Title', NULL,
               '["Alias"]');
@@ -294,8 +372,33 @@ let test_sqlite_database () =
         Lwt_main.run (Database.story_groups database "CN") |> require_ok "story groups"
       in
       Alcotest.(check (list string))
-        "story group IDs" [ "group" ]
+        "story group IDs" [ "group"; "empty" ]
         (List.map (fun (group : Model.story_group) -> group.id) groups);
+
+      let stories =
+        Lwt_main.run (Database.stories_by_group database "CN" "group")
+        |> require_ok "stories by group"
+      in
+      Alcotest.(check (list string))
+        "story summary IDs" [ "story"; "aaa-later" ]
+        (List.map (fun (story : Model.story) -> story.id) stories);
+      Alcotest.(check bool)
+        "story summaries have empty references"
+        true
+        (List.for_all (fun (story : Model.story) -> story.art_references = []) stories);
+      Alcotest.(check (list string))
+        "existing empty story group" []
+        (Lwt_main.run (Database.stories_by_group database "CN" "empty")
+        |> require_ok "empty stories by group"
+        |> List.map (fun (story : Model.story) -> story.id));
+      Alcotest.(check bool)
+        "missing story group"
+        true
+        (match
+           Lwt_main.run (Database.stories_by_group database "CN" "missing")
+         with
+        | Error `Not_found -> true
+        | _ -> false);
 
       let story =
         Lwt_main.run (Database.story database "CN" "story") |> require_ok "story"
@@ -319,6 +422,86 @@ let test_sqlite_database () =
         "gallery entry IDs" [ "entry" ]
         (List.map (fun (entry : Model.gallery_entry) -> entry.id) gallery.entries))
 
+let test_http_story_listing_and_cors () =
+  let snapshot : Database.snapshot =
+    { Database.empty_snapshot with
+      story_groups = [ ("CN", [ story_group; empty_story_group ]) ];
+      stories = [ ("CN", [ story; later_story ]) ];
+    }
+  in
+  let handler =
+    Http.routes ~database:(Database.memory snapshot)
+      ~object_base_url:"https://objects.example/bucket"
+  in
+  let response =
+    Dream.test handler
+      (Dream.request ~method_:`GET
+         ~target:"/api/CN/story-groups/group/stories" "")
+  in
+  Alcotest.(check int) "story listing status" 200
+    (Dream.status response |> Dream.status_to_int);
+  Alcotest.(check (option string))
+    "CORS origin" (Some "*")
+    (Dream.header response "Access-Control-Allow-Origin");
+  let json = Lwt_main.run (Dream.body response) |> Yojson.Safe.from_string in
+  let open Yojson.Safe.Util in
+  let stories = json |> to_list in
+  Alcotest.(check (list string))
+    "story listing IDs" [ "story"; "aaa-later" ]
+    (List.map (fun value -> value |> member "id" |> to_string) stories);
+  Alcotest.(check bool)
+    "HTTP summaries have empty references"
+    true
+    (List.for_all
+       (fun value -> value |> member "artReferences" |> to_list = [])
+       stories);
+
+  let empty =
+    Dream.test handler
+      (Dream.request ~method_:`GET
+         ~target:"/api/CN/story-groups/empty/stories" "")
+  in
+  Alcotest.(check int) "empty story group status" 200
+    (Dream.status empty |> Dream.status_to_int);
+  Alcotest.(check bool)
+    "empty story group body"
+    true
+    (Lwt_main.run (Dream.body empty) |> Yojson.Safe.from_string = `List []);
+
+  let missing_group =
+    Dream.test handler
+      (Dream.request ~method_:`GET
+         ~target:"/api/CN/story-groups/missing/stories" "")
+  in
+  Alcotest.(check int) "missing story group status" 404
+    (Dream.status missing_group |> Dream.status_to_int);
+  Alcotest.(check (option string))
+    "CORS on missing story group" (Some "*")
+    (Dream.header missing_group "Access-Control-Allow-Origin");
+
+  let missing =
+    Dream.test handler (Dream.request ~method_:`GET ~target:"/missing" "")
+  in
+  Alcotest.(check int) "missing route status" 404
+    (Dream.status missing |> Dream.status_to_int);
+  Alcotest.(check (option string))
+    "CORS on errors" (Some "*")
+    (Dream.header missing "Access-Control-Allow-Origin");
+
+  let preflight =
+    Dream.test handler
+      (Dream.request ~method_:`OPTIONS
+         ~target:"/api/CN/story-groups/group/stories" "")
+  in
+  Alcotest.(check int) "preflight status" 204
+    (Dream.status preflight |> Dream.status_to_int);
+  Alcotest.(check (option string))
+    "preflight origin" (Some "*")
+    (Dream.header preflight "Access-Control-Allow-Origin");
+  Alcotest.(check (option string))
+    "preflight methods" (Some "GET, OPTIONS")
+    (Dream.header preflight "Access-Control-Allow-Methods")
+
 let () =
   Alcotest.run "arkwaifu-service"
     [
@@ -333,5 +516,10 @@ let () =
         [
           Alcotest.test_case "memory lookup" `Quick test_memory_database;
           Alcotest.test_case "SQLite queries" `Quick test_sqlite_database;
+        ] );
+      ( "http",
+        [
+          Alcotest.test_case "story listing and CORS" `Quick
+            test_http_story_listing_and_cors;
         ] );
     ]

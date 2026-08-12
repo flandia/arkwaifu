@@ -35,6 +35,19 @@ let with_locale request callback =
   | Ok value -> callback value
   | Error `Not_found -> error_json `Not_Found "not_found"
 
+let add_public_read_headers response =
+  Dream.set_header response "Access-Control-Allow-Origin" "*";
+  Dream.set_header response "Access-Control-Allow-Methods" "GET, OPTIONS";
+  Dream.set_header response "Access-Control-Allow-Headers" "Accept, Content-Type";
+  Dream.set_header response "Access-Control-Max-Age" "86400";
+  response
+
+let public_read_cors inner_handler request =
+  (if Dream.methods_equal (Dream.method_ request) `OPTIONS then
+     Dream.empty `No_Content
+   else inner_handler request)
+  >|= add_public_read_headers
+
 let routes ~database ~object_base_url =
   let art request =
     Database.art database (Dream.param request "category") (Dream.param request "id")
@@ -54,8 +67,9 @@ let routes ~database ~object_base_url =
     >>= redirect_to_content ~object_base_url request
           (fun (source : Model.source_art) -> source.image)
   in
-  Dream.router
-    [
+  public_read_cors
+  @@ Dream.router
+       [
       Dream.get "/health" (fun _ ->
           Database.health database
           >>= respond (fun () -> `Assoc [ ("status", `String "ok") ]));
@@ -68,6 +82,11 @@ let routes ~database ~object_base_url =
               Database.story_groups database locale
               >>= respond (fun groups ->
                       `List (List.map Model.story_group_json groups))));
+      Dream.get "/api/:locale/story-groups/:id/stories" (fun request ->
+          with_locale request (fun locale ->
+              Database.stories_by_group database locale (Dream.param request "id")
+              >>= respond (fun stories ->
+                      `List (List.map Model.story_json stories))));
       Dream.get "/api/:locale/stories/:id" (fun request ->
           with_locale request (fun locale ->
               Database.story database locale (Dream.param request "id")
@@ -81,4 +100,4 @@ let routes ~database ~object_base_url =
           with_locale request (fun locale ->
               Database.gallery database locale (Dream.param request "id")
               >>= respond Model.gallery_json));
-    ]
+       ]
