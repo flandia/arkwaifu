@@ -6,7 +6,7 @@ from uuid import uuid4
 
 import pytest
 
-from arkwaifu_updateloop import MemoryObjectStore, Update, Updateloop
+from arkwaifu_updateloop import MemoryObjectStore, Updater, UpdateRequest
 from arkwaifu_updateloop.art import build_art_manifest
 from arkwaifu_updateloop.extraction import extract_assets
 
@@ -33,7 +33,7 @@ async def test_real_bundle_extracts_processes_and_publishes(tmp_path: Path):
     async def build(_active, _force):
         return manifest
 
-    result = await Updateloop(remote).run([Update("art", version, build)])
+    result = await Updater(remote).run([UpdateRequest("art", version, build)])
     assert result[0].status == "updated"
     assert remote.database is not None
     assert len(remote.objects) == (2 * len(manifest.arts)) + len(manifest.source_arts)

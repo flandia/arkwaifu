@@ -1,13 +1,13 @@
 """Arkwaifu updateloop."""
 
 from .object_store import DATABASE_OBJECT_KEY, MemoryObjectStore, S3ObjectStore
-from .updater import Update, Updateloop, UpdateResult
+from .updater import Updater, UpdateRequest, UpdateResult
 
 __all__ = [
     "DATABASE_OBJECT_KEY",
     "MemoryObjectStore",
     "S3ObjectStore",
-    "Update",
+    "UpdateRequest",
     "UpdateResult",
-    "Updateloop",
+    "Updater",
 ]

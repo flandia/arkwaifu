@@ -42,7 +42,7 @@ _THUMBNAIL_WORKERS = os.cpu_count() or 1
 
 
 @dataclass(frozen=True, slots=True)
-class Update:
+class UpdateRequest:
     """Describe one requested dataset and the callback which prepares it.
 
     ``complete`` is the art-only historical backfill policy. It makes an
@@ -152,7 +152,7 @@ def art_object_key(
     return "/".join(quote(segment, safe="") for segment in segments)
 
 
-class Updateloop:
+class Updater:
     """Keep the remote Arkwaifu database and its art objects up-to-date."""
 
     def __init__(self, remote: ObjectStore, *, upload_workers: int = 16) -> None:
@@ -163,7 +163,7 @@ class Updateloop:
 
     async def run(
         self,
-        requests: Sequence[Update],
+        requests: Sequence[UpdateRequest],
         *,
         force: bool = False,
     ) -> tuple[UpdateResult, ...]:
@@ -315,7 +315,7 @@ class Updateloop:
             )
 
     @staticmethod
-    def _validate_requests(requests: Sequence[Update]) -> None:
+    def _validate_requests(requests: Sequence[UpdateRequest]) -> None:
         if any(request.complete for request in requests) and (
             len(requests) != 1 or requests[0].unit != "art"
         ):
@@ -334,11 +334,11 @@ class Updateloop:
 
     @staticmethod
     async def _build_manifests(
-        requests: Sequence[Update],
+        requests: Sequence[UpdateRequest],
         active_versions: dict[str, str],
         force: bool,
     ) -> tuple[Manifest, ...]:
-        async def build(request: Update) -> Manifest:
+        async def build(request: UpdateRequest) -> Manifest:
             manifest = await request.build(active_versions.get(request.unit), force)
             if request.unit == "art":
                 if not isinstance(manifest, ArtManifest):

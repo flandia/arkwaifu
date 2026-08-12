@@ -13,8 +13,8 @@ from arkwaifu_updateloop import (
     DATABASE_OBJECT_KEY,
     MemoryObjectStore,
     S3ObjectStore,
-    Update,
-    Updateloop,
+    Updater,
+    UpdateRequest,
     UpdateResult,
 )
 from arkwaifu_updateloop import object_store as remote_module
@@ -127,13 +127,13 @@ def locale_manifest(
     )
 
 
-def request(manifest: ArtManifest | LocaleManifest) -> Update:
+def update_request(manifest: ArtManifest | LocaleManifest) -> UpdateRequest:
     async def build(_active: str | None, _force: bool):
         return manifest
 
     if isinstance(manifest, ArtManifest):
-        return Update("art", manifest.upstream_version, build)
-    return Update(manifest.unit, manifest.upstream_version, build)
+        return UpdateRequest("art", manifest.upstream_version, build)
+    return UpdateRequest(manifest.unit, manifest.upstream_version, build)
 
 
 def database_connection(remote: MemoryObjectStore, tmp_path: Path) -> sqlite3.Connection:
@@ -335,11 +335,11 @@ async def test_memory_remote_does_not_replace_versioned_png():
 
 async def test_partial_first_run_creates_one_valid_database(tmp_path, caplog):
     remote = MemoryObjectStore()
-    updater = Updateloop(remote)
+    updater = Updater(remote)
     locale = locale_manifest("EN", "en-v1", art_id="absent")
 
     with caplog.at_level("WARNING", logger="arkwaifu_updateloop.incomplete_upstream"):
-        result = await updater.run([request(locale)])
+        result = await updater.run([update_request(locale)])
 
     assert result[0].status == "updated"
     assert "count=1" in caplog.text
@@ -357,10 +357,10 @@ async def test_art_reference_requires_matching_category_and_id(caplog):
     remote = MemoryObjectStore()
 
     with caplog.at_level("WARNING", logger="arkwaifu_updateloop.incomplete_upstream"):
-        await Updateloop(remote).run(
+        await Updater(remote).run(
             [
-                request(art_manifest("art-v1", "shared", category="background")),
-                request(locale_manifest("EN", "en-v1", art_id="shared")),
+                update_request(art_manifest("art-v1", "shared", category="background")),
+                update_request(locale_manifest("EN", "en-v1", art_id="shared")),
             ]
         )
 
@@ -392,8 +392,8 @@ async def test_incomplete_locale_sections_warn_and_still_publish(
     )
 
     with caplog.at_level("WARNING", logger="arkwaifu_updateloop.incomplete_upstream"):
-        results = await Updateloop(remote).run(
-            [request(art_manifest("art-v1", "event")), request(locale)]
+        results = await Updater(remote).run(
+            [update_request(art_manifest("art-v1", "event")), update_request(locale)]
         )
 
     assert [result.status for result in results] == ["updated", "updated"]
@@ -415,9 +415,9 @@ async def test_incomplete_locale_sections_warn_and_still_publish(
 
 async def test_equal_res_version_is_a_noop_without_calling_builder():
     remote = MemoryObjectStore()
-    updater = Updateloop(remote)
+    updater = Updater(remote)
     first = art_manifest("v1", "first")
-    await updater.run([request(first)])
+    await updater.run([update_request(first)])
     original = remote.database
     called = False
 
@@ -426,7 +426,7 @@ async def test_equal_res_version_is_a_noop_without_calling_builder():
         called = True
         return first
 
-    result = await updater.run([Update("art", "v1", should_not_build)])
+    result = await updater.run([UpdateRequest("art", "v1", should_not_build)])
 
     assert result[0].status == "unchanged"
     assert called is False
@@ -462,7 +462,7 @@ async def test_missing_performance_index_is_published_without_rebuilding(tmp_pat
         called = True
         return art_manifest("v1", "unused")
 
-    result = await Updateloop(remote).run([Update("art", "v1", should_not_build)])
+    result = await Updater(remote).run([UpdateRequest("art", "v1", should_not_build)])
 
     assert result == (UpdateResult("art", "v1", "unchanged"),)
     assert called is False
@@ -472,7 +472,7 @@ async def test_missing_performance_index_is_published_without_rebuilding(tmp_pat
             row[2] for row in published.execute("PRAGMA index_info(story_art_references_by_art)")
         ] == ["locale", "art_id"]
 
-    await Updateloop(remote).run([Update("art", "v1", should_not_build)])
+    await Updater(remote).run([UpdateRequest("art", "v1", should_not_build)])
     assert called is False
     assert remote.pushes == 1
 
@@ -491,8 +491,8 @@ async def test_complete_art_builds_at_current_version_and_pushes_database_once(
             await super().push_database(source)
 
     remote = CountingRemote()
-    updater = Updateloop(remote)
-    await updater.run([request(art_manifest("v3", "current"))])
+    updater = Updater(remote)
+    await updater.run([update_request(art_manifest("v3", "current"))])
     remote.pushes = 0
     caplog.clear()
     caplog.set_level("INFO", logger=updater_module.__name__)
@@ -513,7 +513,7 @@ async def test_complete_art_builds_at_current_version_and_pushes_database_once(
         calls.append((active, force))
         return complete_manifest
 
-    result = await updater.run([Update("art", "v3", build, complete=True)])
+    result = await updater.run([UpdateRequest("art", "v3", build, complete=True)])
 
     assert result == (UpdateResult("art", "v3", "updated"),)
     assert calls == [("v3", False)]
@@ -548,22 +548,24 @@ async def test_complete_art_builds_at_current_version_and_pushes_database_once(
 
 
 async def test_complete_art_cannot_be_combined_with_other_units_or_force():
-    complete = Update("art", "v1", request(art_manifest("v1", "art")).build, complete=True)
-    locale = request(locale_manifest("EN", "en-v1"))
+    complete = UpdateRequest(
+        "art", "v1", update_request(art_manifest("v1", "art")).build, complete=True
+    )
+    locale = update_request(locale_manifest("EN", "en-v1"))
 
     with pytest.raises(ValueError, match="sole requested"):
-        await Updateloop(MemoryObjectStore()).run([complete, locale])
+        await Updater(MemoryObjectStore()).run([complete, locale])
     with pytest.raises(ValueError, match="cannot be combined with force"):
-        await Updateloop(MemoryObjectStore()).run([complete], force=True)
+        await Updater(MemoryObjectStore()).run([complete], force=True)
 
 
 async def test_art_delta_overlays_only_the_same_category_qualified_identity(tmp_path):
     remote = MemoryObjectStore()
-    updater = Updateloop(remote)
-    await updater.run([request(art_manifest("v1", "shared", category="background"))])
+    updater = Updater(remote)
+    await updater.run([update_request(art_manifest("v1", "shared", category="background"))])
     await updater.run(
         [
-            request(
+            update_request(
                 ArtManifest(
                     "v2",
                     (
@@ -603,7 +605,7 @@ async def test_character_sources_and_ordered_references_are_persisted(tmp_path):
     remote = MemoryObjectStore()
     manifest = character_manifest("v1", "amiya")
 
-    await Updateloop(remote).run([request(manifest)])
+    await Updater(remote).run([update_request(manifest)])
 
     with database_connection(remote, tmp_path) as connection:
         assert tuple(
@@ -620,9 +622,9 @@ async def test_character_sources_and_ordered_references_are_persisted(tmp_path):
 
 async def test_art_delta_preserves_unmentioned_record_and_replaces_matching_identity(tmp_path):
     remote = MemoryObjectStore()
-    await Updateloop(remote).run([request(art_manifest("v1", "fallback"))])
+    await Updater(remote).run([update_request(art_manifest("v1", "fallback"))])
 
-    await Updateloop(remote).run([request(art_manifest("v2", "different"))])
+    await Updater(remote).run([update_request(art_manifest("v2", "different"))])
     with database_connection(remote, tmp_path) as connection:
         assert (
             connection.execute(
@@ -631,7 +633,7 @@ async def test_art_delta_preserves_unmentioned_record_and_replaces_matching_iden
             == "ART/v1/composition/image/fallback.png"
         )
 
-    await Updateloop(remote).run([request(art_manifest("v3", "fallback", (4, 5, 6, 255)))])
+    await Updater(remote).run([update_request(art_manifest("v3", "fallback", (4, 5, 6, 255)))])
     with database_connection(remote, tmp_path) as connection:
         assert (
             connection.execute(
@@ -643,12 +645,15 @@ async def test_art_delta_preserves_unmentioned_record_and_replaces_matching_iden
 
 async def test_replacing_one_locale_preserves_other_units(tmp_path):
     remote = MemoryObjectStore()
-    updater = Updateloop(remote)
+    updater = Updater(remote)
     await updater.run(
-        [request(locale_manifest("EN", "en-v1")), request(locale_manifest("JP", "jp-v1"))]
+        [
+            update_request(locale_manifest("EN", "en-v1")),
+            update_request(locale_manifest("JP", "jp-v1")),
+        ]
     )
 
-    await updater.run([request(locale_manifest("EN", "en-v2", suffix="two"))])
+    await updater.run([update_request(locale_manifest("EN", "en-v2", suffix="two"))])
 
     with database_connection(remote, tmp_path) as connection:
         assert [
@@ -665,8 +670,8 @@ async def test_replacing_one_locale_preserves_other_units(tmp_path):
 
 async def test_all_requested_builds_are_atomic():
     remote = MemoryObjectStore()
-    updater = Updateloop(remote)
-    await updater.run([request(art_manifest("v1", "stable"))])
+    updater = Updater(remote)
+    await updater.run([update_request(art_manifest("v1", "stable"))])
     original_database = remote.database
     original_objects = dict(remote.objects)
 
@@ -676,8 +681,8 @@ async def test_all_requested_builds_are_atomic():
     with pytest.raises(RuntimeError, match="locale build failed"):
         await updater.run(
             [
-                request(art_manifest("v2", "candidate")),
-                Update("EN", "en-v1", fail),
+                update_request(art_manifest("v2", "candidate")),
+                UpdateRequest("EN", "en-v1", fail),
             ]
         )
 
@@ -687,15 +692,17 @@ async def test_all_requested_builds_are_atomic():
 
 async def test_constraint_failure_publishes_none_of_the_requested_units():
     remote = MemoryObjectStore()
-    updater = Updateloop(remote)
-    await updater.run([request(art_manifest("v1", "stable"))])
+    updater = Updater(remote)
+    await updater.run([update_request(art_manifest("v1", "stable"))])
     original_database = remote.database
     original_objects = dict(remote.objects)
     invalid = locale_manifest("EN", "en-v1")
     invalid = replace(invalid, story_groups=(invalid.story_groups[0], invalid.story_groups[0]))
 
     with pytest.raises(sqlite3.IntegrityError):
-        await updater.run([request(art_manifest("v2", "candidate")), request(invalid)])
+        await updater.run(
+            [update_request(art_manifest("v2", "candidate")), update_request(invalid)]
+        )
 
     assert remote.database == original_database
     assert remote.objects == original_objects
@@ -740,7 +747,7 @@ async def test_batch_upload_waits_for_build_and_sqlite_transaction(
         return manifest
 
     monkeypatch.setattr(updater_module, "apply_changes", apply_changes)
-    run = asyncio.create_task(Updateloop(remote).run([Update("art", "v1", build)]))
+    run = asyncio.create_task(Updater(remote).run([UpdateRequest("art", "v1", build)]))
     await asyncio.wait_for(build_started.wait(), timeout=1)
 
     assert not run.done()
@@ -793,7 +800,7 @@ async def test_final_artifact_batch_has_bounded_concurrency_and_one_upload_per_w
         (),
     )
 
-    run = asyncio.create_task(Updateloop(remote, upload_workers=2).run([request(manifest)]))
+    run = asyncio.create_task(Updater(remote, upload_workers=2).run([update_request(manifest)]))
     await asyncio.wait_for(remote.started.wait(), timeout=1)
 
     assert remote.maximum_active == 2
@@ -840,7 +847,7 @@ async def test_thumbnail_workers_generate_then_upload_one_image_at_a_time(monkey
 
     monkeypatch.setattr(updater_module, "_THUMBNAIL_WORKERS", 2)
     monkeypatch.setattr(updater_module, "make_thumbnail", counting_make_thumbnail)
-    run = asyncio.create_task(Updateloop(remote).run([request(manifest)]))
+    run = asyncio.create_task(Updater(remote).run([update_request(manifest)]))
     await asyncio.wait_for(remote.started.wait(), timeout=1)
 
     assert generated == 2
@@ -864,7 +871,7 @@ async def test_batch_upload_failure_prevents_database_publication():
         return manifest
 
     with pytest.raises(RuntimeError, match="batch upload failed"):
-        await Updateloop(remote).run([Update("art", "v1", build)])
+        await Updater(remote).run([UpdateRequest("art", "v1", build)])
 
     assert remote.database is None
 
@@ -889,7 +896,7 @@ async def test_thumbnail_upload_finishes_before_database_publication():
 
     remote = RecordingRemote()
 
-    await Updateloop(remote).run([request(art_manifest("v1", "candidate"))])
+    await Updater(remote).run([update_request(art_manifest("v1", "candidate"))])
 
     assert remote.events == [
         ("png", "ART/v1/composition/image/candidate.png"),
@@ -906,7 +913,7 @@ async def test_thumbnail_upload_failure_prevents_database_publication():
     remote = FailingRemote()
 
     with pytest.raises(RuntimeError, match="thumbnail upload failed"):
-        await Updateloop(remote).run([request(art_manifest("v1", "candidate"))])
+        await Updater(remote).run([update_request(art_manifest("v1", "candidate"))])
 
     assert remote.database is None
     assert "ART/v1/composition/image/candidate.png" in remote.objects
@@ -930,11 +937,11 @@ async def test_database_push_failure_can_retry_mutable_thumbnail_publication():
             await super().push_database(source)
 
     remote = FailOnceRemote()
-    update = request(art_manifest("v1", "candidate"))
+    update = update_request(art_manifest("v1", "candidate"))
 
     with pytest.raises(RuntimeError, match="database push failed"):
-        await Updateloop(remote).run([update])
-    result = await Updateloop(remote).run([update])
+        await Updater(remote).run([update])
+    result = await Updater(remote).run([update])
 
     assert result == (UpdateResult("art", "v1", "updated"),)
     assert remote.thumbnail_puts == 2
@@ -953,7 +960,7 @@ async def test_thumbnail_failure_logs_only_terminal_status_and_publishes_nothing
     caplog.set_level("INFO", logger=updater_module.__name__)
 
     with pytest.raises(RuntimeError, match="thumbnail generation failed"):
-        await Updateloop(remote).run([request(art_manifest("v1", "candidate"))])
+        await Updater(remote).run([update_request(art_manifest("v1", "candidate"))])
 
     records = [
         record for record in caplog.records if getattr(record, "action", None) == "thumbnail"
@@ -994,7 +1001,7 @@ async def test_batch_upload_failure_drains_already_started_uploads():
         ),
         (),
     )
-    run = asyncio.create_task(Updateloop(remote, upload_workers=2).run([request(manifest)]))
+    run = asyncio.create_task(Updater(remote, upload_workers=2).run([update_request(manifest)]))
 
     await asyncio.wait_for(remote.failed.wait(), timeout=1)
     assert not run.done()
@@ -1020,7 +1027,9 @@ async def test_batch_cancellation_drains_already_started_uploads():
             await super().put_png(key, artifact)
 
     remote = BlockingRemote()
-    run = asyncio.create_task(Updateloop(remote).run([request(art_manifest("v1", "candidate"))]))
+    run = asyncio.create_task(
+        Updater(remote).run([update_request(art_manifest("v1", "candidate"))])
+    )
     await asyncio.wait_for(remote.started.wait(), timeout=1)
 
     run.cancel()
@@ -1054,7 +1063,7 @@ async def test_cancellation_waits_for_database_push_before_removing_local_file()
 
     remote = BlockingRemote()
     run = asyncio.create_task(
-        Updateloop(remote).run([request(locale_manifest("EN", "en-v1", art_id="absent"))])
+        Updater(remote).run([update_request(locale_manifest("EN", "en-v1", art_id="absent"))])
     )
     await asyncio.wait_for(remote.started.wait(), timeout=1)
     assert remote.source is not None
@@ -1079,10 +1088,10 @@ async def test_cancellation_waits_for_database_push_before_removing_local_file()
 
 async def test_force_art_at_a_new_version_is_rejected_before_building_or_copying_objects():
     remote = MemoryObjectStore()
-    updater = Updateloop(remote)
+    updater = Updater(remote)
     first = art_manifest("v1", "same", (1, 2, 3, 255))
     second = art_manifest("v2", "same", (4, 5, 6, 255))
-    await updater.run([request(first)])
+    await updater.run([update_request(first)])
     original_database = remote.database
     original_objects = remote.objects.copy()
     built = False
@@ -1093,7 +1102,7 @@ async def test_force_art_at_a_new_version_is_rejected_before_building_or_copying
         return second
 
     with pytest.raises(ValueError, match="force is not supported for art updates"):
-        await updater.run([Update("art", "v2", build)], force=True)
+        await updater.run([UpdateRequest("art", "v2", build)], force=True)
 
     assert built is False
     assert remote.database == original_database
@@ -1110,13 +1119,13 @@ async def test_png_upload_failure_keeps_previous_database():
             await super().put_png(key, artifact)
 
     remote = FailingRemote()
-    updater = Updateloop(remote)
-    await updater.run([request(art_manifest("v1", "stable"))])
+    updater = Updater(remote)
+    await updater.run([update_request(art_manifest("v1", "stable"))])
     original_database = remote.database
     remote.fail = True
 
     with pytest.raises(RuntimeError, match="upload failed"):
-        await updater.run([request(art_manifest("v2", "candidate"))])
+        await updater.run([update_request(art_manifest("v2", "candidate"))])
 
     assert remote.database == original_database
 

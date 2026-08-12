@@ -12,8 +12,8 @@ from PIL import Image
 from arkwaifu_updateloop import (
     DATABASE_OBJECT_KEY,
     S3ObjectStore,
-    Update,
-    Updateloop,
+    Updater,
+    UpdateRequest,
 )
 from arkwaifu_updateloop.domain import (
     ArtManifest,
@@ -127,10 +127,10 @@ async def test_monolithic_database_and_pngs_publish_to_minio(isolated_bucket, tm
     async def build_locale(_active, _force):
         return locale
 
-    result = await Updateloop(remote).run(
+    result = await Updater(remote).run(
         [
-            Update("art", art.upstream_version, build_art),
-            Update("EN", locale.upstream_version, build_locale),
+            UpdateRequest("art", art.upstream_version, build_art),
+            UpdateRequest("EN", locale.upstream_version, build_locale),
         ]
     )
 

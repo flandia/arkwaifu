@@ -5,14 +5,14 @@ from types import SimpleNamespace
 import pytest
 from PIL import Image
 
-from arkwaifu_updateloop import Update, UpdateResult, cli
+from arkwaifu_updateloop import UpdateRequest, UpdateResult, cli
 from arkwaifu_updateloop.domain import ArtManifest, ArtRecord, FilePngArtifact, LocaleManifest
 from arkwaifu_updateloop.upstream import UpstreamCache
 
 
-class _FakeUpdateloop:
+class _FakeUpdater:
     def __init__(self) -> None:
-        self.calls: list[tuple[tuple[Update, ...], bool]] = []
+        self.calls: list[tuple[tuple[UpdateRequest, ...], bool]] = []
 
     async def run(self, requests, *, force=False):
         values = tuple(requests)
@@ -28,12 +28,12 @@ class _FakeLocaleBuilder:
         self.closed = True
 
 
-def _patch_runtime(monkeypatch: pytest.MonkeyPatch) -> _FakeUpdateloop:
+def _patch_runtime(monkeypatch: pytest.MonkeyPatch) -> _FakeUpdater:
     settings = object()
-    updater = _FakeUpdateloop()
+    updater = _FakeUpdater()
     locale_builder = _FakeLocaleBuilder()
     monkeypatch.setattr(cli.Settings, "from_environment", staticmethod(lambda: settings))
-    monkeypatch.setattr(cli, "_updateloop", lambda received: updater)
+    monkeypatch.setattr(cli, "_updater", lambda received: updater)
     monkeypatch.setattr(cli, "_locale_builder", lambda settings, cache: locale_builder)
     return updater
 
@@ -42,13 +42,13 @@ async def _wait_for(event: asyncio.Event) -> None:
     await asyncio.wait_for(event.wait(), timeout=2)
 
 
-def _update(unit: str) -> Update:
+def _request(unit: str) -> UpdateRequest:
     async def build(_active: str | None, _force: bool):
         if unit == "art":
             return ArtManifest(f"{unit}-v1", (), ())
         return LocaleManifest(unit, f"{unit}-v1", (), ())
 
-    return Update(unit, f"{unit}-v1", build)
+    return UpdateRequest(unit, f"{unit}-v1", build)
 
 
 @pytest.mark.asyncio
@@ -65,7 +65,7 @@ async def test_run_starts_all_version_preparations_concurrently(monkeypatch):
         if started == requested:
             all_preparations_started.set()
         await preparation_gate.wait()
-        return _update(unit)
+        return _request(unit)
 
     def prepare_locale(builder, unit):
         locale_builders.add(id(builder))
@@ -91,7 +91,7 @@ async def test_run_passes_force_to_a_locale_only_publication(monkeypatch):
     monkeypatch.setattr(
         cli,
         "_prepare_locale",
-        lambda builder, unit: _ready(_update(unit)),
+        lambda builder, unit: _ready(_request(unit)),
     )
 
     assert await cli._run(["EN", "JP"], force=True, use_cache=False) == 0
@@ -117,7 +117,7 @@ async def test_any_preparation_failure_prevents_database_publication(monkeypatch
     monkeypatch.setattr(
         cli,
         "_prepare_locale",
-        lambda builder, unit: _ready(_update(unit)),
+        lambda builder, unit: _ready(_request(unit)),
     )
 
     with caplog.at_level("ERROR"):
@@ -137,7 +137,7 @@ async def test_database_failure_returns_nonzero_without_a_second_attempt(monkeyp
         raise RuntimeError("database upload failed")
 
     updater.run = fail
-    monkeypatch.setattr(cli, "_prepare_art", lambda settings, cache: _ready(_update("art")))
+    monkeypatch.setattr(cli, "_prepare_art", lambda settings, cache: _ready(_request("art")))
 
     with caplog.at_level("ERROR"):
         result = await cli._run(["art"], force=False, use_cache=False)
@@ -240,7 +240,7 @@ async def test_no_cache_workspace_outlives_batch_build_and_is_removed_after_run(
         async def build(_active, _force):
             return manifest
 
-        return Update("art", "art-v1", build)
+        return UpdateRequest("art", "art-v1", build)
 
     async def run(requests, *, force=False):
         values = tuple(requests)

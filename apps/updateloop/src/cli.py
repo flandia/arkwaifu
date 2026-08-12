@@ -18,7 +18,7 @@ from dotenv import load_dotenv
 from .config import Settings
 from .domain import ArtManifest, LocaleManifest, LocaleUnit
 from .object_store import S3ObjectStore
-from .updater import Update, Updateloop, UpdateUnit
+from .updater import Updater, UpdateRequest, UpdateUnit
 from .upstream import LiveArtBuilder, LiveLocaleBuilder, UpstreamCache
 from .upstream.art_history import LiveWindowsVersionHistory
 
@@ -111,8 +111,8 @@ def _validate_arguments(parser: argparse.ArgumentParser, args: argparse.Namespac
         parser.error("--force is available only for locale-only updates")
 
 
-def _updateloop(settings: Settings) -> Updateloop:
-    return Updateloop(
+def _updater(settings: Settings) -> Updater:
+    return Updater(
         S3ObjectStore(
             bucket=settings.s3_bucket,
             region=settings.s3_region,
@@ -129,7 +129,7 @@ async def _prepare_art(
     cache: UpstreamCache,
     *,
     complete: bool = False,
-) -> Update:
+) -> UpdateRequest:
     builder = LiveArtBuilder(
         version_url=settings.art_version_url,
         asset_base_url=settings.art_asset_base_url,
@@ -151,12 +151,12 @@ async def _prepare_art(
         async def build_complete(_active: str | None, _force: bool) -> ArtManifest:
             return await builder.build_history(versions)
 
-        return Update("art", res_version, build_complete, complete=True)
+        return UpdateRequest("art", res_version, build_complete, complete=True)
 
     async def build(active: str | None, force: bool) -> ArtManifest:
         return await builder.build(res_version, active, force)
 
-    return Update("art", res_version, build)
+    return UpdateRequest("art", res_version, build)
 
 
 def _locale_builder(
@@ -173,13 +173,13 @@ def _locale_builder(
 async def _prepare_locale(
     builder: LiveLocaleBuilder,
     unit: LocaleUnit,
-) -> Update:
+) -> UpdateRequest:
     res_version = await builder.detect_version(unit)
 
     async def build(active: str | None, force: bool) -> LocaleManifest:
         return await builder.build(unit, res_version, active, force)
 
-    return Update(unit, res_version, build)
+    return UpdateRequest(unit, res_version, build)
 
 
 async def _run(
@@ -223,11 +223,11 @@ async def _run_with_cache(
     """Prepare requested datasets concurrently and publish them as one database."""
 
     requested_units = tuple(dict.fromkeys(units or _ALL_UNITS))
-    updater = _updateloop(settings)
+    updater = _updater(settings)
     locale_builder = (
         _locale_builder(settings, cache) if any(unit != "art" for unit in requested_units) else None
     )
-    preparation_tasks: dict[UpdateUnit, asyncio.Task[Update]] = {}
+    preparation_tasks: dict[UpdateUnit, asyncio.Task[UpdateRequest]] = {}
     try:
         for unit in requested_units:
             if unit == "art":
@@ -242,7 +242,7 @@ async def _run_with_cache(
                 preparation = _prepare_locale(locale_builder, cast(LocaleUnit, unit))
             preparation_tasks[unit] = asyncio.create_task(preparation, name=f"prepare-{unit}")
 
-        updates: list[Update] = []
+        update_requests: list[UpdateRequest] = []
         preparation_failed = False
         outcomes = await asyncio.gather(*preparation_tasks.values(), return_exceptions=True)
         for unit, outcome in zip(preparation_tasks, outcomes, strict=True):
@@ -254,11 +254,11 @@ async def _run_with_cache(
                     exc_info=(type(outcome), outcome, outcome.__traceback__),
                 )
             else:
-                updates.append(outcome)
+                update_requests.append(outcome)
         if preparation_failed:
             return 1
         try:
-            results = await updater.run(updates, force=force)
+            results = await updater.run(update_requests, force=force)
         except Exception:
             _LOGGER.exception("database status=failed units=%s", requested_units)
             return 1
