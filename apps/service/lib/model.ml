@@ -159,8 +159,7 @@ let art_json ~object_base_url (art : art) =
       ("id", `String art.id);
       ("category", `String art.category);
       ( "thumbnailContentUrl",
-        `String
-          (thumbnail_content_url ~object_base_url art.image.object_key) );
+        `String (thumbnail_content_url ~object_base_url art.image.object_key) );
       ("image", object_json ~object_base_url art.image);
       ("sourceArtIDs", string_list art.source_art_ids);
     ]
@@ -182,8 +181,7 @@ let unclassified_art_json ~object_base_url (art : unclassified_art) =
       ("category", `String art.category);
       ( "thumbnailContentUrl",
         `String
-          (thumbnail_content_url ~object_base_url
-             art.composition_object_key) );
+          (thumbnail_content_url ~object_base_url art.composition_object_key) );
     ]
 
 let option_thumbnail_content_url ~object_base_url = function
@@ -232,7 +230,8 @@ let story_summary_json ~object_base_url (summary : story_summary) =
     (story_fields ~object_base_url summary.story
     @ [
         ( "representativeArtReference",
-          option_reference ~object_base_url summary.representative_art_reference );
+          option_reference ~object_base_url summary.representative_art_reference
+        );
         ( "previewArtReferences",
           reference_list ~object_base_url summary.preview_art_references );
       ])
@@ -249,7 +248,8 @@ let story_group_summary_json ~object_base_url (summary : story_group_summary) =
     (story_group_fields summary.group
     @ [
         ( "representativeArtReference",
-          option_reference ~object_base_url summary.representative_art_reference );
+          option_reference ~object_base_url summary.representative_art_reference
+        );
         ( "previewArtReferences",
           reference_list ~object_base_url summary.preview_art_references );
       ])
@@ -259,11 +259,11 @@ let story_group_detail_json ~object_base_url (detail : story_group_detail) =
     (story_group_fields detail.group
     @ [
         ( "representativeArtReference",
-          option_reference ~object_base_url detail.representative_art_reference );
+          option_reference ~object_base_url detail.representative_art_reference
+        );
         ( "previewArtReferences",
           reference_list ~object_base_url detail.preview_art_references );
-        ( "artReferences",
-          reference_list ~object_base_url detail.art_references );
+        ("artReferences", reference_list ~object_base_url detail.art_references);
       ])
 
 let gallery_entry_json ~object_base_url (entry : gallery_entry) =
@@ -304,10 +304,8 @@ let gallery_json ~object_base_url (gallery : gallery) =
     (gallery_fields gallery
     @ [
         ( "entries",
-          `List
-            (List.map
-               (gallery_entry_json ~object_base_url)
-               gallery.entries) );
+          `List (List.map (gallery_entry_json ~object_base_url) gallery.entries)
+        );
       ])
 
 let art_sibling_json ~object_base_url (sibling : art_sibling) =
@@ -317,8 +315,8 @@ let art_sibling_json ~object_base_url (sibling : art_sibling) =
       ("names", string_list sibling.names);
       ( "thumbnailContentUrl",
         `String
-          (thumbnail_content_url ~object_base_url
-             sibling.composition_object_key) );
+          (thumbnail_content_url ~object_base_url sibling.composition_object_key)
+      );
     ]
 
 let art_occurrence_json (occurrence : art_occurrence) =
@@ -338,8 +336,6 @@ let art_context_json ~object_base_url (context : art_context) =
     [
       ("names", string_list context.names);
       ( "siblings",
-        `List
-          (List.map (art_sibling_json ~object_base_url) context.siblings) );
-      ( "occurrences",
-        `List (List.map art_occurrence_json context.occurrences) );
+        `List (List.map (art_sibling_json ~object_base_url) context.siblings) );
+      ("occurrences", `List (List.map art_occurrence_json context.occurrences));
     ]

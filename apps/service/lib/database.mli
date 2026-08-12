@@ -1,33 +1,22 @@
 (** Read the current Arkwaifu database through one stable query interface. *)
 
 (** Lookup errors distinguish absent records from an unavailable database. *)
-type error = [ `Not_found | `Unavailable of string ]
+type error =
+  [ `Not_found
+  | `Unavailable of string
+  ]
+
 type t
 
-(** In-memory records used by deterministic reader tests. *)
-type snapshot = {
-  arts : Model.art list;
-  source_arts : Model.source_art list;
-  story_groups : (string * Model.story_group list) list;
-  stories : (string * Model.story list) list;
-  galleries : (string * Model.gallery list) list;
-}
-
-(** The empty in-memory database used as a base by small reader tests. *)
-val empty_snapshot : snapshot
-
-(** Build a reader over an in-memory snapshot. *)
-val memory : snapshot -> t
-
-(** Open one SQLite file read-only. The caller owns the file until [close].
-    The [live] reader checks schema compatibility before exposing this reader. *)
+(** Open one SQLite file read-only. The caller owns the file until [close]. The
+    [live] reader checks schema compatibility before exposing this reader. *)
 val sqlite : string -> (t, string) result
 
 (** Download and serve a changing remote SQLite database.
 
     The initial download must succeed. Later refresh failures keep the last
-    compatible local generation. Every downloaded generation is admitted by schema
-    version before it can serve queries. *)
+    compatible local generation. Every downloaded generation is admitted by
+    schema version before it can serve queries. *)
 val live :
   url:Uri.t ->
   cache_dir:string ->
@@ -35,7 +24,40 @@ val live :
   download_timeout_seconds:float ->
   (t, string) result Lwt.t
 
-(** Release the reader. A live reader also stops polling and removes its managed file. *)
+(** Narrow test access to the production refresh state machine. The callback
+    writes a fetched database to [destination]; no test-only query model is
+    involved. *)
+module For_test : sig
+  type fetch_result =
+    [ `Not_modified
+    | `Fetched of string option
+    | `Failed of string
+    ]
+
+  type refresh_result =
+    [ `Not_modified
+    | `Replaced
+    | `Failed of string
+    ]
+
+  type controlled_live = {
+    database : t;
+    refresh_once : unit -> refresh_result Lwt.t;
+  }
+
+  val live :
+    fetch:(etag:string option -> destination:string -> fetch_result Lwt.t) ->
+    cache_dir:string ->
+    download_timeout_seconds:float ->
+    (controlled_live, string) result Lwt.t
+
+  (** Open SQLite with an observer called for every pool acquisition. *)
+  val sqlite_with_pool_observer :
+    on_acquire:(unit -> unit) -> string -> (t, string) result
+end
+
+(** Release the reader. A live reader also stops polling and removes its managed
+    file. *)
 val close : t -> unit Lwt.t
 
 (** Check whether the current reader is available. *)
@@ -49,8 +71,7 @@ val source_art : t -> string -> (Model.source_art, error) result Lwt.t
 
 (** List every indexed art absent from every locale's stories and galleries.
     Results are ordered by image, background, item, character, then art ID. *)
-val unclassified_arts :
-  t -> (Model.unclassified_art list, error) result Lwt.t
+val unclassified_arts : t -> (Model.unclassified_art list, error) result Lwt.t
 
 (** Get localized names, character siblings, and story occurrences for one
     available art. *)

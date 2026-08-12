@@ -245,9 +245,9 @@ For a native opam switch, install the locked dependency set from
 The SQLite schema shipped by the updater is the writer/reader contract. The
 service's `Database` module is the persistence seam: HTTP handlers ask it for
 domain records, while its live adapter hides SQLite queries, conditional
-downloads, schema checks, and generation replacement. An in-memory adapter
-supports deterministic tests. Dream remains limited to routing and
-JSON responses.
+downloads, schema checks, and generation replacement. Tests use temporary
+SQLite databases through that same reader. Dream remains limited to routing
+and JSON responses.
 
 There are no release tables, staged rows, active pointers, or PostgreSQL
 settings. `unit_versions` contains only each unit's `resVersion`; HTTP reads use

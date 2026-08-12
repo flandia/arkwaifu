@@ -56,12 +56,12 @@ type story = {
   art_references : art_reference list;
 }
 
-(** A summary of one ordered story group. [group_type] is one of
-    [main_story], [major_event], [minor_event], [operator_record],
-    [integrated_strategies], [reclamation_algorithm], or [others], as enforced
-    by the updater-owned SQLite schema. [integrated_strategies] denotes official
-    ending stories grouped by topic. [reclamation_algorithm] groups only
-    stories with art references. *)
+(** A summary of one ordered story group. [group_type] is one of [main_story],
+    [major_event], [minor_event], [operator_record], [integrated_strategies],
+    [reclamation_algorithm], or [others], as enforced by the updater-owned
+    SQLite schema. [integrated_strategies] denotes official ending stories
+    grouped by topic. [reclamation_algorithm] groups only stories with art
+    references. *)
 type story_group = {
   id : string;
   name : string;
@@ -161,7 +161,8 @@ val unclassified_art_json :
 (** Encode one story with all art references. *)
 val story_json : object_base_url:string -> story -> Yojson.Safe.t
 
-(** Encode one story list row. [artReferences] remains empty for compatibility. *)
+(** Encode one story list row. [artReferences] is present and empty because
+    summary queries do not load detail references. *)
 val story_summary_json :
   object_base_url:string -> story_summary -> Yojson.Safe.t
 
@@ -176,10 +177,9 @@ val story_group_detail_json :
 (** Encode one gallery with its entries. *)
 val gallery_json : object_base_url:string -> gallery -> Yojson.Safe.t
 
-(** Encode one gallery without entries and with direct thumbnail preview URLs. *)
+(** Encode one gallery summary with direct thumbnail preview URLs. *)
 val gallery_summary_json :
   object_base_url:string -> gallery_summary -> Yojson.Safe.t
 
 (** Encode localized context for one art. *)
-val art_context_json :
-  object_base_url:string -> art_context -> Yojson.Safe.t
+val art_context_json : object_base_url:string -> art_context -> Yojson.Safe.t

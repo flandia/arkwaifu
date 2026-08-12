@@ -19,32 +19,10 @@ let art =
       source_art_ids = [ "source" ];
     }
 
-let picture_art id category =
-  Model.
-    {
-      id;
-      category;
-      image =
-        {
-          object_key = "ART/art-v1/composition/" ^ category ^ "/" ^ id ^ ".png";
-          byte_size = 44L;
-          width = 1920;
-          height = 1080;
-        };
-      source_art_ids = [];
-    }
-
-let illustration_art = picture_art "illustration" "image"
-let alternate_illustration_art = picture_art "alternate" "image"
-let third_illustration_art = picture_art "third" "image"
-let fourth_illustration_art = picture_art "fourth" "image"
-let background_art = picture_art "background" "background"
-
 let source_image =
   Model.
     {
-      object_key =
-        "ART/26-08-07-10-51-39_26e0fc/source/character/source.png";
+      object_key = "ART/26-08-07-10-51-39_26e0fc/source/character/source.png";
       byte_size = 43L;
       width = 11;
       height = 21;
@@ -60,170 +38,17 @@ let source_art =
       image = source_image;
     }
 
-let story_reference =
-  Model.
-    {
-      art_id = "illustration";
-      kind = "picture";
-      category = "image";
-      title = Some "Title";
-      subtitle = None;
-      names = [ "Alias" ];
-      composition_object_key = None;
-    }
-
-let alternate_story_reference =
-  Model.
-    {
-      art_id = "alternate";
-      kind = "picture";
-      category = "image";
-      title = Some "Alternate";
-      subtitle = None;
-      names = [];
-      composition_object_key = None;
-    }
-
-let picture_reference art_id title =
-  Model.
-    {
-      art_id;
-      kind = "picture";
-      category = "image";
-      title = Some title;
-      subtitle = None;
-      names = [];
-      composition_object_key = None;
-    }
-
-let third_story_reference = picture_reference "third" "Third"
-let fourth_story_reference = picture_reference "fourth" "Fourth"
-let unavailable_story_reference = picture_reference "unavailable" "Unavailable"
-
-let background_reference =
-  Model.
-    {
-      art_id = "background";
-      kind = "picture";
-      category = "background";
-      title = None;
-      subtitle = None;
-      names = [];
-      composition_object_key = None;
-    }
-
-let art_reference category art_id names =
-  Model.
-    {
-      art_id;
-      kind = "picture";
-      category;
-      title = None;
-      subtitle = None;
-      names;
-      composition_object_key = None;
-    }
-
-let story =
-  Model.
-    {
-      id = "story";
-      group_id = "group";
-      tag = "before";
-      tag_text = "Before";
-      code = "S1";
-      name = "Story";
-      info = "Info";
-      art_references =
-        [
-          background_reference;
-          story_reference;
-          alternate_story_reference;
-          third_story_reference;
-          fourth_story_reference;
-          unavailable_story_reference;
-        ];
-    }
-
-let later_story =
-  Model.
-    {
-      id = "aaa-later";
-      group_id = "group";
-      tag = "after";
-      tag_text = "After";
-      code = "S2";
-      name = "Later story";
-      info = "Later info";
-      art_references = [ story_reference ];
-    }
-
-let background_only_story =
-  Model.
-    {
-      id = "background-only";
-      group_id = "group";
-      tag = "after";
-      tag_text = "After";
-      code = "S3";
-      name = "Background story";
-      info = "Background info";
-      art_references = [ background_reference ];
-    }
-
-let story_group =
-  Model.{ id = "group"; name = "Group"; group_type = "main_story" }
-
-let empty_story_group =
-  Model.{ id = "empty"; name = "Empty group"; group_type = "others" }
-
-let gallery_entry id position art_id category =
-  Model.
-    {
-      id;
-      position;
-      name = "Entry " ^ id;
-      description = "Description " ^ id;
-      art_id;
-      category;
-      composition_object_key = None;
-    }
-
-let unresolved_gallery_entry = gallery_entry "entry" 0 "event" "image"
-
-let gallery =
-  Model.
-    {
-      id = "gallery";
-      name = "Gallery";
-      description = "Description";
-      entries =
-        [
-          unresolved_gallery_entry;
-          gallery_entry "background" 1 "background" "background";
-          gallery_entry "illustration" 2 "illustration" "image";
-          gallery_entry "alternate" 3 "alternate" "image";
-          gallery_entry "third" 4 "third" "image";
-          gallery_entry "fourth" 5 "fourth" "image";
-        ];
-    }
-
-let background_gallery =
-  Model.
-    {
-      id = "background-gallery";
-      name = "Background gallery";
-      description = "Description";
-      entries = [ gallery_entry "background" 0 "background" "background" ];
-    }
-
 let require_ok label = function
   | Ok value -> value
-  | Error `Not_found -> Alcotest.failf "%s unexpectedly returned not found" label
-  | Error (`Unavailable error) -> Alcotest.failf "%s unavailable: %s" label error
+  | Error `Not_found ->
+      Alcotest.failf "%s unexpectedly returned not found" label
+  | Error (`Unavailable error) ->
+      Alcotest.failf "%s unavailable: %s" label error
 
 let test_art_json () =
-  let json = Model.art_json ~object_base_url:"https://objects.example/bucket/" art in
+  let json =
+    Model.art_json ~object_base_url:"https://objects.example/bucket/" art
+  in
   let open Yojson.Safe.Util in
   Alcotest.(check string) "id" "event" (json |> member "id" |> to_string);
   Alcotest.(check string)
@@ -235,13 +60,13 @@ let test_art_json () =
     "https://objects.example/bucket/ART/26-08-07-10-51-39_26e0fc/thumbnail/character/event.webp"
     (json |> member "thumbnailContentUrl" |> to_string);
   Alcotest.(check bool)
-    "SHA-256 absent"
-    true
+    "SHA-256 absent" true
     (json |> member "image" |> member "sha256" = `Null)
 
 let test_source_art_json () =
   let json =
-    Model.source_art_json ~object_base_url:"https://objects.example/bucket/" source_art
+    Model.source_art_json ~object_base_url:"https://objects.example/bucket/"
+      source_art
   in
   let open Yojson.Safe.Util in
   Alcotest.(check string)
@@ -255,337 +80,6 @@ let test_content_url_escapes_encoded_key () =
     "https://objects.example/bucket/art/source/id%253Avariant/hash.png"
     (Model.content_url ~object_base_url:"https://objects.example/bucket/"
        "art/source/id%3Avariant/hash.png")
-
-let test_memory_database () =
-  let snapshot : Database.snapshot =
-    { Database.arts =
-        [
-          art;
-          illustration_art;
-          alternate_illustration_art;
-          third_illustration_art;
-          fourth_illustration_art;
-          background_art;
-        ];
-      source_arts = [ source_art ];
-      story_groups = [ ("CN", [ story_group; empty_story_group ]) ];
-      stories = [ ("CN", [ story; later_story; background_only_story ]) ];
-      galleries = [ ("CN", [ gallery; background_gallery ]) ];
-    }
-  in
-  let database = Database.memory snapshot in
-  let found = Lwt_main.run (Database.art database "character" "event") in
-  let wrong_category = Lwt_main.run (Database.art database "image" "event") in
-  let stories =
-    Lwt_main.run (Database.stories_by_group database "CN" "group")
-  in
-  let groups = Lwt_main.run (Database.story_groups database "CN") in
-  let groups_again = Lwt_main.run (Database.story_groups database "CN") in
-  let group_detail =
-    Lwt_main.run (Database.story_group database "CN" "group")
-  in
-  let empty_group_detail =
-    Lwt_main.run (Database.story_group database "CN" "empty")
-  in
-  let missing_group_detail =
-    Lwt_main.run (Database.story_group database "CN" "missing")
-  in
-  let empty_stories =
-    Lwt_main.run (Database.stories_by_group database "CN" "empty")
-  in
-  let missing_stories =
-    Lwt_main.run (Database.stories_by_group database "CN" "missing")
-  in
-  let summaries = Lwt_main.run (Database.galleries database "CN") in
-  let summaries_again = Lwt_main.run (Database.galleries database "CN") in
-  let detailed = Lwt_main.run (Database.gallery database "CN" "gallery") in
-  Alcotest.(check bool) "found" true (Result.is_ok found);
-  Alcotest.(check bool)
-    "missing"
-    true
-    (match wrong_category with Error `Not_found -> true | _ -> false);
-  Alcotest.(check (list string))
-    "story summary order"
-    [ "story"; "aaa-later"; "background-only" ]
-    (match stories with
-    | Ok values ->
-        List.map (fun (value : Model.story_summary) -> value.story.id) values
-    | Error _ -> []);
-  Alcotest.(check bool)
-    "story summaries have empty references"
-    true
-    (match stories with
-    | Ok values ->
-        List.for_all
-          (fun (value : Model.story_summary) -> value.story.art_references = [])
-          values
-    | Error _ -> false);
-  Alcotest.(check bool)
-    "story representative prefers image"
-    true
-    (match stories with
-    | Ok ({ representative_art_reference = Some reference; _ } :: _) ->
-        String.equal reference.category "image"
-    | _ -> false);
-  Alcotest.(check (list string))
-    "story previews contain three available illustrations"
-    [ "image"; "image"; "image" ]
-    (match stories with
-    | Ok ({ preview_art_references; _ } :: _) ->
-        List.map
-          (fun (reference : Model.art_reference) -> reference.category)
-          preview_art_references
-    | _ -> []);
-  Alcotest.(check (list string))
-    "background-only story falls back to its background"
-    [ "background" ]
-    (match stories with
-    | Ok values ->
-        values |> List.rev |> List.hd |> fun (summary : Model.story_summary) ->
-        List.map
-          (fun (reference : Model.art_reference) -> reference.category)
-          summary.preview_art_references
-    | Error _ -> []);
-  Alcotest.(check bool)
-    "group representative prefers image"
-    true
-    (match groups with
-    | Ok [ { representative_art_reference = Some reference; _ }; _ ] ->
-        String.equal reference.category "image"
-    | _ -> false);
-  let representative_id
-      (result : (Model.story_group_summary list, Database.error) result) =
-    match result with
-    | Ok ({ representative_art_reference = Some reference; _ } :: _) ->
-        Some reference.art_id
-    | _ -> None
-  in
-  Alcotest.(check (option string))
-    "representative selection is stable"
-    (representative_id groups)
-    (representative_id groups_again);
-  let preview_ids
-      (result : (Model.story_group_summary list, Database.error) result) =
-    match result with
-    | Ok ({ preview_art_references; _ } :: _) ->
-        List.map
-          (fun (reference : Model.art_reference) -> reference.art_id)
-          preview_art_references
-    | _ -> []
-  in
-  Alcotest.(check int) "group preview cap" 3 (List.length (preview_ids groups));
-  Alcotest.(check (list string))
-    "group preview order is stable"
-    (preview_ids groups)
-    (preview_ids groups_again);
-  Alcotest.(check (list string))
-    "group detail deduplicates available art"
-    [ "background"; "illustration"; "alternate"; "third"; "fourth" ]
-    (match group_detail with
-    | Ok value ->
-        List.map (fun (reference : Model.art_reference) -> reference.art_id)
-          value.art_references
-    | Error _ -> []);
-  Alcotest.(check bool)
-    "empty group detail"
-    true
-    (match empty_group_detail with
-    | Ok
-        {
-          representative_art_reference = None;
-          preview_art_references = [];
-          art_references = [];
-          _;
-        } ->
-        true
-    | _ -> false);
-  Alcotest.(check bool)
-    "missing group detail"
-    true
-    (match missing_group_detail with Error `Not_found -> true | _ -> false);
-  Alcotest.(check bool)
-    "existing empty story group"
-    true
-    (match empty_stories with Ok [] -> true | _ -> false);
-  Alcotest.(check bool)
-    "missing story group"
-    true
-    (match missing_stories with Error `Not_found -> true | _ -> false);
-  Alcotest.(check bool)
-    "gallery summaries prefer three illustrations"
-    true
-    (match summaries with
-    | Ok ({ gallery; preview_composition_object_keys } :: _) ->
-        gallery.entries = []
-        && List.length preview_composition_object_keys = 3
-        && List.for_all
-             (String.starts_with
-                ~prefix:"ART/art-v1/composition/image/")
-             preview_composition_object_keys
-    | _ -> false);
-  Alcotest.(check (list string))
-    "gallery preview order is stable"
-    (match summaries with
-    | Ok ({ preview_composition_object_keys; _ } :: _) ->
-        preview_composition_object_keys
-    | _ -> [])
-    (match summaries_again with
-    | Ok ({ preview_composition_object_keys; _ } :: _) ->
-        preview_composition_object_keys
-    | _ -> []);
-  Alcotest.(check (list string))
-    "background-only gallery falls back to a background"
-    [ "ART/art-v1/composition/background/background.png" ]
-    (match summaries with
-    | Ok [ _; { preview_composition_object_keys; _ } ] ->
-        preview_composition_object_keys
-    | _ -> []);
-  Alcotest.(check bool)
-    "detail retains unresolved entries"
-    true
-    (match detailed with
-    | Ok value ->
-        (List.hd value.entries).composition_object_key = None
-        && (List.nth value.entries 2).composition_object_key
-           = Some "ART/art-v1/composition/image/illustration.png"
-    | _ -> false)
-
-let test_memory_art_context_and_rarity () =
-  let character = picture_art "event" "character" in
-  let sibling = picture_art "event#1$1" "character" in
-  let sibling_without_name = picture_art "event#2$2" "character" in
-  let similarly_named = picture_art "eventual#1$1" "character" in
-  let other_group =
-    Model.{ id = "other"; name = "Other"; group_type = "major_event" }
-  in
-  let other_story =
-    Model.
-      {
-        id = "other-story";
-        group_id = "other";
-        tag = "after";
-        tag_text = "After";
-        code = "S2";
-        name = "Other story";
-        info = "";
-        art_references =
-          [
-            story_reference;
-            art_reference "character" "event" [ "安洁莉娜" ];
-            art_reference "character" "event" [ "Angelina"; "安洁莉娜" ];
-            art_reference "character" "event#1$1" [ "安洁莉娜（异格）" ];
-          ];
-      }
-  in
-  let snapshot : Database.snapshot =
-    {
-      Database.empty_snapshot with
-      arts =
-        [
-          illustration_art;
-          alternate_illustration_art;
-          third_illustration_art;
-          fourth_illustration_art;
-          character;
-          sibling;
-          sibling_without_name;
-          similarly_named;
-        ];
-      story_groups = [ ("CN", [ story_group; other_group ]) ];
-      stories = [ ("CN", [ story; other_story ]) ];
-    }
-  in
-  let database = Database.memory snapshot in
-  let group =
-    Lwt_main.run (Database.story_group database "CN" "group")
-    |> require_ok "memory rarity group"
-  in
-  Alcotest.(check bool)
-    "group preview excludes art shared by another group" true
-    (not
-       (List.exists
-          (fun (reference : Model.art_reference) ->
-            String.equal reference.art_id "illustration")
-          group.preview_art_references));
-  let stories =
-    Lwt_main.run (Database.stories_by_group database "CN" "group")
-    |> require_ok "memory rarity stories"
-  in
-  Alcotest.(check bool)
-    "story preview excludes art shared by another story" true
-    (match stories with
-    | summary :: _ ->
-        not
-          (List.exists
-             (fun (reference : Model.art_reference) ->
-               String.equal reference.art_id "illustration")
-             summary.preview_art_references)
-    | [] -> false);
-  let context =
-    Lwt_main.run (Database.art_context database "CN" "character" "event")
-    |> require_ok "memory art context"
-  in
-  Alcotest.(check (list string))
-    "localized names preserve first occurrence" [ "安洁莉娜"; "Angelina" ]
-    context.names;
-  Alcotest.(check (list string))
-    "siblings use an exact hash boundary" [ "event#1$1"; "event#2$2" ]
-    (List.map (fun (sibling : Model.art_sibling) -> sibling.art_id) context.siblings);
-  Alcotest.(check (list string))
-    "duplicate references produce one occurrence" [ "other-story" ]
-    (List.map
-       (fun (occurrence : Model.art_occurrence) -> occurrence.story_id)
-       context.occurrences);
-  Alcotest.(check bool)
-    "missing exact art returns not found" true
-    (match
-       Lwt_main.run
-         (Database.art_context database "CN" "character" "missing")
-     with
-    | Error `Not_found -> true
-    | _ -> false)
-
-let test_memory_unclassified_arts () =
-  let tracked_story =
-    Model.
-      {
-        story with
-        id = "tracked-story";
-        art_references = [ art_reference "image" "shared" [] ];
-      }
-  in
-  let tracked_gallery =
-    Model.
-      {
-        gallery with
-        id = "tracked-gallery";
-        entries = [ gallery_entry "only" 0 "gallery-only" "item" ];
-      }
-  in
-  let snapshot : Database.snapshot =
-    {
-      Database.empty_snapshot with
-      arts =
-        [
-          picture_art "shared" "image";
-          picture_art "shared" "character";
-          picture_art "gallery-only" "item";
-          picture_art "untracked" "background";
-        ];
-      stories = [ ("EN", [ tracked_story ]) ];
-      galleries = [ ("TW", [ tracked_gallery ]) ];
-    }
-  in
-  let arts =
-    Lwt_main.run (Database.unclassified_arts (Database.memory snapshot))
-    |> require_ok "memory unclassified art"
-  in
-  Alcotest.(check (list (pair string string)))
-    "uses category-qualified identity across all locales"
-    [ ("background", "untracked"); ("character", "shared") ]
-    (List.map
-       (fun (art : Model.unclassified_art) -> (art.category, art.id))
-       arts)
 
 (* This is a reader fixture, not a copy of the updater-owned production schema. *)
 let reader_fixture_schema =
@@ -794,17 +288,26 @@ let sqlite_rows =
          'event#2$2', 'character');
   |}
 
-let with_sqlite_database callback =
+let create_sqlite_fixture ?(after = "") path =
+  let database = Sqlite3.db_open path in
+  Fun.protect
+    ~finally:(fun () -> ignore (Sqlite3.db_close database))
+    (fun () ->
+      Sqlite3.Rc.check (Sqlite3.exec database (sqlite_schema ()));
+      Sqlite3.Rc.check (Sqlite3.exec database sqlite_rows);
+      if not (String.equal after "") then
+        Sqlite3.Rc.check (Sqlite3.exec database after))
+
+let with_sqlite_fixture callback =
   let path = Filename.temp_file "arkwaifu-service-test-" ".sqlite3" in
   Fun.protect
     ~finally:(fun () -> try Sys.remove path with Sys_error _ -> ())
     (fun () ->
-      let database = Sqlite3.db_open path in
-      Fun.protect
-        ~finally:(fun () -> ignore (Sqlite3.db_close database))
-        (fun () ->
-          Sqlite3.Rc.check (Sqlite3.exec database (sqlite_schema ()));
-          Sqlite3.Rc.check (Sqlite3.exec database sqlite_rows));
+      create_sqlite_fixture path;
+      callback path)
+
+let with_sqlite_database callback =
+  with_sqlite_fixture (fun path ->
       match Database.sqlite path with
       | Ok database ->
           Fun.protect
@@ -812,18 +315,40 @@ let with_sqlite_database callback =
             (fun () -> callback database)
       | Error error -> Alcotest.failf "cannot open SQLite fixture: %s" error)
 
+let test_story_group_uses_one_pool_acquisition () =
+  with_sqlite_fixture (fun path ->
+      let acquisitions = ref 0 in
+      match
+        Database.For_test.sqlite_with_pool_observer
+          ~on_acquire:(fun () -> incr acquisitions)
+          path
+      with
+      | Error error -> Alcotest.failf "cannot open SQLite fixture: %s" error
+      | Ok database ->
+          Fun.protect
+            ~finally:(fun () -> Lwt_main.run (Database.close database))
+            (fun () ->
+              Lwt_main.run (Database.story_group database "CN" "group")
+              |> require_ok "story group detail"
+              |> ignore;
+              Alcotest.(check int)
+                "one request holds one generation" 1 !acquisitions))
+
 let test_sqlite_database () =
   with_sqlite_database (fun database ->
       Lwt_main.run (Database.health database) |> require_ok "health";
       let art =
-        Lwt_main.run (Database.art database "character" "event") |> require_ok "art"
+        Lwt_main.run (Database.art database "character" "event")
+        |> require_ok "art"
       in
       Alcotest.(check string) "art category" "character" art.category;
-      Alcotest.(check (list string)) "source IDs" [ "source" ] art.source_art_ids;
+      Alcotest.(check (list string))
+        "source IDs" [ "source" ] art.source_art_ids;
       Alcotest.(check int64) "art bytes" 42L art.image.byte_size;
 
       let source =
-        Lwt_main.run (Database.source_art database "source") |> require_ok "source art"
+        Lwt_main.run (Database.source_art database "source")
+        |> require_ok "source art"
       in
       Alcotest.(check string) "source character" "character" source.character_id;
       Alcotest.(check string) "source role" "body" source.role;
@@ -841,7 +366,8 @@ let test_sqlite_database () =
            unclassified);
 
       let groups =
-        Lwt_main.run (Database.story_groups database "CN") |> require_ok "story groups"
+        Lwt_main.run (Database.story_groups database "CN")
+        |> require_ok "story groups"
       in
       Alcotest.(check (list string))
         "story group IDs"
@@ -873,8 +399,7 @@ let test_sqlite_database () =
              summary.group.group_type)
            groups);
       Alcotest.(check bool)
-        "group representative prefers image"
-        true
+        "group representative prefers image" true
         (match groups with
         | { representative_art_reference = Some reference; _ } :: _ ->
             String.equal reference.category "image"
@@ -904,11 +429,13 @@ let test_sqlite_database () =
         |> require_ok "stories by group"
       in
       Alcotest.(check (list string))
-        "story summary IDs" [ "story"; "aaa-later"; "background-only" ]
-        (List.map (fun (summary : Model.story_summary) -> summary.story.id) stories);
+        "story summary IDs"
+        [ "story"; "aaa-later"; "background-only" ]
+        (List.map
+           (fun (summary : Model.story_summary) -> summary.story.id)
+           stories);
       Alcotest.(check bool)
-        "story summaries have empty references"
-        true
+        "story summaries have empty references" true
         (List.for_all
            (fun (summary : Model.story_summary) ->
              summary.story.art_references = [])
@@ -943,8 +470,7 @@ let test_sqlite_database () =
         |> require_ok "empty stories by group"
         |> List.map (fun (summary : Model.story_summary) -> summary.story.id));
       Alcotest.(check bool)
-        "missing story group"
-        true
+        "missing story group" true
         (match
            Lwt_main.run (Database.stories_by_group database "CN" "missing")
          with
@@ -958,7 +484,8 @@ let test_sqlite_database () =
       Alcotest.(check (list string))
         "group detail art IDs"
         [ "background"; "illustration"; "alternate"; "third"; "fourth" ]
-        (List.map (fun (reference : Model.art_reference) -> reference.art_id)
+        (List.map
+           (fun (reference : Model.art_reference) -> reference.art_id)
            group_detail.art_references);
       Alcotest.(check (list string))
         "group detail uses the rarity-ranked index previews"
@@ -972,29 +499,28 @@ let test_sqlite_database () =
            (fun (reference : Model.art_reference) -> reference.art_id)
            group_detail.preview_art_references);
       Alcotest.(check bool)
-        "empty group detail"
-        true
+        "empty group detail" true
         (match
            Lwt_main.run (Database.story_group database "CN" "empty")
            |> require_ok "empty story group detail"
          with
-         | {
-             representative_art_reference = None;
-             preview_art_references = [];
-             art_references = [];
-             _;
-           } ->
-             true
+        | {
+         representative_art_reference = None;
+         preview_art_references = [];
+         art_references = [];
+         _;
+        } ->
+            true
         | _ -> false);
       Alcotest.(check bool)
-        "missing group detail"
-        true
+        "missing group detail" true
         (match Lwt_main.run (Database.story_group database "CN" "missing") with
         | Error `Not_found -> true
         | _ -> false);
 
       let story =
-        Lwt_main.run (Database.story database "CN" "story") |> require_ok "story"
+        Lwt_main.run (Database.story database "CN" "story")
+        |> require_ok "story"
       in
       Alcotest.(check string) "story group" "group" story.group_id;
       Alcotest.(check (list string))
@@ -1004,10 +530,12 @@ let test_sqlite_database () =
         | _ -> []);
 
       let galleries =
-        Lwt_main.run (Database.galleries database "CN") |> require_ok "galleries"
+        Lwt_main.run (Database.galleries database "CN")
+        |> require_ok "galleries"
       in
       Alcotest.(check (list string))
-        "gallery IDs" [ "background-gallery"; "gallery" ]
+        "gallery IDs"
+        [ "background-gallery"; "gallery" ]
         (List.map
            (fun (summary : Model.gallery_summary) -> summary.gallery.id)
            galleries);
@@ -1025,12 +553,17 @@ let test_sqlite_database () =
            (List.nth galleries 1).preview_composition_object_keys);
 
       let gallery =
-        Lwt_main.run (Database.gallery database "CN" "gallery") |> require_ok "gallery"
+        Lwt_main.run (Database.gallery database "CN" "gallery")
+        |> require_ok "gallery"
       in
       Alcotest.(check (list string))
         "gallery entry IDs"
-        [ "entry"; "background"; "illustration"; "alternate"; "third"; "fourth" ]
-        (List.map (fun (entry : Model.gallery_entry) -> entry.id) gallery.entries);
+        [
+          "entry"; "background"; "illustration"; "alternate"; "third"; "fourth";
+        ]
+        (List.map
+           (fun (entry : Model.gallery_entry) -> entry.id)
+           gallery.entries);
       Alcotest.(check (option string))
         "gallery entry joined composition"
         (Some "ART/art-v1/composition/character/event.png")
@@ -1042,7 +575,8 @@ let test_sqlite_database () =
       in
       Alcotest.(check (list string))
         "context names are localized and deduplicated"
-        [ "安洁莉娜"; "Angelina" ] context.names;
+        [ "安洁莉娜"; "Angelina" ]
+        context.names;
       Alcotest.(check (list string))
         "context siblings use exact prefix boundary"
         [ "event#1$1"; "event#2$2" ]
@@ -1055,8 +589,7 @@ let test_sqlite_database () =
            (fun (occurrence : Model.art_occurrence) -> occurrence.story_id)
            context.occurrences);
       let image_context =
-        Lwt_main.run
-          (Database.art_context database "CN" "image" "illustration")
+        Lwt_main.run (Database.art_context database "CN" "image" "illustration")
         |> require_ok "image context"
       in
       Alcotest.(check bool)
@@ -1071,60 +604,185 @@ let test_sqlite_database () =
         | Error `Not_found -> true
         | _ -> false))
 
+let rec remove_directory path =
+  if Sys.file_exists path then (
+    Sys.readdir path
+    |> Array.iter (fun name ->
+        let child = Filename.concat path name in
+        if Sys.is_directory child then remove_directory child
+        else try Sys.remove child with Sys_error _ -> ());
+    try Unix.rmdir path with Unix.Unix_error _ -> ())
+
+let with_temporary_directory callback =
+  let placeholder = Filename.temp_file "arkwaifu-service-test-" ".directory" in
+  Sys.remove placeholder;
+  Unix.mkdir placeholder 0o750;
+  Fun.protect
+    ~finally:(fun () -> remove_directory placeholder)
+    (fun () -> callback placeholder)
+
+let copy_file source destination =
+  let input = open_in_bin source in
+  Fun.protect
+    ~finally:(fun () -> close_in input)
+    (fun () ->
+      let output = open_out_bin destination in
+      Fun.protect
+        ~finally:(fun () -> close_out output)
+        (fun () ->
+          let buffer = Bytes.create 65_536 in
+          let rec copy () =
+            match Stdlib.input input buffer 0 (Bytes.length buffer) with
+            | 0 -> ()
+            | count ->
+                Stdlib.output output buffer 0 count;
+                copy ()
+          in
+          copy ()))
+
+let cache_generations path =
+  Sys.readdir path |> Array.to_list
+  |> List.filter (fun name -> String.ends_with ~suffix:".sqlite3" name)
+
+let test_story_group_during_generation_replacement () =
+  with_sqlite_fixture (fun valid_database_path ->
+      with_temporary_directory (fun cache_dir ->
+          let fetch_count = ref 0 in
+          let fetch ~etag:_ ~destination =
+            incr fetch_count;
+            copy_file valid_database_path destination;
+            Lwt.return (`Fetched (Some (string_of_int !fetch_count)))
+          in
+          match
+            Lwt_main.run
+              (Database.For_test.live ~fetch ~cache_dir
+                 ~download_timeout_seconds:5.)
+          with
+          | Error error -> Alcotest.failf "cannot start live fixture: %s" error
+          | Ok controlled ->
+              Fun.protect
+                ~finally:(fun () ->
+                  Lwt_main.run (Database.close controlled.database))
+                (fun () ->
+                  let query =
+                    Database.story_group controlled.database "CN" "group"
+                  and refresh = controlled.refresh_once () in
+                  let detail, refresh_result =
+                    Lwt_main.run (Lwt.both query refresh)
+                  in
+                  detail |> require_ok "story group during refresh" |> ignore;
+                  Alcotest.(check bool)
+                    "generation replaced" true
+                    (match refresh_result with `Replaced -> true | _ -> false))))
+
+let test_live_database_refresh () =
+  with_sqlite_fixture (fun valid_database_path ->
+      with_temporary_directory (fun cache_dir ->
+          let responses =
+            ref
+              [
+                `Database (valid_database_path, Some "generation-1");
+                `Not_modified;
+                `Database (valid_database_path, Some "generation-2");
+                `Invalid;
+              ]
+          in
+          let seen_etags = ref [] in
+          let fetch ~etag ~destination =
+            seen_etags := etag :: !seen_etags;
+            match !responses with
+            | [] -> Lwt.return (`Failed "unexpected fetch")
+            | response :: rest -> (
+                responses := rest;
+                match response with
+                | `Not_modified -> Lwt.return `Not_modified
+                | `Invalid ->
+                    let database = Sqlite3.db_open destination in
+                    Fun.protect
+                      ~finally:(fun () -> ignore (Sqlite3.db_close database))
+                      (fun () ->
+                        Sqlite3.Rc.check
+                          (Sqlite3.exec database "PRAGMA user_version = 1"));
+                    Lwt.return (`Fetched (Some "invalid"))
+                | `Database (source, response_etag) ->
+                    copy_file source destination;
+                    Lwt.return (`Fetched response_etag))
+          in
+          let live =
+            Lwt_main.run
+              (Database.For_test.live ~fetch ~cache_dir
+                 ~download_timeout_seconds:5.)
+          in
+          match live with
+          | Error error -> Alcotest.failf "cannot start live fixture: %s" error
+          | Ok controlled ->
+              Fun.protect
+                ~finally:(fun () ->
+                  Lwt_main.run (Database.close controlled.database))
+                (fun () ->
+                  Lwt_main.run
+                    (Database.art controlled.database "character" "event")
+                  |> require_ok "initial generation"
+                  |> ignore;
+                  Alcotest.(check int)
+                    "initial generation installed" 1
+                    (List.length (cache_generations cache_dir));
+
+                  Alcotest.(check bool)
+                    "not-modified refresh" true
+                    (match Lwt_main.run (controlled.refresh_once ()) with
+                    | `Not_modified -> true
+                    | _ -> false);
+                  Alcotest.(check int)
+                    "304 preserves generation" 1
+                    (List.length (cache_generations cache_dir));
+
+                  Alcotest.(check bool)
+                    "valid refresh replaces generation" true
+                    (match Lwt_main.run (controlled.refresh_once ()) with
+                    | `Replaced -> true
+                    | _ -> false);
+                  Alcotest.(check int)
+                    "replacement retires previous generation" 1
+                    (List.length (cache_generations cache_dir));
+
+                  Alcotest.(check bool)
+                    "invalid refresh is rejected" true
+                    (match Lwt_main.run (controlled.refresh_once ()) with
+                    | `Failed _ -> true
+                    | _ -> false);
+                  Lwt_main.run
+                    (Database.art controlled.database "character" "event")
+                  |> require_ok "current generation after rejected refresh"
+                  |> ignore;
+                  Alcotest.(check int)
+                    "invalid generation is cleaned" 1
+                    (List.length (cache_generations cache_dir));
+                  Alcotest.(check (list (option string)))
+                    "etag advances only after replacement"
+                    [
+                      None;
+                      Some "generation-1";
+                      Some "generation-1";
+                      Some "generation-2";
+                    ]
+                    (List.rev !seen_etags));
+              Lwt_main.run (Database.close controlled.database);
+              Alcotest.(check (list string))
+                "close cleans current generation" []
+                (cache_generations cache_dir)))
+
 let test_http_story_listing_and_cors () =
-  let context_group =
-    Model.{ id = "context"; name = "Context"; group_type = "major_event" }
-  in
-  let context_story =
-    Model.
-      {
-        id = "context-story";
-        group_id = "context";
-        tag = "after";
-        tag_text = "After";
-        code = "C1";
-        name = "Context story";
-        info = "";
-        art_references =
-          [
-            art_reference "character" "event" [ "安洁莉娜" ];
-            art_reference "character" "event#1$1" [ "安洁莉娜（异格）" ];
-          ];
-      }
-  in
-  let snapshot : Database.snapshot =
-    {
-      arts =
-        [
-          art;
-          illustration_art;
-          alternate_illustration_art;
-          third_illustration_art;
-          fourth_illustration_art;
-          background_art;
-          picture_art "event#1$1" "character";
-          picture_art "unclassified" "item";
-        ];
-      source_arts = [ source_art ];
-      story_groups =
-        [ ("CN", [ story_group; context_group; empty_story_group ]) ];
-      stories =
-        [
-          ( "CN",
-            [ story; later_story; background_only_story; context_story ] );
-        ];
-      galleries = [ ("CN", [ gallery; background_gallery ]) ];
-    }
-  in
+  with_sqlite_database @@ fun database ->
   let handler =
-    Http.routes ~database:(Database.memory snapshot)
-      ~object_base_url:"https://objects.example/bucket"
+    Http.routes ~database ~object_base_url:"https://objects.example/bucket"
   in
   let group_index =
     Dream.test handler
       (Dream.request ~method_:`GET ~target:"/api/CN/story-groups" "")
   in
-  Alcotest.(check int) "story group index status" 200
+  Alcotest.(check int)
+    "story group index status" 200
     (Dream.status group_index |> Dream.status_to_int);
   let open Yojson.Safe.Util in
   let group_index_json =
@@ -1132,42 +790,63 @@ let test_http_story_listing_and_cors () =
   in
   Alcotest.(check string)
     "index representative category" "image"
-    (group_index_json |> List.hd |> member "representativeArtReference"
+    (group_index_json |> List.hd
+    |> member "representativeArtReference"
     |> member "category" |> to_string);
   Alcotest.(check (list string))
     "index exposes three rotating illustrations"
     [ "image"; "image"; "image" ]
-    (group_index_json |> List.hd |> member "previewArtReferences" |> to_list
+    (group_index_json |> List.hd
+    |> member "previewArtReferences"
+    |> to_list
     |> List.map (fun value -> value |> member "category" |> to_string));
   let removed_thumbnail_route =
     Dream.test handler
       (Dream.request ~method_:`GET
          ~target:"/api/arts/image/illustration/thumbnail/content" "")
   in
-  Alcotest.(check int) "thumbnail route is absent" 404
+  Alcotest.(check int)
+    "thumbnail route is absent" 404
     (Dream.status removed_thumbnail_route |> Dream.status_to_int);
+  let first_preview =
+    group_index_json |> List.hd
+    |> member "previewArtReferences"
+    |> to_list |> List.hd
+  in
+  let first_preview_art_id = first_preview |> member "artID" |> to_string in
+  let expected_preview_url =
+    Model.content_url ~object_base_url:"https://objects.example/bucket"
+      ("ART/art-v1/thumbnail/image/" ^ first_preview_art_id ^ ".webp")
+  in
   Alcotest.(check string)
-    "preview has direct thumbnail URL"
-    "https://objects.example/bucket/ART/art-v1/thumbnail/image/illustration.webp"
-    (group_index_json |> List.hd |> member "previewArtReferences" |> to_list
-    |> List.hd |> member "thumbnailContentUrl" |> to_string);
+    "preview has direct thumbnail URL" expected_preview_url
+    (first_preview |> member "thumbnailContentUrl" |> to_string);
 
   let gallery_index =
     Dream.test handler
       (Dream.request ~method_:`GET ~target:"/api/CN/galleries" "")
   in
-  Alcotest.(check int) "gallery index status" 200
+  Alcotest.(check int)
+    "gallery index status" 200
     (Dream.status gallery_index |> Dream.status_to_int);
   let gallery_index_json =
-    Lwt_main.run (Dream.body gallery_index) |> Yojson.Safe.from_string |> to_list
+    Lwt_main.run (Dream.body gallery_index)
+    |> Yojson.Safe.from_string |> to_list
+  in
+  let gallery_summary =
+    List.find
+      (fun value -> value |> member "id" |> to_string = "gallery")
+      gallery_index_json
   in
   Alcotest.(check int)
     "gallery exposes three preview URLs" 3
-    (gallery_index_json |> List.hd |> member "previewThumbnailContentUrls"
+    (gallery_summary
+    |> member "previewThumbnailContentUrls"
     |> to_list |> List.length);
   Alcotest.(check bool)
     "gallery preview URL is direct" true
-    (gallery_index_json |> List.hd |> member "previewThumbnailContentUrls"
+    (gallery_summary
+    |> member "previewThumbnailContentUrls"
     |> to_list |> List.hd |> to_string
     |> String.starts_with
          ~prefix:"https://objects.example/bucket/ART/art-v1/thumbnail/image/");
@@ -1176,18 +855,19 @@ let test_http_story_listing_and_cors () =
     Dream.test handler
       (Dream.request ~method_:`GET ~target:"/api/arts/character/event" "")
   in
-  Alcotest.(check int) "art metadata status" 200
+  Alcotest.(check int)
+    "art metadata status" 200
     (Dream.status art_metadata |> Dream.status_to_int);
   let art_metadata_json =
     Lwt_main.run (Dream.body art_metadata) |> Yojson.Safe.from_string
   in
   Alcotest.(check string)
     "art metadata has direct object-store URL"
-    "https://objects.example/bucket/ART/26-08-07-10-51-39_26e0fc/composition/character/event.png"
+    "https://objects.example/bucket/ART/art-v1/composition/character/event.png"
     (art_metadata_json |> member "image" |> member "contentUrl" |> to_string);
   Alcotest.(check string)
     "art metadata has direct thumbnail object-store URL"
-    "https://objects.example/bucket/ART/26-08-07-10-51-39_26e0fc/thumbnail/character/event.webp"
+    "https://objects.example/bucket/ART/art-v1/thumbnail/character/event.webp"
     (art_metadata_json |> member "thumbnailContentUrl" |> to_string);
 
   let art_context =
@@ -1195,60 +875,67 @@ let test_http_story_listing_and_cors () =
       (Dream.request ~method_:`GET
          ~target:"/api/CN/arts/character/event/context" "")
   in
-  Alcotest.(check int) "art context status" 200
+  Alcotest.(check int)
+    "art context status" 200
     (Dream.status art_context |> Dream.status_to_int);
   let art_context_json =
     Lwt_main.run (Dream.body art_context) |> Yojson.Safe.from_string
   in
   Alcotest.(check (list string))
-    "art context names" [ "安洁莉娜" ]
+    "art context names"
+    [ "安洁莉娜"; "Angelina" ]
     (art_context_json |> member "names" |> to_list |> filter_string);
   Alcotest.(check string)
     "art context sibling" "event#1$1"
     (art_context_json |> member "siblings" |> to_list |> List.hd
-    |> member "artID" |> to_string);
+   |> member "artID" |> to_string);
   Alcotest.(check bool)
     "art context sibling URL is direct" true
     (art_context_json |> member "siblings" |> to_list |> List.hd
-    |> member "thumbnailContentUrl" |> to_string
+    |> member "thumbnailContentUrl"
+    |> to_string
     |> String.starts_with ~prefix:"https://objects.example/bucket/ART/");
   Alcotest.(check string)
-    "art occurrence group is routable" "context"
+    "art occurrence group is routable" "other"
     (art_context_json |> member "occurrences" |> to_list |> List.hd
-    |> member "groupID" |> to_string);
+   |> member "groupID" |> to_string);
 
   let source_metadata =
     Dream.test handler
       (Dream.request ~method_:`GET ~target:"/api/source-arts/source" "")
   in
-  Alcotest.(check int) "source-art metadata status" 200
+  Alcotest.(check int)
+    "source-art metadata status" 200
     (Dream.status source_metadata |> Dream.status_to_int);
   let source_metadata_json =
     Lwt_main.run (Dream.body source_metadata) |> Yojson.Safe.from_string
   in
   Alcotest.(check string)
     "source-art metadata has direct object-store URL"
-    "https://objects.example/bucket/ART/26-08-07-10-51-39_26e0fc/source/character/source.png"
+    "https://objects.example/bucket/ART/art-v1/source/character/source.png"
     (source_metadata_json |> member "image" |> member "contentUrl" |> to_string);
 
   let unclassified =
     Dream.test handler
       (Dream.request ~method_:`GET ~target:"/api/unclassified-arts" "")
   in
-  Alcotest.(check int) "unclassified art status" 200
+  Alcotest.(check int)
+    "unclassified art status" 200
     (Dream.status unclassified |> Dream.status_to_int);
   let unclassified_json =
     Lwt_main.run (Dream.body unclassified) |> Yojson.Safe.from_string |> to_list
   in
   Alcotest.(check int) "one unclassified art" 1 (List.length unclassified_json);
   let unclassified_art = List.hd unclassified_json in
-  Alcotest.(check string) "unclassified ID" "unclassified"
+  Alcotest.(check string)
+    "unclassified ID" "eventual#1$1"
     (unclassified_art |> member "id" |> to_string);
-  Alcotest.(check string) "unclassified category" "item"
+  Alcotest.(check string)
+    "unclassified category" "character"
     (unclassified_art |> member "category" |> to_string);
   Alcotest.(check string)
     "unclassified direct thumbnail URL"
-    "https://objects.example/bucket/ART/art-v1/thumbnail/item/unclassified.webp"
+    "https://objects.example/bucket/ART/art-v1/thumbnail/character/eventual%231$1.webp"
     (unclassified_art |> member "thumbnailContentUrl" |> to_string);
   Alcotest.(check (list string))
     "unclassified payload stays compact"
@@ -1260,7 +947,8 @@ let test_http_story_listing_and_cors () =
       let removed_route =
         Dream.test handler (Dream.request ~method_:`GET ~target "")
       in
-      Alcotest.(check int) label 404
+      Alcotest.(check int)
+        label 404
         (Dream.status removed_route |> Dream.status_to_int))
     [
       ("art content route is absent", "/api/arts/character/event/content");
@@ -1268,10 +956,11 @@ let test_http_story_listing_and_cors () =
     ];
   let response =
     Dream.test handler
-      (Dream.request ~method_:`GET
-         ~target:"/api/CN/story-groups/group/stories" "")
+      (Dream.request ~method_:`GET ~target:"/api/CN/story-groups/group/stories"
+         "")
   in
-  Alcotest.(check int) "story listing status" 200
+  Alcotest.(check int)
+    "story listing status" 200
     (Dream.status response |> Dream.status_to_int);
   Alcotest.(check (option string))
     "CORS origin" (Some "*")
@@ -1279,25 +968,25 @@ let test_http_story_listing_and_cors () =
   let json = Lwt_main.run (Dream.body response) |> Yojson.Safe.from_string in
   let stories = json |> to_list in
   Alcotest.(check (list string))
-    "story listing IDs" [ "story"; "aaa-later"; "background-only" ]
+    "story listing IDs"
+    [ "story"; "aaa-later"; "background-only" ]
     (List.map (fun value -> value |> member "id" |> to_string) stories);
   Alcotest.(check bool)
-    "HTTP summaries have empty references"
-    true
+    "HTTP summaries have empty detail references" true
     (List.for_all
-       (fun value -> value |> member "artReferences" |> to_list = [])
+       (fun value -> value |> member "artReferences" = `List [])
        stories);
   Alcotest.(check (list string))
     "HTTP story previews prefer images then fall back"
     [ "image"; "image"; "background" ]
     (List.map
        (fun value ->
-         value |> member "previewArtReferences" |> to_list |> List.hd
-         |> member "category" |> to_string)
+         value
+         |> member "previewArtReferences"
+         |> to_list |> List.hd |> member "category" |> to_string)
        stories);
   Alcotest.(check bool)
-    "legacy representative remains first preview"
-    true
+    "legacy representative remains first preview" true
     (List.for_all
        (fun value ->
          let representative = value |> member "representativeArtReference" in
@@ -1314,22 +1003,25 @@ let test_http_story_listing_and_cors () =
   let story_detail_json =
     Lwt_main.run (Dream.body story_detail) |> Yojson.Safe.from_string
   in
-  let detail_references = story_detail_json |> member "artReferences" |> to_list in
+  let detail_references =
+    story_detail_json |> member "artReferences" |> to_list
+  in
   Alcotest.(check string)
     "story reference has direct thumbnail URL"
     "https://objects.example/bucket/ART/art-v1/thumbnail/background/background.webp"
     (detail_references |> List.hd |> member "thumbnailContentUrl" |> to_string);
   Alcotest.(check bool)
-    "unresolved story reference has null thumbnail URL"
-    true
-    (detail_references |> List.rev |> List.hd |> member "thumbnailContentUrl"
+    "unresolved story reference has null thumbnail URL" true
+    (detail_references |> List.rev |> List.hd
+    |> member "thumbnailContentUrl"
     = `Null);
 
   let group =
     Dream.test handler
       (Dream.request ~method_:`GET ~target:"/api/CN/story-groups/group" "")
   in
-  Alcotest.(check int) "story group detail status" 200
+  Alcotest.(check int)
+    "story group detail status" 200
     (Dream.status group |> Dream.status_to_int);
   Alcotest.(check (option string))
     "CORS on group detail" (Some "*")
@@ -1337,8 +1029,9 @@ let test_http_story_listing_and_cors () =
   let group_json = Lwt_main.run (Dream.body group) |> Yojson.Safe.from_string in
   Alcotest.(check string)
     "group representative category" "image"
-    (group_json |> member "representativeArtReference" |> member "category"
-    |> to_string);
+    (group_json
+    |> member "representativeArtReference"
+    |> member "category" |> to_string);
   Alcotest.(check int)
     "group detail preview cap" 3
     (group_json |> member "previewArtReferences" |> to_list |> List.length);
@@ -1350,21 +1043,22 @@ let test_http_story_listing_and_cors () =
 
   let empty =
     Dream.test handler
-      (Dream.request ~method_:`GET
-         ~target:"/api/CN/story-groups/empty/stories" "")
+      (Dream.request ~method_:`GET ~target:"/api/CN/story-groups/empty/stories"
+         "")
   in
-  Alcotest.(check int) "empty story group status" 200
+  Alcotest.(check int)
+    "empty story group status" 200
     (Dream.status empty |> Dream.status_to_int);
   Alcotest.(check bool)
-    "empty story group body"
-    true
+    "empty story group body" true
     (Lwt_main.run (Dream.body empty) |> Yojson.Safe.from_string = `List []);
 
   let empty_group =
     Dream.test handler
       (Dream.request ~method_:`GET ~target:"/api/CN/story-groups/empty" "")
   in
-  Alcotest.(check int) "empty group detail status" 200
+  Alcotest.(check int)
+    "empty group detail status" 200
     (Dream.status empty_group |> Dream.status_to_int);
   let empty_group_json =
     Lwt_main.run (Dream.body empty_group) |> Yojson.Safe.from_string
@@ -1373,16 +1067,13 @@ let test_http_story_listing_and_cors () =
     "empty group exposes the others category" "others"
     (empty_group_json |> member "type" |> to_string);
   Alcotest.(check bool)
-    "empty group has no representative"
-    true
+    "empty group has no representative" true
     (empty_group_json |> member "representativeArtReference" = `Null);
   Alcotest.(check bool)
-    "empty group has no art"
-    true
+    "empty group has no art" true
     (empty_group_json |> member "artReferences" = `List []);
   Alcotest.(check bool)
-    "empty group has no previews"
-    true
+    "empty group has no previews" true
     (empty_group_json |> member "previewArtReferences" = `List []);
 
   let missing_group =
@@ -1390,7 +1081,8 @@ let test_http_story_listing_and_cors () =
       (Dream.request ~method_:`GET
          ~target:"/api/CN/story-groups/missing/stories" "")
   in
-  Alcotest.(check int) "missing story group status" 404
+  Alcotest.(check int)
+    "missing story group status" 404
     (Dream.status missing_group |> Dream.status_to_int);
   Alcotest.(check (option string))
     "CORS on missing story group" (Some "*")
@@ -1400,7 +1092,8 @@ let test_http_story_listing_and_cors () =
     Dream.test handler
       (Dream.request ~method_:`GET ~target:"/api/CN/story-groups/missing" "")
   in
-  Alcotest.(check int) "missing group detail status" 404
+  Alcotest.(check int)
+    "missing group detail status" 404
     (Dream.status missing_group_detail |> Dream.status_to_int);
   Alcotest.(check (option string))
     "CORS on missing group detail" (Some "*")
@@ -1409,7 +1102,8 @@ let test_http_story_listing_and_cors () =
   let missing =
     Dream.test handler (Dream.request ~method_:`GET ~target:"/missing" "")
   in
-  Alcotest.(check int) "missing route status" 404
+  Alcotest.(check int)
+    "missing route status" 404
     (Dream.status missing |> Dream.status_to_int);
   Alcotest.(check (option string))
     "CORS on errors" (Some "*")
@@ -1420,7 +1114,8 @@ let test_http_story_listing_and_cors () =
       (Dream.request ~method_:`OPTIONS
          ~target:"/api/CN/story-groups/group/stories" "")
   in
-  Alcotest.(check int) "preflight status" 204
+  Alcotest.(check int)
+    "preflight status" 204
     (Dream.status preflight |> Dream.status_to_int);
   Alcotest.(check (option string))
     "preflight origin" (Some "*")
@@ -1441,12 +1136,13 @@ let () =
         ] );
       ( "database",
         [
-          Alcotest.test_case "memory lookup" `Quick test_memory_database;
-          Alcotest.test_case "memory art context and rarity" `Quick
-            test_memory_art_context_and_rarity;
-          Alcotest.test_case "memory unclassified art" `Quick
-            test_memory_unclassified_arts;
           Alcotest.test_case "SQLite queries" `Quick test_sqlite_database;
+          Alcotest.test_case "story group uses one pool acquisition" `Quick
+            test_story_group_uses_one_pool_acquisition;
+          Alcotest.test_case "story group during generation replacement" `Quick
+            test_story_group_during_generation_replacement;
+          Alcotest.test_case "live refresh lifecycle" `Quick
+            test_live_database_refresh;
         ] );
       ( "http",
         [

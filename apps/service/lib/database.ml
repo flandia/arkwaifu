@@ -2,7 +2,10 @@
 
 open Lwt.Infix
 
-type error = [ `Not_found | `Unavailable of string ]
+type error =
+  [ `Not_found
+  | `Unavailable of string
+  ]
 
 type t = {
   close : unit -> unit Lwt.t;
@@ -14,47 +17,14 @@ type t = {
   art_context :
     string -> string -> string -> (Model.art_context, error) result Lwt.t;
   story_groups : string -> (Model.story_group_summary list, error) result Lwt.t;
-  stories_by_group : string -> string -> (Model.story_summary list, error) result Lwt.t;
-  story_group : string -> string -> (Model.story_group_detail, error) result Lwt.t;
+  stories_by_group :
+    string -> string -> (Model.story_summary list, error) result Lwt.t;
+  story_group :
+    string -> string -> (Model.story_group_detail, error) result Lwt.t;
   story : string -> string -> (Model.story, error) result Lwt.t;
   galleries : string -> (Model.gallery_summary list, error) result Lwt.t;
   gallery : string -> string -> (Model.gallery, error) result Lwt.t;
 }
-
-type snapshot = {
-  arts : Model.art list;
-  source_arts : Model.source_art list;
-  story_groups : (string * Model.story_group list) list;
-  stories : (string * Model.story list) list;
-  galleries : (string * Model.gallery list) list;
-}
-
-let empty_snapshot =
-  { arts = []; source_arts = []; story_groups = []; stories = []; galleries = [] }
-
-let find_by_id id get_id values =
-  match List.find_opt (fun value -> String.equal id (get_id value)) values with
-  | Some value -> Ok value
-  | None -> Error `Not_found
-
-let locale_values locale values =
-  Option.value ~default:[] (List.assoc_opt locale values)
-
-let resolve_reference arts (reference : Model.art_reference) =
-  let composition_object_key =
-    arts
-    |> List.find_opt (fun (art : Model.art) ->
-           String.equal art.category reference.category
-           && String.equal art.id reference.art_id)
-    |> Option.map (fun (art : Model.art) -> art.image.object_key)
-  in
-  { reference with composition_object_key }
-
-let available_references arts references =
-  references
-  |> List.map (resolve_reference arts)
-  |> List.filter (fun (reference : Model.art_reference) ->
-         Option.is_some reference.composition_object_key)
 
 let unique_references references =
   let seen = Hashtbl.create (List.length references) in
@@ -94,56 +64,9 @@ let stable_score seed value =
   in
   Int64.rem score 2_147_483_647L
 
-let representative_score seed (reference : Model.art_reference) =
-  stable_score seed reference.art_id
-
-let rec take count values =
-  if count <= 0 then []
-  else
-    match values with
-    | [] -> []
-    | value :: rest -> value :: take (count - 1) rest
-
-let preview_references ~seed ~rarity references =
-  let choose category =
-    references
-    |> unique_references
-    |> List.filter (fun (reference : Model.art_reference) ->
-           String.equal reference.category category)
-    |> List.sort (fun left right ->
-           match Int.compare (rarity left) (rarity right) with
-           | 0 -> (
-               match
-                 Int64.compare
-                   (representative_score seed left)
-                   (representative_score seed right)
-               with
-               | 0 -> String.compare left.art_id right.art_id
-               | order -> order)
-           | order -> order)
-    |> take 3
-  in
-  match choose "image" with
-  | _ :: _ as references -> references
-  | [] -> choose "background"
-
 let representative_reference = function
   | reference :: _ -> Some reference
   | [] -> None
-
-let reference_matches (reference : Model.art_reference) category art_id =
-  String.equal reference.category category && String.equal reference.art_id art_id
-
-let distinct_strings values = List.sort_uniq String.compare values
-
-let reference_rarity ~scope stories (reference : Model.art_reference) =
-  stories
-  |> List.filter (fun (story : Model.story) ->
-         List.exists
-           (fun candidate ->
-             reference_matches candidate reference.category reference.art_id)
-           story.art_references)
-  |> List.map scope |> distinct_strings |> List.length
 
 let unique_strings values =
   let seen = Hashtbl.create (List.length values) in
@@ -159,324 +82,22 @@ let select_gallery_preview_keys ~seed available =
   let choose category =
     available
     |> List.filter (fun (entry_category, _, _) ->
-           String.equal entry_category category)
+        String.equal entry_category category)
     |> List.sort (fun (_, left_id, _) (_, right_id, _) ->
-           match
-             Int64.compare
-               (stable_score seed left_id)
-               (stable_score seed right_id)
-           with
-           | 0 -> String.compare left_id right_id
-           | order -> order)
+        match
+          Int64.compare (stable_score seed left_id) (stable_score seed right_id)
+        with
+        | 0 -> String.compare left_id right_id
+        | order -> order)
     |> List.map (fun (_, _, object_key) -> object_key)
-    |> unique_strings |> take 3
+    |> unique_strings |> List.take 3
   in
   match choose "image" with _ :: _ as keys -> keys | [] -> choose "background"
-
-let gallery_preview_keys arts (gallery : Model.gallery) =
-  gallery.entries
-  |> List.filter_map (fun (entry : Model.gallery_entry) ->
-         arts
-         |> List.find_opt (fun (art : Model.art) ->
-                String.equal art.category entry.category
-                && String.equal art.id entry.art_id)
-         |> Option.map (fun (art : Model.art) ->
-                (entry.category, entry.art_id, art.image.object_key)))
-  |> select_gallery_preview_keys ~seed:gallery.id
-
-let names_for_art stories category art_id =
-  stories
-  |> List.concat_map (fun (story : Model.story) ->
-         story.art_references
-         |> List.filter (fun reference -> reference_matches reference category art_id)
-         |> List.concat_map (fun (reference : Model.art_reference) -> reference.names))
-  |> unique_strings
 
 let character_prefix art_id =
   match String.index_opt art_id '#' with
   | Some position -> String.sub art_id 0 position
   | None -> art_id
-
-let is_character_sibling prefix art_id =
-  String.equal art_id prefix || String.starts_with ~prefix:(prefix ^ "#") art_id
-
-let stories_in_group snapshot locale group_id =
-  locale_values locale snapshot.stories
-  |> List.filter (fun (story : Model.story) -> String.equal story.group_id group_id)
-
-let group_references snapshot locale group_id =
-  stories_in_group snapshot locale group_id
-  |> List.concat_map (fun (story : Model.story) -> story.art_references)
-  |> available_references snapshot.arts |> unique_references
-
-let art_category_rank = function
-  | "image" -> 0
-  | "background" -> 1
-  | "item" -> 2
-  | "character" -> 3
-  | _ -> 4
-
-let compare_unclassified_art (left : Model.unclassified_art)
-    (right : Model.unclassified_art) =
-  match
-    Int.compare
-      (art_category_rank left.category)
-      (art_category_rank right.category)
-  with
-  | 0 -> String.compare left.id right.id
-  | order -> order
-
-let unclassified_arts_from_snapshot snapshot =
-  let tracked = Hashtbl.create (List.length snapshot.arts) in
-  let track category art_id = Hashtbl.replace tracked (category, art_id) () in
-  snapshot.stories
-  |> List.iter (fun (_, stories) ->
-         stories
-         |> List.iter (fun (story : Model.story) ->
-                story.art_references
-                |> List.iter (fun (reference : Model.art_reference) ->
-                       track reference.category reference.art_id)));
-  snapshot.galleries
-  |> List.iter (fun (_, galleries) ->
-         galleries
-         |> List.iter (fun (gallery : Model.gallery) ->
-                gallery.entries
-                |> List.iter (fun (entry : Model.gallery_entry) ->
-                       track entry.category entry.art_id)));
-  snapshot.arts
-  |> List.filter_map (fun (art : Model.art) ->
-         if Hashtbl.mem tracked (art.category, art.id) then None
-         else
-           Some
-             Model.
-               {
-                 id = art.id;
-                 category = art.category;
-                 composition_object_key = art.image.object_key;
-               })
-  |> List.sort compare_unclassified_art
-
-let memory snapshot =
-  {
-    close = (fun () -> Lwt.return_unit);
-    check = (fun () -> Lwt.return (Ok ()));
-    health = (fun () -> Lwt.return (Ok ()));
-    art =
-      (fun category id ->
-        snapshot.arts
-        |> List.find_opt (fun (value : Model.art) ->
-               String.equal category value.category && String.equal id value.id)
-        |> (function Some value -> Ok value | None -> Error `Not_found)
-        |> Lwt.return);
-    source_art =
-      (fun id ->
-        Lwt.return
-          (find_by_id id
-             (fun (value : Model.source_art) -> value.id)
-             snapshot.source_arts));
-    unclassified_arts =
-      (fun () -> Lwt.return (Ok (unclassified_arts_from_snapshot snapshot)));
-    art_context =
-      (fun locale category id ->
-        match
-          snapshot.arts
-          |> List.find_opt (fun (art : Model.art) ->
-                 String.equal art.category category && String.equal art.id id)
-        with
-        | None -> Lwt.return (Error `Not_found)
-        | Some _ ->
-            let groups = locale_values locale snapshot.story_groups in
-            let stories = locale_values locale snapshot.stories in
-            let ordered_stories =
-              groups
-              |> List.concat_map (fun (group : Model.story_group) ->
-                     List.filter
-                       (fun (story : Model.story) ->
-                         String.equal story.group_id group.id)
-                       stories)
-            in
-            let siblings =
-              if String.equal category "character" then
-                let prefix = character_prefix id in
-                snapshot.arts
-                |> List.filter (fun (art : Model.art) ->
-                       String.equal art.category "character"
-                       && not (String.equal art.id id)
-                       && is_character_sibling prefix art.id)
-                |> List.sort (fun (left : Model.art) right ->
-                       String.compare left.id right.id)
-                |> List.map (fun (art : Model.art) ->
-                       Model.
-                         {
-                           art_id = art.id;
-                           names = names_for_art ordered_stories category art.id;
-                           composition_object_key = art.image.object_key;
-                         })
-              else []
-            in
-            let occurrences =
-              groups
-              |> List.concat_map (fun (group : Model.story_group) ->
-                     stories
-                     |> List.filter (fun (story : Model.story) ->
-                            String.equal story.group_id group.id
-                            && List.exists
-                                 (fun reference ->
-                                   reference_matches reference category id)
-                                 story.art_references)
-                     |> List.map (fun (story : Model.story) ->
-                            Model.
-                              {
-                                group_id = group.id;
-                                group_name = group.name;
-                                group_type = group.group_type;
-                                story_id = story.id;
-                                story_name = story.name;
-                                story_code = story.code;
-                                story_tag_text = story.tag_text;
-                              }))
-            in
-            Lwt.return
-              (Ok
-                 Model.
-                   {
-                     names = names_for_art ordered_stories category id;
-                     siblings;
-                     occurrences;
-                   }));
-    story_groups =
-      (fun locale ->
-        let stories = locale_values locale snapshot.stories in
-        locale_values locale snapshot.story_groups
-        |> List.map (fun (group : Model.story_group) ->
-               let references =
-                 group_references snapshot locale group.id
-                 |> List.filter (fun (reference : Model.art_reference) ->
-                        Option.is_some reference.composition_object_key)
-               in
-               let preview_art_references =
-                 preview_references ~seed:group.id
-                   ~rarity:
-                     (reference_rarity
-                        ~scope:(fun (story : Model.story) -> story.group_id)
-                        stories)
-                   references
-               in
-               Model.
-                 {
-                   group;
-                   representative_art_reference =
-                     representative_reference preview_art_references;
-                   preview_art_references;
-                 })
-        |> Result.ok |> Lwt.return);
-    stories_by_group =
-      (fun locale group_id ->
-        let stories = locale_values locale snapshot.stories in
-        if
-          locale_values locale snapshot.story_groups
-          |> List.exists (fun (group : Model.story_group) ->
-                 String.equal group_id group.id)
-        then
-          stories_in_group snapshot locale group_id
-          |> List.map (fun (story : Model.story) ->
-                 let references =
-                   available_references snapshot.arts story.art_references
-                 in
-                 let preview_art_references =
-                   preview_references ~seed:story.id
-                     ~rarity:
-                       (reference_rarity
-                          ~scope:(fun (story : Model.story) -> story.id)
-                          stories)
-                     references
-                 in
-                 Model.
-                   {
-                     story = { story with art_references = [] };
-                     representative_art_reference =
-                       representative_reference preview_art_references;
-                     preview_art_references;
-                   })
-          |> Result.ok |> Lwt.return
-        else Lwt.return (Error `Not_found));
-    story_group =
-      (fun locale id ->
-        match
-          find_by_id id
-            (fun (value : Model.story_group) -> value.id)
-            (locale_values locale snapshot.story_groups)
-        with
-        | Error error -> Lwt.return (Error error)
-        | Ok group ->
-            let art_references = group_references snapshot locale id in
-            let preview_art_references =
-              art_references
-              |> List.filter (fun (reference : Model.art_reference) ->
-                     Option.is_some reference.composition_object_key)
-              |> preview_references ~seed:group.id
-                   ~rarity:
-                     (reference_rarity
-                        ~scope:(fun (story : Model.story) -> story.group_id)
-                        (locale_values locale snapshot.stories))
-            in
-            Lwt.return
-              (Ok
-                 Model.
-                   {
-                     group;
-                     representative_art_reference =
-                       representative_reference preview_art_references;
-                     preview_art_references;
-                     art_references;
-                   }));
-    story =
-      (fun locale id ->
-        find_by_id id
-          (fun (value : Model.story) -> value.id)
-          (locale_values locale snapshot.stories)
-        |> Result.map (fun (story : Model.story) ->
-               {
-                 story with
-                 art_references =
-                   List.map (resolve_reference snapshot.arts) story.art_references;
-               })
-        |> Lwt.return);
-    galleries =
-      (fun locale ->
-        locale_values locale snapshot.galleries
-        |> List.map (fun (gallery : Model.gallery) ->
-               Model.
-                 {
-                   gallery = { gallery with entries = [] };
-                   preview_composition_object_keys =
-                     gallery_preview_keys snapshot.arts gallery;
-                 })
-        |> Result.ok |> Lwt.return);
-    gallery =
-      (fun locale id ->
-        find_by_id id
-          (fun (value : Model.gallery) -> value.id)
-          (locale_values locale snapshot.galleries)
-        |> Result.map (fun (gallery : Model.gallery) ->
-               {
-                 gallery with
-                 entries =
-                   List.map
-                     (fun (entry : Model.gallery_entry) ->
-                       let composition_object_key =
-                         snapshot.arts
-                         |> List.find_opt (fun (art : Model.art) ->
-                                String.equal art.category entry.category
-                                && String.equal art.id entry.art_id)
-                         |> Option.map (fun (art : Model.art) ->
-                                art.image.object_key)
-                       in
-                       { entry with composition_object_key })
-                     gallery.entries;
-               })
-        |> Lwt.return);
-  }
 
 module Query = struct
   (* Parent rows are repeated by the ordered child joins below. The decoders
@@ -490,8 +111,7 @@ module Query = struct
 
   let art =
     let row =
-      t2 string
-        (t2 string (t2 int64 (t2 int (t2 int (option string)))))
+      t2 string (t2 string (t2 int64 (t2 int (t2 int (option string)))))
     in
     (t2 string string ->* row)
       {|
@@ -507,9 +127,7 @@ module Query = struct
 
   let source_art =
     let row =
-      t2 string
-        (t2 string
-           (t2 string (t2 string (t2 int64 (t2 int int)))))
+      t2 string (t2 string (t2 string (t2 string (t2 int64 (t2 int int)))))
     in
     (string ->? row)
       {|
@@ -558,9 +176,7 @@ module Query = struct
     let row =
       t2 string
         (t2 string
-           (t2 string
-              (t2 string
-                 (t2 string (t2 string (t2 string string))))))
+           (t2 string (t2 string (t2 string (t2 string (t2 string string))))))
     in
     (t2 string (t2 string string) ->* row)
       {|
@@ -613,8 +229,7 @@ module Query = struct
       (t2 (option string)
          (t2 (option string)
             (t2 (option string)
-               (t2 (option string)
-                  (t2 (option string) (option string))))))
+               (t2 (option string) (t2 (option string) (option string))))))
 
   let story_groups =
     let row = t2 string (t2 string (t2 string optional_reference)) in
@@ -698,8 +313,7 @@ module Query = struct
       t2 string
         (t2 string
            (t2 string
-              (t2 string
-                 (t2 string (t2 string (t2 string optional_reference))))))
+              (t2 string (t2 string (t2 string (t2 string optional_reference))))))
     in
     (t2 (t2 string string) (t2 string (t2 string string)) ->* row)
       {|
@@ -824,8 +438,7 @@ module Query = struct
                              (t2 (option string)
                                 (t2 (option string)
                                    (t2 (option string)
-                                      (t2 (option string)
-                                         (option string))))))))))))
+                                      (t2 (option string) (option string))))))))))))
     in
     (t2 string string ->* row)
       {|
@@ -848,8 +461,7 @@ module Query = struct
     let row =
       t2 string
         (t2 string
-           (t2 string
-              (t2 (option string) (t2 (option string) (option string)))))
+           (t2 string (t2 (option string) (t2 (option string) (option string)))))
     in
     (string ->* row)
       {|
@@ -874,10 +486,10 @@ module Query = struct
            (t2 string
               (t2 (option string)
                  (t2 (option int)
+                    (t2 (option string)
                        (t2 (option string)
                           (t2 (option string)
-                             (t2 (option string)
-                                (t2 (option string) (option string)))))))))
+                             (t2 (option string) (option string)))))))))
     in
     (t2 string string ->* row)
       {|
@@ -910,15 +522,21 @@ let idempotent_close callback =
 
 let sqlite_uri path =
   Uri.make ~scheme:"sqlite3" ~path
-    ~query:[ ("write", [ "false" ]); ("create", [ "false" ]) ] ()
+    ~query:[ ("write", [ "false" ]); ("create", [ "false" ]) ]
+    ()
 
-let sqlite path =
+let sqlite_with_pool_observer ~on_acquire path =
   let pool_config = Caqti_pool_config.create ~max_size:10 () in
   match Caqti_lwt_unix.connect_pool ~pool_config (sqlite_uri path) with
   | Error error -> Error (Caqti_error.show error)
   | Ok pool ->
       let use callback =
-        Caqti_lwt_unix.Pool.use callback pool >|= function
+        Caqti_lwt_unix.Pool.use
+          (fun connection ->
+            on_acquire ();
+            callback connection)
+          pool
+        >|= function
         | Ok value -> Ok value
         | Error error -> Error (unavailable error)
       in
@@ -928,7 +546,7 @@ let sqlite path =
         | Ok version when version <> 2 ->
             Error
               (`Unavailable
-                (Printf.sprintf "unsupported SQLite schema version %d" version))
+                 (Printf.sprintf "unsupported SQLite schema version %d" version))
         | Ok _ -> Ok ()
       in
       let health () =
@@ -938,12 +556,13 @@ let sqlite path =
         | Error error -> Error error
       in
       let art category id =
-        use (fun (module Db) -> Db.collect_list Query.art (category, id)) >|= function
+        use (fun (module Db) -> Db.collect_list Query.art (category, id))
+        >|= function
         | Error error -> Error error
         | Ok [] -> Error `Not_found
         | Ok
-            ((category, (object_key, (byte_size, (width, (height, _))))) :: _ as rows)
-          ->
+            ((category, (object_key, (byte_size, (width, (height, _))))) :: _ as
+             rows) ->
             let source_art_ids =
               List.filter_map
                 (fun (_, (_, (_, (_, (_, source_id))))) -> source_id)
@@ -964,8 +583,9 @@ let sqlite path =
         | Ok None -> Error `Not_found
         | Ok
             (Some
-              ( character_id,
-                (role, (variant, (object_key, (byte_size, (width, height))))) )) ->
+               ( character_id,
+                 (role, (variant, (object_key, (byte_size, (width, height)))))
+               )) ->
             Ok
               Model.
                 {
@@ -979,18 +599,22 @@ let sqlite path =
       let unclassified_arts () =
         use (fun (module Db) -> Db.collect_list Query.unclassified_arts ())
         >|= Result.map (fun rows ->
-                rows
-                |> List.map (fun (category, (id, composition_object_key)) ->
-                       Model.{ id; category; composition_object_key }))
+            rows
+            |> List.map (fun (category, (id, composition_object_key)) ->
+                Model.{ id; category; composition_object_key }))
       in
       let names_from_json = function
         | None -> []
         | Some raw ->
-            Yojson.Safe.from_string raw |> Yojson.Safe.Util.to_list
-            |> List.filter_map (function `String value -> Some value | _ -> None)
+            Yojson.Safe.from_string raw
+            |> Yojson.Safe.Util.to_list
+            |> List.filter_map (function
+              | `String value -> Some value
+              | _ -> None)
       in
       let reference_from_columns
-          (art_id, (kind, (category, (title, (subtitle, (names, object_key)))))) =
+          (art_id, (kind, (category, (title, (subtitle, (names, object_key))))))
+          =
         match (art_id, kind, category) with
         | Some art_id, Some kind, Some category ->
             Some
@@ -1011,39 +635,41 @@ let sqlite path =
             Db.find_opt Query.art_context_exists (category, id) >>= function
             | Error error -> Lwt.return (Error error)
             | Ok None -> Lwt.return (Ok `Missing)
-            | Ok (Some _) ->
+            | Ok (Some _) -> (
                 Db.collect_list Query.art_context_occurrences
                   (locale, (category, id))
-                >>= (function
-                      | Error error -> Lwt.return (Error error)
-                      | Ok occurrences ->
-                          (if String.equal category "character" then
-                             Db.collect_list Query.art_context_siblings
-                               (locale, (id, character_prefix id))
-                           else Lwt.return (Ok []))
-                          >|= Result.map (fun siblings ->
-                                  `Found (occurrences, siblings))))
+                >>= function
+                | Error error -> Lwt.return (Error error)
+                | Ok occurrences ->
+                    (if String.equal category "character" then
+                       Db.collect_list Query.art_context_siblings
+                         (locale, (id, character_prefix id))
+                     else Lwt.return (Ok []))
+                    >|= Result.map (fun siblings ->
+                        `Found (occurrences, siblings))))
         >|= function
         | Error error -> Error error
         | Ok `Missing -> Error `Not_found
         | Ok (`Found (occurrence_rows, sibling_rows)) ->
             let names =
               occurrence_rows
-              |> List.concat_map (fun
-                   (_, (_, (_, (_, (_, (_, (_, names_json))))))) ->
+              |> List.concat_map
+                   (fun (_, (_, (_, (_, (_, (_, (_, names_json))))))) ->
                      names_from_json (Some names_json))
               |> unique_strings
             in
             let seen_stories = Hashtbl.create (List.length occurrence_rows) in
             let occurrences =
               occurrence_rows
-              |> List.filter_map (fun
-                   ( group_id,
-                     ( group_name,
-                       ( group_type,
-                         ( story_id,
-                           ( story_name,
-                             (story_code, (story_tag_text, _)) ) ) ) ) ) ->
+              |> List.filter_map
+                   (fun
+                     ( group_id,
+                       ( group_name,
+                         ( group_type,
+                           ( story_id,
+                             (story_name, (story_code, (story_tag_text, _))) )
+                         ) ) )
+                   ->
                      if Hashtbl.mem seen_stories story_id then None
                      else (
                        Hashtbl.add seen_stories story_id ();
@@ -1087,45 +713,47 @@ let sqlite path =
                   occurrences;
                 }
       in
+      let decode_story_groups rows =
+        let rec gather id references = function
+          | (next_id, (_, (_, reference))) :: rest when String.equal id next_id
+            ->
+              let references =
+                match reference_from_columns reference with
+                | Some reference -> reference :: references
+                | None -> references
+              in
+              gather id references rest
+          | remaining -> (List.rev references, remaining)
+        in
+        let rec decode summaries = function
+          | [] -> List.rev summaries
+          | (id, (name, (group_type, reference))) :: rest ->
+              let initial =
+                match reference_from_columns reference with
+                | Some reference -> [ reference ]
+                | None -> []
+              in
+              let references, remaining = gather id initial rest in
+              let preview_art_references =
+                references |> unique_references |> List.take 3
+              in
+              let summary =
+                Model.
+                  {
+                    group = { id; name; group_type };
+                    representative_art_reference =
+                      representative_reference preview_art_references;
+                    preview_art_references;
+                  }
+              in
+              decode (summary :: summaries) remaining
+        in
+        decode [] rows
+      in
       let story_groups locale =
         use (fun (module Db) ->
             Db.collect_list Query.story_groups (locale, locale))
-        >|= Result.map (fun rows ->
-                let rec gather id references = function
-                  | (next_id, (_, (_, reference))) :: rest
-                    when String.equal id next_id ->
-                      let references =
-                        match reference_from_columns reference with
-                        | Some reference -> reference :: references
-                        | None -> references
-                      in
-                      gather id references rest
-                  | remaining -> (List.rev references, remaining)
-                in
-                let rec decode summaries = function
-                  | [] -> List.rev summaries
-                  | (id, (name, (group_type, reference))) :: rest ->
-                      let initial =
-                        match reference_from_columns reference with
-                        | Some reference -> [ reference ]
-                        | None -> []
-                      in
-                      let references, remaining = gather id initial rest in
-                      let preview_art_references =
-                        references |> unique_references |> take 3
-                      in
-                      let summary =
-                        Model.
-                          {
-                            group = { id; name; group_type };
-                            representative_art_reference =
-                              representative_reference preview_art_references;
-                            preview_art_references;
-                          }
-                      in
-                      decode (summary :: summaries) remaining
-                in
-                decode [] rows)
+        >|= Result.map decode_story_groups
       in
       let stories_by_group locale group_id =
         use (fun (module Db) ->
@@ -1144,9 +772,7 @@ let sqlite path =
         | Ok (`Empty (Some _)) -> Ok []
         | Ok (`Stories rows) ->
             let rec gather id references = function
-              | ( next_id,
-                  (_, (_, (_, (_, (_, (_, reference)))))) )
-                :: rest
+              | (next_id, (_, (_, (_, (_, (_, (_, reference))))))) :: rest
                 when String.equal id next_id ->
                   let references =
                     match reference_from_columns reference with
@@ -1169,7 +795,7 @@ let sqlite path =
                   in
                   let references, remaining = gather id initial rest in
                   let preview_art_references =
-                    references |> unique_references |> take 3
+                    references |> unique_references |> List.take 3
                   in
                   let summary =
                     Model.
@@ -1195,27 +821,28 @@ let sqlite path =
             Ok (decode [] rows)
       in
       let story_group locale id =
-        story_groups locale >>= function
-        | Error error -> Lwt.return (Error error)
-        | Ok summaries ->
+        use (fun (module Db) ->
+            Db.collect_list Query.story_groups (locale, locale) >>= function
+            | Error error -> Lwt.return (Error error)
+            | Ok group_rows ->
+                Db.collect_list Query.story_group ((locale, id), (locale, id))
+                >|= Result.map (fun rows -> (group_rows, rows)))
+        >|= function
+        | Error error -> Error error
+        | Ok (_, []) -> Error `Not_found
+        | Ok (group_rows, ((id, (name, (group_type, _))) :: _ as rows)) ->
             let preview_art_references =
-              summaries
+              decode_story_groups group_rows
               |> List.find_opt (fun (summary : Model.story_group_summary) ->
-                     String.equal summary.group.id id)
+                  String.equal summary.group.id id)
               |> Option.map (fun (summary : Model.story_group_summary) ->
-                     summary.preview_art_references)
+                  summary.preview_art_references)
               |> Option.value ~default:[]
             in
-            use (fun (module Db) ->
-                Db.collect_list Query.story_group ((locale, id), (locale, id)))
-            >|= (function
-            | Error error -> Error error
-            | Ok [] -> Error `Not_found
-            | Ok ((id, (name, (group_type, _))) :: _ as rows) ->
             let art_references =
               rows
               |> List.filter_map (fun (_, (_, (_, reference))) ->
-                     reference_from_columns reference)
+                  reference_from_columns reference)
               |> unique_references
             in
             Ok
@@ -1226,7 +853,7 @@ let sqlite path =
                     representative_reference preview_art_references;
                   preview_art_references;
                   art_references;
-                })
+                }
       in
       let story locale id =
         use (fun (module Db) -> Db.collect_list Query.story (locale, id))
@@ -1234,52 +861,65 @@ let sqlite path =
         | Error error -> Error error
         | Ok [] -> Error `Not_found
         | Ok
-            ((group_id, (tag, (tag_text, (code, (name, (info, _)))))) :: _ as rows)
-          ->
+            ((group_id, (tag, (tag_text, (code, (name, (info, _)))))) :: _ as
+             rows) ->
             let art_references =
               List.filter_map
                 (fun (_, (_, (_, (_, (_, (_, reference)))))) ->
                   reference_from_columns reference)
                 rows
             in
-            Ok Model.{ id; group_id; tag; tag_text; code; name; info; art_references }
+            Ok
+              Model.
+                {
+                  id;
+                  group_id;
+                  tag;
+                  tag_text;
+                  code;
+                  name;
+                  info;
+                  art_references;
+                }
       in
       let galleries locale =
         use (fun (module Db) -> Db.collect_list Query.galleries locale)
         >|= Result.map (fun rows ->
-                let candidate = function
-                  | Some art_id, (Some category, Some object_key) ->
-                      Some (category, art_id, object_key)
-                  | _ -> None
-                in
-                let rec gather id candidates = function
-                  | (next_id, (_, (_, preview))) :: rest
-                    when String.equal id next_id ->
-                      gather id
-                        (match candidate preview with
-                        | Some value -> value :: candidates
-                        | None -> candidates)
-                        rest
-                  | remaining -> (List.rev candidates, remaining)
-                in
-                let rec decode summaries = function
-                  | [] -> List.rev summaries
-                  | (id, (name, (description, preview))) :: rest ->
-                      let initial =
-                        match candidate preview with Some value -> [ value ] | None -> []
-                      in
-                      let candidates, remaining = gather id initial rest in
-                      let summary =
-                        Model.
-                          {
-                            gallery = { id; name; description; entries = [] };
-                            preview_composition_object_keys =
-                              select_gallery_preview_keys ~seed:id candidates;
-                          }
-                      in
-                      decode (summary :: summaries) remaining
-                in
-                decode [] rows)
+            let candidate = function
+              | Some art_id, (Some category, Some object_key) ->
+                  Some (category, art_id, object_key)
+              | _ -> None
+            in
+            let rec gather id candidates = function
+              | (next_id, (_, (_, preview))) :: rest
+                when String.equal id next_id ->
+                  gather id
+                    (match candidate preview with
+                    | Some value -> value :: candidates
+                    | None -> candidates)
+                    rest
+              | remaining -> (List.rev candidates, remaining)
+            in
+            let rec decode summaries = function
+              | [] -> List.rev summaries
+              | (id, (name, (description, preview))) :: rest ->
+                  let initial =
+                    match candidate preview with
+                    | Some value -> [ value ]
+                    | None -> []
+                  in
+                  let candidates, remaining = gather id initial rest in
+                  let summary =
+                    Model.
+                      {
+                        gallery = { id; name; description; entries = [] };
+                        preview_composition_object_keys =
+                          select_gallery_preview_keys ~seed:id candidates;
+                      }
+                  in
+                  decode (summary :: summaries) remaining
+            in
+            decode [] rows)
       in
       let gallery locale id =
         use (fun (module Db) -> Db.collect_list Query.gallery (locale, id))
@@ -1289,16 +929,17 @@ let sqlite path =
         | Ok ((id, (name, (description, _))) :: _ as rows) ->
             let entries =
               List.filter_map
-                (fun
-                  ( _,
-                    ( _,
-                      ( _,
-                        ( entry_id,
-                          ( position,
-                            ( name,
-                              ( description,
-                                (art_id, (category, object_key)) ) ) ) ) ) ) ) ->
-                  match (entry_id, position, name, description, art_id, category) with
+                (fun ( _,
+                       ( _,
+                         ( _,
+                           ( entry_id,
+                             ( position,
+                               ( name,
+                                 (description, (art_id, (category, object_key)))
+                               ) ) ) ) ) ) ->
+                  match
+                    (entry_id, position, name, description, art_id, category)
+                  with
                   | ( Some id,
                       Some position,
                       Some name,
@@ -1338,8 +979,8 @@ let sqlite path =
           gallery;
         }
 
-let remove_if_exists path =
-  try Sys.remove path with Sys_error _ -> ()
+let sqlite path = sqlite_with_pool_observer ~on_acquire:(fun () -> ()) path
+let remove_if_exists path = try Sys.remove path with Sys_error _ -> ()
 
 let rec make_directory path =
   if Sys.file_exists path then ()
@@ -1357,27 +998,51 @@ let clean_database_cache path =
      process and are safe to remove before the initial download. *)
   Sys.readdir path
   |> Array.iter (fun name ->
-         if
-           String.starts_with ~prefix:"arkwaifu-" name
-           &&
-           (String.ends_with ~suffix:".sqlite3" name
+      if
+        String.starts_with ~prefix:"arkwaifu-" name
+        && (String.ends_with ~suffix:".sqlite3" name
            || String.ends_with ~suffix:".sqlite3.part" name)
-         then remove_if_exists (Filename.concat path name))
+      then remove_if_exists (Filename.concat path name))
 
-type generation = { database : t; path : string }
+type generation = {
+  database : t;
+  path : string;
+}
 
-let download_generation ~url ~cache_dir ~counter ~etag ~timeout_seconds =
+type fetch_result =
+  [ `Not_modified
+  | `Fetched of string option
+  | `Failed of string
+  ]
+
+let http_fetch ~url ~etag ~destination =
+  let headers =
+    match etag with
+    | None -> Cohttp.Header.init ()
+    | Some value -> Cohttp.Header.init_with "if-none-match" value
+  in
+  Cohttp_lwt_unix.Client.get ~headers url >>= fun (response, body) ->
+  match Cohttp.Response.status response with
+  | `Not_modified -> Cohttp_lwt.Body.drain_body body >|= fun () -> `Not_modified
+  | `OK ->
+      Lwt_io.with_file ~mode:Lwt_io.Output destination (fun channel ->
+          Cohttp_lwt.Body.to_stream body
+          |> Lwt_stream.iter_s (Lwt_io.write channel))
+      >|= fun () ->
+      `Fetched (Cohttp.Header.get (Cohttp.Response.headers response) "etag")
+  | status ->
+      Cohttp_lwt.Body.drain_body body >|= fun () ->
+      `Failed
+        (Printf.sprintf "database download returned HTTP %s"
+           (Cohttp.Code.string_of_status status))
+
+let download_generation ~fetch ~cache_dir ~counter ~etag ~timeout_seconds =
   (* Download to a .part file and rename it before opening SQLite. A candidate
      is returned only after its schema version has been admitted; every failure
      closes the candidate and removes both paths. *)
   let name = Printf.sprintf "arkwaifu-%d-%d.sqlite3" (Unix.getpid ()) counter in
   let path = Filename.concat cache_dir name in
   let part = path ^ ".part" in
-  let headers =
-    match etag with
-    | None -> Cohttp.Header.init ()
-    | Some value -> Cohttp.Header.init_with "if-none-match" value
-  in
   let candidate = ref None in
   let cleanup message =
     let close =
@@ -1393,34 +1058,21 @@ let download_generation ~url ~cache_dir ~counter ~etag ~timeout_seconds =
     `Failed message
   in
   let download () =
-    Cohttp_lwt_unix.Client.get ~headers url >>= fun (response, body) ->
-    match Cohttp.Response.status response with
-    | `Not_modified ->
-        Cohttp_lwt.Body.drain_body body >|= fun () -> `Not_modified
-    | `OK ->
-        Lwt_io.with_file ~mode:Lwt_io.Output part (fun channel ->
-            Cohttp_lwt.Body.to_stream body
-            |> Lwt_stream.iter_s (Lwt_io.write channel))
-        >>= fun () ->
+    fetch ~etag ~destination:part >>= function
+    | `Not_modified -> Lwt.return `Not_modified
+    | `Failed error -> cleanup error
+    | `Fetched response_etag -> (
         Sys.rename part path;
-        let response_etag =
-          Cohttp.Header.get (Cohttp.Response.headers response) "etag"
-        in
-        (match sqlite path with
+        match sqlite path with
         | Error error -> cleanup ("cannot open downloaded database: " ^ error)
-        | Ok database ->
+        | Ok database -> (
             candidate := Some database;
             database.check () >>= function
             | Error (`Unavailable error) -> cleanup error
             | Error `Not_found -> cleanup "database health check failed"
             | Ok () ->
                 candidate := None;
-                Lwt.return (`Fetched ({ database; path }, response_etag)))
-    | status ->
-        Cohttp_lwt.Body.drain_body body >>= fun () ->
-        cleanup
-          (Printf.sprintf "database download returned HTTP %s"
-             (Cohttp.Code.string_of_status status))
+                Lwt.return (`Fetched ({ database; path }, response_etag))))
   in
   Lwt.catch
     (fun () -> Lwt_unix.with_timeout timeout_seconds download)
@@ -1431,65 +1083,69 @@ let download_generation ~url ~cache_dir ~counter ~etag ~timeout_seconds =
                timeout_seconds)
       | exception_ -> cleanup (Printexc.to_string exception_))
 
-let live ~url ~cache_dir ~poll_seconds ~download_timeout_seconds =
+type live_state = {
+  current : generation ref;
+  etag : string option ref;
+  counter : int ref;
+  mutable closed : bool;
+  refresh_lock : Lwt_mutex.t;
+}
+
+let retire generation =
+  generation.database.close () >|= fun () -> remove_if_exists generation.path
+
+let refresh_once ~fetch ~cache_dir ~download_timeout_seconds state =
+  Lwt_mutex.with_lock state.refresh_lock (fun () ->
+      if state.closed then Lwt.return (`Failed "database is closed")
+      else
+        let next = !(state.counter) in
+        incr state.counter;
+        download_generation ~fetch ~cache_dir ~counter:next ~etag:!(state.etag)
+          ~timeout_seconds:download_timeout_seconds
+        >>= function
+        | `Not_modified -> Lwt.return `Not_modified
+        | `Failed error -> Lwt.return (`Failed error)
+        | `Fetched (fresh, fresh_etag) ->
+            if state.closed then
+              retire fresh >|= fun () -> `Failed "database is closed"
+            else
+              let previous = !(state.current) in
+              state.current := fresh;
+              state.etag := fresh_etag;
+              retire previous >|= fun () -> `Replaced)
+
+let start_live ~fetch ~cache_dir ~download_timeout_seconds =
   (* Keep one readable local generation current. Pool draining lets queries
      already using the previous generation finish before its file is removed. *)
   try
     make_directory cache_dir;
     clean_database_cache cache_dir;
-    download_generation ~url ~cache_dir ~counter:0 ~etag:None
+    download_generation ~fetch ~cache_dir ~counter:0 ~etag:None
       ~timeout_seconds:download_timeout_seconds
     >>= function
-    | `Not_modified -> Lwt.return (Error "database was not downloaded at startup")
+    | `Not_modified ->
+        Lwt.return (Error "database was not downloaded at startup")
     | `Failed error -> Lwt.return (Error error)
     | `Fetched (first, first_etag) ->
-        let current = ref first in
-        let etag = ref first_etag in
-        let closed = ref false in
-        let counter = ref 1 in
-        let retire generation =
-          generation.database.close () >|= fun () -> remove_if_exists generation.path
+        let state =
+          {
+            current = ref first;
+            etag = ref first_etag;
+            counter = ref 1;
+            closed = false;
+            refresh_lock = Lwt_mutex.create ();
+          }
         in
-        let rec poll () =
-          if !closed then Lwt.return_unit
-          else
-            Lwt_unix.sleep poll_seconds >>= fun () ->
-            let next = !counter in
-            incr counter;
-            download_generation ~url ~cache_dir ~counter:next ~etag:!etag
-              ~timeout_seconds:download_timeout_seconds
-            >>= fun result ->
-            (match result with
-            | `Not_modified -> Lwt.return_unit
-            | `Failed error ->
-                if not !closed then
-                  Printf.eprintf "database refresh failed: %s\n%!" error;
-                Lwt.return_unit
-            | `Fetched (fresh, fresh_etag) ->
-                if !closed then retire fresh
-                else
-                  let previous = !current in
-                  current := fresh;
-                  etag := fresh_etag;
-                  Lwt.async (fun () -> retire previous);
-                  Lwt.return_unit)
-            >>= poll
-        in
-        let poll_task = poll () in
-        Lwt.async (fun () -> poll_task);
-        let with_current callback = callback (!current).database in
+        let with_current callback = callback !(state.current).database in
         let close_task = ref None in
         let close () =
           match !close_task with
           | Some task -> task
           | None ->
-              closed := true;
-              Lwt.cancel poll_task;
+              state.closed <- true;
               let task =
-                Lwt.catch
-                  (fun () -> poll_task)
-                  (function Lwt.Canceled -> Lwt.return_unit | error -> Lwt.fail error)
-                >>= fun () -> retire !current
+                Lwt_mutex.with_lock state.refresh_lock (fun () ->
+                    retire !(state.current))
               in
               close_task := Some task;
               task
@@ -1499,7 +1155,9 @@ let live ~url ~cache_dir ~poll_seconds ~download_timeout_seconds =
             close;
             check = (fun () -> with_current (fun value -> value.check ()));
             health = (fun () -> with_current (fun value -> value.health ()));
-            art = (fun category id -> with_current (fun value -> value.art category id));
+            art =
+              (fun category id ->
+                with_current (fun value -> value.art category id));
             source_art =
               (fun id -> with_current (fun value -> value.source_art id));
             unclassified_arts =
@@ -1508,32 +1166,106 @@ let live ~url ~cache_dir ~poll_seconds ~download_timeout_seconds =
               (fun locale category id ->
                 with_current (fun value -> value.art_context locale category id));
             story_groups =
-              (fun locale -> with_current (fun value -> value.story_groups locale));
+              (fun locale ->
+                with_current (fun value -> value.story_groups locale));
             stories_by_group =
               (fun locale group_id ->
-                with_current (fun value -> value.stories_by_group locale group_id));
+                with_current (fun value ->
+                    value.stories_by_group locale group_id));
             story_group =
               (fun locale id ->
                 with_current (fun value -> value.story_group locale id));
             story =
-              (fun locale id -> with_current (fun value -> value.story locale id));
+              (fun locale id ->
+                with_current (fun value -> value.story locale id));
             galleries =
               (fun locale -> with_current (fun value -> value.galleries locale));
             gallery =
-              (fun locale id -> with_current (fun value -> value.gallery locale id));
+              (fun locale id ->
+                with_current (fun value -> value.gallery locale id));
           }
         in
-        Lwt.return (Ok database)
+        Lwt.return (Ok (database, state))
   with Sys_error error -> Lwt.return (Error error)
+
+let live ~url ~cache_dir ~poll_seconds ~download_timeout_seconds =
+  let fetch = http_fetch ~url in
+  start_live ~fetch ~cache_dir ~download_timeout_seconds >>= function
+  | Error error -> Lwt.return (Error error)
+  | Ok (database, state) ->
+      let rec poll () =
+        if state.closed then Lwt.return_unit
+        else
+          Lwt_unix.sleep poll_seconds >>= fun () ->
+          refresh_once ~fetch ~cache_dir ~download_timeout_seconds state
+          >>= ( function
+          | `Failed error ->
+              if not state.closed then
+                Printf.eprintf "database refresh failed: %s\n%!" error;
+              Lwt.return_unit
+          | `Not_modified | `Replaced -> Lwt.return_unit )
+          >>= poll
+      in
+      let poll_task = poll () in
+      Lwt.async (fun () -> poll_task);
+      let close = database.close in
+      let close_task = ref None in
+      let close_with_poll () =
+        match !close_task with
+        | Some task -> task
+        | None ->
+            state.closed <- true;
+            Lwt.cancel poll_task;
+            let task =
+              Lwt.catch
+                (fun () -> poll_task)
+                (function
+                  | Lwt.Canceled -> Lwt.return_unit | error -> Lwt.fail error)
+              >>= close
+            in
+            close_task := Some task;
+            task
+      in
+      Lwt.return (Ok { database with close = close_with_poll })
+
+module For_test = struct
+  type nonrec fetch_result = fetch_result
+
+  type refresh_result =
+    [ `Not_modified
+    | `Replaced
+    | `Failed of string
+    ]
+
+  type controlled_live = {
+    database : t;
+    refresh_once : unit -> refresh_result Lwt.t;
+  }
+
+  let live ~fetch ~cache_dir ~download_timeout_seconds =
+    start_live ~fetch ~cache_dir ~download_timeout_seconds
+    >|= Result.map (fun (database, state) ->
+        {
+          database;
+          refresh_once =
+            (fun () ->
+              refresh_once ~fetch ~cache_dir ~download_timeout_seconds state);
+        })
+
+  let sqlite_with_pool_observer = sqlite_with_pool_observer
+end
 
 let close (database : t) = database.close ()
 let health (database : t) = database.health ()
 let art (database : t) category id = database.art category id
 let source_art (database : t) id = database.source_art id
 let unclassified_arts (database : t) = database.unclassified_arts ()
+
 let art_context (database : t) locale category id =
   database.art_context locale category id
+
 let story_groups (database : t) locale = database.story_groups locale
+
 let stories_by_group (database : t) locale group_id =
   database.stories_by_group locale group_id
 
