@@ -175,7 +175,47 @@ let story_group =
   Model.{ id = "group"; name = "Group"; group_type = "main_story" }
 
 let empty_story_group =
-  Model.{ id = "empty"; name = "Empty group"; group_type = "other" }
+  Model.{ id = "empty"; name = "Empty group"; group_type = "others" }
+
+let gallery_entry id position art_id category =
+  Model.
+    {
+      id;
+      position;
+      name = "Entry " ^ id;
+      description = "Description " ^ id;
+      art_id;
+      category;
+      composition_object_key = None;
+    }
+
+let unresolved_gallery_entry = gallery_entry "entry" 0 "event" "image"
+
+let gallery =
+  Model.
+    {
+      id = "gallery";
+      name = "Gallery";
+      description = "Description";
+      entries =
+        [
+          unresolved_gallery_entry;
+          gallery_entry "background" 1 "background" "background";
+          gallery_entry "illustration" 2 "illustration" "image";
+          gallery_entry "alternate" 3 "alternate" "image";
+          gallery_entry "third" 4 "third" "image";
+          gallery_entry "fourth" 5 "fourth" "image";
+        ];
+    }
+
+let background_gallery =
+  Model.
+    {
+      id = "background-gallery";
+      name = "Background gallery";
+      description = "Description";
+      entries = [ gallery_entry "background" 0 "background" "background" ];
+    }
 
 let require_ok label = function
   | Ok value -> value
@@ -217,27 +257,6 @@ let test_content_url_escapes_encoded_key () =
        "art/source/id%3Avariant/hash.png")
 
 let test_memory_database () =
-  let gallery_entry =
-    Model.
-      {
-        id = "entry";
-        position = 0;
-        name = "Entry";
-        description = "Description";
-        art_id = "event";
-        category = "image";
-        composition_object_key = None;
-      }
-  in
-  let gallery =
-    Model.
-      {
-        id = "gallery";
-        name = "Gallery";
-        description = "Description";
-        entries = [ gallery_entry ];
-      }
-  in
   let snapshot : Database.snapshot =
     { Database.arts =
         [
@@ -251,7 +270,7 @@ let test_memory_database () =
       source_arts = [ source_art ];
       story_groups = [ ("CN", [ story_group; empty_story_group ]) ];
       stories = [ ("CN", [ story; later_story; background_only_story ]) ];
-      galleries = [ ("CN", [ gallery ]) ];
+      galleries = [ ("CN", [ gallery; background_gallery ]) ];
     }
   in
   let database = Database.memory snapshot in
@@ -278,6 +297,7 @@ let test_memory_database () =
     Lwt_main.run (Database.stories_by_group database "CN" "missing")
   in
   let summaries = Lwt_main.run (Database.galleries database "CN") in
+  let summaries_again = Lwt_main.run (Database.galleries database "CN") in
   let detailed = Lwt_main.run (Database.gallery database "CN" "gallery") in
   Alcotest.(check bool) "found" true (Result.is_ok found);
   Alcotest.(check bool)
@@ -392,16 +412,42 @@ let test_memory_database () =
     true
     (match missing_stories with Error `Not_found -> true | _ -> false);
   Alcotest.(check bool)
-    "summary entries are empty"
+    "gallery summaries prefer three illustrations"
     true
-    (match summaries with Ok [ value ] -> value.entries = [] | _ -> false);
+    (match summaries with
+    | Ok ({ gallery; preview_composition_object_keys } :: _) ->
+        gallery.entries = []
+        && List.length preview_composition_object_keys = 3
+        && List.for_all
+             (String.starts_with
+                ~prefix:"ART/art-v1/composition/image/")
+             preview_composition_object_keys
+    | _ -> false);
+  Alcotest.(check (list string))
+    "gallery preview order is stable"
+    (match summaries with
+    | Ok ({ preview_composition_object_keys; _ } :: _) ->
+        preview_composition_object_keys
+    | _ -> [])
+    (match summaries_again with
+    | Ok ({ preview_composition_object_keys; _ } :: _) ->
+        preview_composition_object_keys
+    | _ -> []);
+  Alcotest.(check (list string))
+    "background-only gallery falls back to a background"
+    [ "ART/art-v1/composition/background/background.png" ]
+    (match summaries with
+    | Ok [ _; { preview_composition_object_keys; _ } ] ->
+        preview_composition_object_keys
+    | _ -> []);
   Alcotest.(check bool)
     "detail retains unresolved entries"
     true
     (match detailed with
     | Ok value ->
-        value.entries = [ gallery_entry ]
-        && (List.hd value.entries).composition_object_key = None
+        (List.hd value.entries).composition_object_key = None
+        && (List.nth value.entries 2).composition_object_key
+           = Some "ART/art-v1/composition/image/illustration.png"
     | _ -> false)
 
 let test_memory_art_context_and_rarity () =
@@ -641,7 +687,13 @@ let sqlite_rows =
     INSERT INTO story_groups VALUES
       ('CN', 'group', 'Group', 'main_story', 0),
       ('CN', 'other', 'Other', 'major_event', 1),
-      ('CN', 'empty', 'Empty group', 'other', 2);
+      ('CN', 'minor-event', 'Minor event', 'minor_event', 2),
+      ('CN', 'operator-record', 'Operator record', 'operator_record', 3),
+      ('CN', 'integrated-strategies', 'Integrated Strategies',
+       'integrated_strategies', 4),
+      ('CN', 'reclamation-algorithm', 'Reclamation Algorithm',
+       'reclamation_algorithm', 5),
+      ('CN', 'empty', 'Empty group', 'others', 6);
     INSERT INTO stories
       VALUES ('CN', 'story', 'group', 'before', 'Before', 'S1', 'Story', 'Info', 0);
     INSERT INTO stories
@@ -677,10 +729,23 @@ let sqlite_rows =
          '["Angelina","安洁莉娜"]'),
         ('CN', 'other-story', 3, 'event#1$1', 'character', 'character', NULL,
          NULL, '["安洁莉娜（异格）"]');
-    INSERT INTO galleries VALUES ('CN', 'gallery', 'Gallery', 'Description');
+    INSERT INTO galleries VALUES
+      ('CN', 'gallery', 'Gallery', 'Description'),
+      ('CN', 'background-gallery', 'Background gallery', 'Description');
     INSERT INTO gallery_entries
-      VALUES ('CN', 'gallery', 0, 'entry', 'Entry', 'Entry description',
-              'event', 'character');
+      VALUES
+        ('CN', 'gallery', 0, 'entry', 'Entry', 'Entry description',
+         'event', 'character'),
+        ('CN', 'gallery', 1, 'background', 'Background', 'Description',
+         'background', 'background'),
+        ('CN', 'gallery', 2, 'illustration', 'Illustration', 'Description',
+         'illustration', 'image'),
+        ('CN', 'gallery', 3, 'alternate', 'Alternate', 'Description',
+         'alternate', 'image'),
+        ('CN', 'gallery', 4, 'third', 'Third', 'Description', 'third', 'image'),
+        ('CN', 'gallery', 5, 'fourth', 'Fourth', 'Description', 'fourth', 'image'),
+        ('CN', 'background-gallery', 0, 'background', 'Background',
+         'Description', 'background', 'background');
   |}
 
 let with_sqlite_database callback =
@@ -722,9 +787,33 @@ let test_sqlite_database () =
         Lwt_main.run (Database.story_groups database "CN") |> require_ok "story groups"
       in
       Alcotest.(check (list string))
-        "story group IDs" [ "group"; "other"; "empty" ]
+        "story group IDs"
+        [
+          "group";
+          "other";
+          "minor-event";
+          "operator-record";
+          "integrated-strategies";
+          "reclamation-algorithm";
+          "empty";
+        ]
         (List.map
            (fun (summary : Model.story_group_summary) -> summary.group.id)
+           groups);
+      Alcotest.(check (list string))
+        "story group type contract"
+        [
+          "main_story";
+          "major_event";
+          "minor_event";
+          "operator_record";
+          "integrated_strategies";
+          "reclamation_algorithm";
+          "others";
+        ]
+        (List.map
+           (fun (summary : Model.story_group_summary) ->
+             summary.group.group_type)
            groups);
       Alcotest.(check bool)
         "group representative prefers image"
@@ -861,14 +950,29 @@ let test_sqlite_database () =
         Lwt_main.run (Database.galleries database "CN") |> require_ok "galleries"
       in
       Alcotest.(check (list string))
-        "gallery IDs" [ "gallery" ]
-        (List.map (fun (gallery : Model.gallery) -> gallery.id) galleries);
+        "gallery IDs" [ "background-gallery"; "gallery" ]
+        (List.map
+           (fun (summary : Model.gallery_summary) -> summary.gallery.id)
+           galleries);
+      Alcotest.(check (list string))
+        "SQLite gallery background fallback"
+        [ "ART/art-v1/composition/background/background.png" ]
+        (List.hd galleries).preview_composition_object_keys;
+      Alcotest.(check int)
+        "SQLite gallery illustration preview cap" 3
+        (List.length (List.nth galleries 1).preview_composition_object_keys);
+      Alcotest.(check bool)
+        "SQLite gallery previews prefer illustrations" true
+        (List.for_all
+           (String.starts_with ~prefix:"ART/art-v1/composition/image/")
+           (List.nth galleries 1).preview_composition_object_keys);
 
       let gallery =
         Lwt_main.run (Database.gallery database "CN" "gallery") |> require_ok "gallery"
       in
       Alcotest.(check (list string))
-        "gallery entry IDs" [ "entry" ]
+        "gallery entry IDs"
+        [ "entry"; "background"; "illustration"; "alternate"; "third"; "fourth" ]
         (List.map (fun (entry : Model.gallery_entry) -> entry.id) gallery.entries);
       Alcotest.(check (option string))
         "gallery entry joined composition"
@@ -932,7 +1036,7 @@ let test_http_story_listing_and_cors () =
       }
   in
   let snapshot : Database.snapshot =
-    { Database.empty_snapshot with
+    {
       arts =
         [
           art;
@@ -951,6 +1055,7 @@ let test_http_story_listing_and_cors () =
           ( "CN",
             [ story; later_story; background_only_story; context_story ] );
         ];
+      galleries = [ ("CN", [ gallery; background_gallery ]) ];
     }
   in
   let handler =
@@ -988,6 +1093,26 @@ let test_http_story_listing_and_cors () =
     "https://objects.example/bucket/ART/art-v1/thumbnail/image/illustration.webp"
     (group_index_json |> List.hd |> member "previewArtReferences" |> to_list
     |> List.hd |> member "thumbnailContentUrl" |> to_string);
+
+  let gallery_index =
+    Dream.test handler
+      (Dream.request ~method_:`GET ~target:"/api/CN/galleries" "")
+  in
+  Alcotest.(check int) "gallery index status" 200
+    (Dream.status gallery_index |> Dream.status_to_int);
+  let gallery_index_json =
+    Lwt_main.run (Dream.body gallery_index) |> Yojson.Safe.from_string |> to_list
+  in
+  Alcotest.(check int)
+    "gallery exposes three preview URLs" 3
+    (gallery_index_json |> List.hd |> member "previewThumbnailContentUrls"
+    |> to_list |> List.length);
+  Alcotest.(check bool)
+    "gallery preview URL is direct" true
+    (gallery_index_json |> List.hd |> member "previewThumbnailContentUrls"
+    |> to_list |> List.hd |> to_string
+    |> String.starts_with
+         ~prefix:"https://objects.example/bucket/ART/art-v1/thumbnail/image/");
 
   let art_metadata =
     Dream.test handler
@@ -1162,6 +1287,9 @@ let test_http_story_listing_and_cors () =
   let empty_group_json =
     Lwt_main.run (Dream.body empty_group) |> Yojson.Safe.from_string
   in
+  Alcotest.(check string)
+    "empty group exposes the others category" "others"
+    (empty_group_json |> member "type" |> to_string);
   Alcotest.(check bool)
     "empty group has no representative"
     true

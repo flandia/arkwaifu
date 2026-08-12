@@ -16,7 +16,7 @@ type t = {
   stories_by_group : string -> string -> (Model.story_summary list, error) result Lwt.t;
   story_group : string -> string -> (Model.story_group_detail, error) result Lwt.t;
   story : string -> string -> (Model.story, error) result Lwt.t;
-  galleries : string -> (Model.gallery list, error) result Lwt.t;
+  galleries : string -> (Model.gallery_summary list, error) result Lwt.t;
   gallery : string -> string -> (Model.gallery, error) result Lwt.t;
 }
 
@@ -70,21 +70,18 @@ let character_code value position =
   if String.length value = 0 then 0L
   else Int64.of_int (Char.code value.[position mod String.length value])
 
-let representative_score seed (reference : Model.art_reference) =
+let stable_score seed value =
   let weighted factor value = Int64.mul factor value in
   let middle value = String.length value / 2 in
   let score =
     Int64.add
-      (weighted 1_103_515_245L (Int64.of_int (String.length reference.art_id)))
+      (weighted 1_103_515_245L (Int64.of_int (String.length value)))
       (Int64.add
-         (weighted 12_345L (character_code reference.art_id 0))
+         (weighted 12_345L (character_code value 0))
          (Int64.add
-            (weighted 2_654_435_761L
-               (character_code reference.art_id (middle reference.art_id)))
+            (weighted 2_654_435_761L (character_code value (middle value)))
             (Int64.add
-               (weighted 97L
-                  (character_code reference.art_id
-                     (String.length reference.art_id - 1)))
+               (weighted 97L (character_code value (String.length value - 1)))
                (Int64.add
                   (weighted 193L (Int64.of_int (String.length seed)))
                   (Int64.add
@@ -95,6 +92,9 @@ let representative_score seed (reference : Model.art_reference) =
                            (character_code seed (String.length seed - 1)))))))))
   in
   Int64.rem score 2_147_483_647L
+
+let representative_score seed (reference : Model.art_reference) =
+  stable_score seed reference.art_id
 
 let rec take count values =
   if count <= 0 then []
@@ -153,6 +153,35 @@ let unique_strings values =
         Hashtbl.add seen value ();
         true))
     values
+
+let select_gallery_preview_keys ~seed available =
+  let choose category =
+    available
+    |> List.filter (fun (entry_category, _, _) ->
+           String.equal entry_category category)
+    |> List.sort (fun (_, left_id, _) (_, right_id, _) ->
+           match
+             Int64.compare
+               (stable_score seed left_id)
+               (stable_score seed right_id)
+           with
+           | 0 -> String.compare left_id right_id
+           | order -> order)
+    |> List.map (fun (_, _, object_key) -> object_key)
+    |> unique_strings |> take 3
+  in
+  match choose "image" with _ :: _ as keys -> keys | [] -> choose "background"
+
+let gallery_preview_keys arts (gallery : Model.gallery) =
+  gallery.entries
+  |> List.filter_map (fun (entry : Model.gallery_entry) ->
+         arts
+         |> List.find_opt (fun (art : Model.art) ->
+                String.equal art.category entry.category
+                && String.equal art.id entry.art_id)
+         |> Option.map (fun (art : Model.art) ->
+                (entry.category, entry.art_id, art.image.object_key)))
+  |> select_gallery_preview_keys ~seed:gallery.id
 
 let names_for_art stories category art_id =
   stories
@@ -366,7 +395,13 @@ let memory snapshot =
     galleries =
       (fun locale ->
         locale_values locale snapshot.galleries
-        |> List.map (fun (gallery : Model.gallery) -> { gallery with entries = [] })
+        |> List.map (fun (gallery : Model.gallery) ->
+               Model.
+                 {
+                   gallery = { gallery with entries = [] };
+                   preview_composition_object_keys =
+                     gallery_preview_keys snapshot.arts gallery;
+                 })
         |> Result.ok |> Lwt.return);
     gallery =
       (fun locale id ->
@@ -732,13 +767,26 @@ module Query = struct
       |}
 
   let galleries =
-    let row = t2 string (t2 string string) in
+    let row =
+      t2 string
+        (t2 string
+           (t2 string
+              (t2 (option string) (t2 (option string) (option string)))))
+    in
     (string ->* row)
       {|
-        SELECT gallery_id, name, description
-        FROM galleries
-        WHERE locale = ?
-        ORDER BY gallery_id
+        SELECT gallery.gallery_id, gallery.name, gallery.description,
+               entry.art_id, entry.category, art.object_key
+        FROM galleries AS gallery
+        LEFT JOIN gallery_entries AS entry
+          ON entry.locale = gallery.locale
+         AND entry.gallery_id = gallery.gallery_id
+         AND entry.category IN ('image', 'background')
+        LEFT JOIN arts AS art
+          ON art.category = entry.category
+         AND art.art_id = entry.art_id
+        WHERE gallery.locale = ?
+        ORDER BY gallery.gallery_id, entry.position
       |}
 
   let gallery =
@@ -1069,7 +1117,8 @@ let sqlite path =
               summaries
               |> List.find_opt (fun (summary : Model.story_group_summary) ->
                      String.equal summary.group.id id)
-              |> Option.map (fun summary -> summary.preview_art_references)
+              |> Option.map (fun (summary : Model.story_group_summary) ->
+                     summary.preview_art_references)
               |> Option.value ~default:[]
             in
             use (fun (module Db) ->
@@ -1113,10 +1162,39 @@ let sqlite path =
       let galleries locale =
         use (fun (module Db) -> Db.collect_list Query.galleries locale)
         >|= Result.map (fun rows ->
-                List.map
-                  (fun (id, (name, description)) ->
-                    Model.{ id; name; description; entries = [] })
-                  rows)
+                let candidate = function
+                  | Some art_id, (Some category, Some object_key) ->
+                      Some (category, art_id, object_key)
+                  | _ -> None
+                in
+                let rec gather id candidates = function
+                  | (next_id, (_, (_, preview))) :: rest
+                    when String.equal id next_id ->
+                      gather id
+                        (match candidate preview with
+                        | Some value -> value :: candidates
+                        | None -> candidates)
+                        rest
+                  | remaining -> (List.rev candidates, remaining)
+                in
+                let rec decode summaries = function
+                  | [] -> List.rev summaries
+                  | (id, (name, (description, preview))) :: rest ->
+                      let initial =
+                        match candidate preview with Some value -> [ value ] | None -> []
+                      in
+                      let candidates, remaining = gather id initial rest in
+                      let summary =
+                        Model.
+                          {
+                            gallery = { id; name; description; entries = [] };
+                            preview_composition_object_keys =
+                              select_gallery_preview_keys ~seed:id candidates;
+                          }
+                      in
+                      decode (summary :: summaries) remaining
+                in
+                decode [] rows)
       in
       let gallery locale id =
         use (fun (module Db) -> Db.collect_list Query.gallery (locale, id))

@@ -76,8 +76,10 @@ val story_group :
 (** Get one story from the selected locale. *)
 val story : t -> string -> string -> (Model.story, error) result Lwt.t
 
-(** List gallery summaries for the selected locale. *)
-val galleries : t -> string -> (Model.gallery list, error) result Lwt.t
+(** List gallery summaries for the selected locale. Each summary includes up to
+    three stable preview thumbnails. Available illustrations are preferred;
+    backgrounds are used only when no illustration is available. *)
+val galleries : t -> string -> (Model.gallery_summary list, error) result Lwt.t
 
 (** Get one gallery and its ordered entries from the selected locale. *)
 val gallery : t -> string -> string -> (Model.gallery, error) result Lwt.t

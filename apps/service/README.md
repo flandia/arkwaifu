@@ -18,7 +18,7 @@ images, or needs updater/S3 credentials.
 | `GET /api/:locale/story-groups/:id` | One group with previews and all available, deduplicated `artReferences` |
 | `GET /api/:locale/story-groups/:id/stories` | Ordered story summaries with rotating-card previews; `artReferences` remains empty |
 | `GET /api/:locale/stories/:id` | Story metadata and ordered art references |
-| `GET /api/:locale/galleries` | Gallery summaries |
+| `GET /api/:locale/galleries` | Gallery summaries with rotating thumbnail backdrops |
 | `GET /api/:locale/galleries/:id` | Gallery and ordered entries |
 
 Locales are explicit and case-insensitive: `CN`, `EN`, `JP`, `KR`, and `TW`.
@@ -31,6 +31,24 @@ Its group-detail route also returns `200`, with a `null`
 All responses allow public cross-origin reads with
 `Access-Control-Allow-Origin: *`. `OPTIONS` requests return `204` and advertise
 the supported `GET, OPTIONS` methods.
+
+Every story-group payload exposes one of the schema-defined `type` values:
+
+- `main_story`
+- `major_event`
+- `minor_event`
+- `operator_record`
+- `integrated_strategies`
+- `reclamation_algorithm`
+- `others`
+
+These are parallel categories. In particular, `integrated_strategies` contains
+Integrated Strategies monthly-squad stories, `reclamation_algorithm` contains
+Reclamation Algorithm stories, and `others` contains every remaining non-`[uc]`
+story script grouped by source directory. That direct scan intentionally also
+exposes tutorial and control scripts; `[uc]` companion files remain story
+descriptions rather than separate stories. The singular `other` value is not
+part of the schema.
 
 Story-group and story-summary card backgrounds use this shape:
 
@@ -66,6 +84,13 @@ the list contains illustrations only; otherwise it falls back to backgrounds.
 The frontend rotates through this list. `representativeArtReference` remains for
 backward compatibility and is always the first preview, or `null` when the list
 is empty.
+
+Gallery summaries similarly include a compact
+`previewThumbnailContentUrls` array with at most three direct object-store
+thumbnail URLs. Available `image` entries are preferred; `background` entries
+are used only when a gallery has no available illustration. Selection is stable
+and pseudorandom-looking per gallery. The single gallery-index query joins
+entries and art, so producing previews does not add per-gallery queries.
 
 Illustration previews prefer art used by fewer distinct story groups (for group
 cards) or stories (for stage cards). The stable shuffle only breaks rarity

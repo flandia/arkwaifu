@@ -49,7 +49,10 @@ type story = {
   art_references : art_reference list;
 }
 
-(** A summary of one ordered story group. *)
+(** A summary of one ordered story group. [group_type] is one of
+    [main_story], [major_event], [minor_event], [operator_record],
+    [integrated_strategies], [reclamation_algorithm], or [others], as enforced
+    by the updater-owned SQLite schema. *)
 type story_group = {
   id : string;
   name : string;
@@ -98,6 +101,13 @@ type gallery = {
   name : string;
   description : string;
   entries : gallery_entry list;
+}
+
+(** One gallery list row with up to three available composition keys used to
+    derive direct thumbnail object-store URLs. *)
+type gallery_summary = {
+  gallery : gallery;
+  preview_composition_object_keys : string list;
 }
 
 (** One available character variant related to the selected art. *)
@@ -153,8 +163,9 @@ val story_group_detail_json :
 (** Encode one gallery with its entries. *)
 val gallery_json : object_base_url:string -> gallery -> Yojson.Safe.t
 
-(** Encode one gallery without entries. *)
-val gallery_summary_json : gallery -> Yojson.Safe.t
+(** Encode one gallery without entries and with direct thumbnail preview URLs. *)
+val gallery_summary_json :
+  object_base_url:string -> gallery_summary -> Yojson.Safe.t
 
 (** Encode localized context for one art. *)
 val art_context_json :

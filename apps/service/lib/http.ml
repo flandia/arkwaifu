@@ -91,7 +91,10 @@ let routes ~database ~object_base_url =
           with_locale request (fun locale ->
               Database.galleries database locale
               >>= respond (fun galleries ->
-                      `List (List.map Model.gallery_summary_json galleries))));
+                      `List
+                        (List.map
+                           (Model.gallery_summary_json ~object_base_url)
+                           galleries))));
       Dream.get "/api/:locale/galleries/:id" (fun request ->
           with_locale request (fun locale ->
               Database.gallery database locale (Dream.param request "id")

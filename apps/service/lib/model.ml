@@ -83,6 +83,11 @@ type gallery = {
   entries : gallery_entry list;
 }
 
+type gallery_summary = {
+  gallery : gallery;
+  preview_composition_object_keys : string list;
+}
+
 type art_sibling = {
   art_id : string;
   names : string list;
@@ -265,7 +270,17 @@ let gallery_fields (gallery : gallery) =
     ("description", `String gallery.description);
   ]
 
-let gallery_summary_json gallery = `Assoc (gallery_fields gallery)
+let gallery_summary_json ~object_base_url (summary : gallery_summary) =
+  `Assoc
+    (gallery_fields summary.gallery
+    @ [
+        ( "previewThumbnailContentUrls",
+          `List
+            (List.map
+               (fun object_key ->
+                 `String (thumbnail_content_url ~object_base_url object_key))
+               summary.preview_composition_object_keys) );
+      ])
 
 let gallery_json ~object_base_url (gallery : gallery) =
   `Assoc
