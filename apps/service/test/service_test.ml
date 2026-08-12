@@ -545,6 +545,48 @@ let test_memory_art_context_and_rarity () =
     | Error `Not_found -> true
     | _ -> false)
 
+let test_memory_unclassified_arts () =
+  let tracked_story =
+    Model.
+      {
+        story with
+        id = "tracked-story";
+        art_references = [ art_reference "image" "shared" [] ];
+      }
+  in
+  let tracked_gallery =
+    Model.
+      {
+        gallery with
+        id = "tracked-gallery";
+        entries = [ gallery_entry "only" 0 "gallery-only" "item" ];
+      }
+  in
+  let snapshot : Database.snapshot =
+    {
+      Database.empty_snapshot with
+      arts =
+        [
+          picture_art "shared" "image";
+          picture_art "shared" "character";
+          picture_art "gallery-only" "item";
+          picture_art "untracked" "background";
+        ];
+      stories = [ ("EN", [ tracked_story ]) ];
+      galleries = [ ("TW", [ tracked_gallery ]) ];
+    }
+  in
+  let arts =
+    Lwt_main.run (Database.unclassified_arts (Database.memory snapshot))
+    |> require_ok "memory unclassified art"
+  in
+  Alcotest.(check (list (pair string string)))
+    "uses category-qualified identity across all locales"
+    [ ("background", "untracked"); ("character", "shared") ]
+    (List.map
+       (fun (art : Model.unclassified_art) -> (art.category, art.id))
+       arts)
+
 (* This is a reader fixture, not a copy of the updater-owned production schema. *)
 let reader_fixture_schema =
   {|
@@ -659,7 +701,8 @@ let sqlite_schema () =
 
 let sqlite_rows =
   {|
-    INSERT INTO unit_versions VALUES ('art', 'art-v1'), ('CN', 'cn-v1');
+    INSERT INTO unit_versions VALUES
+      ('art', 'art-v1'), ('CN', 'cn-v1'), ('EN', 'en-v1');
     INSERT INTO arts
       VALUES ('event', 'character',
               'ART/art-v1/composition/character/event.png', 42, 10, 20);
@@ -731,7 +774,8 @@ let sqlite_rows =
          NULL, '["安洁莉娜（异格）"]');
     INSERT INTO galleries VALUES
       ('CN', 'gallery', 'Gallery', 'Description'),
-      ('CN', 'background-gallery', 'Background gallery', 'Description');
+      ('CN', 'background-gallery', 'Background gallery', 'Description'),
+      ('EN', 'foreign-gallery', 'Foreign gallery', 'Description');
     INSERT INTO gallery_entries
       VALUES
         ('CN', 'gallery', 0, 'entry', 'Entry', 'Entry description',
@@ -745,7 +789,9 @@ let sqlite_rows =
         ('CN', 'gallery', 4, 'third', 'Third', 'Description', 'third', 'image'),
         ('CN', 'gallery', 5, 'fourth', 'Fourth', 'Description', 'fourth', 'image'),
         ('CN', 'background-gallery', 0, 'background', 'Background',
-         'Description', 'background', 'background');
+         'Description', 'background', 'background'),
+        ('EN', 'foreign-gallery', 0, 'foreign', 'Foreign', 'Description',
+         'event#2$2', 'character');
   |}
 
 let with_sqlite_database callback =
@@ -782,6 +828,17 @@ let test_sqlite_database () =
       Alcotest.(check string) "source character" "character" source.character_id;
       Alcotest.(check string) "source role" "body" source.role;
       Alcotest.(check int) "source width" 11 source.image.width;
+
+      let unclassified =
+        Lwt_main.run (Database.unclassified_arts database)
+        |> require_ok "unclassified art"
+      in
+      Alcotest.(check (list (pair string string)))
+        "unclassified art excludes story and gallery references in every locale"
+        [ ("character", "eventual#1$1") ]
+        (List.map
+           (fun (art : Model.unclassified_art) -> (art.category, art.id))
+           unclassified);
 
       let groups =
         Lwt_main.run (Database.story_groups database "CN") |> require_ok "story groups"
@@ -1046,6 +1103,7 @@ let test_http_story_listing_and_cors () =
           fourth_illustration_art;
           background_art;
           picture_art "event#1$1" "character";
+          picture_art "unclassified" "item";
         ];
       source_arts = [ source_art ];
       story_groups =
@@ -1172,6 +1230,30 @@ let test_http_story_listing_and_cors () =
     "source-art metadata has direct object-store URL"
     "https://objects.example/bucket/ART/26-08-07-10-51-39_26e0fc/source/character/source.png"
     (source_metadata_json |> member "image" |> member "contentUrl" |> to_string);
+
+  let unclassified =
+    Dream.test handler
+      (Dream.request ~method_:`GET ~target:"/api/unclassified-arts" "")
+  in
+  Alcotest.(check int) "unclassified art status" 200
+    (Dream.status unclassified |> Dream.status_to_int);
+  let unclassified_json =
+    Lwt_main.run (Dream.body unclassified) |> Yojson.Safe.from_string |> to_list
+  in
+  Alcotest.(check int) "one unclassified art" 1 (List.length unclassified_json);
+  let unclassified_art = List.hd unclassified_json in
+  Alcotest.(check string) "unclassified ID" "unclassified"
+    (unclassified_art |> member "id" |> to_string);
+  Alcotest.(check string) "unclassified category" "item"
+    (unclassified_art |> member "category" |> to_string);
+  Alcotest.(check string)
+    "unclassified direct thumbnail URL"
+    "https://objects.example/bucket/ART/art-v1/thumbnail/item/unclassified.webp"
+    (unclassified_art |> member "thumbnailContentUrl" |> to_string);
+  Alcotest.(check (list string))
+    "unclassified payload stays compact"
+    [ "id"; "category"; "thumbnailContentUrl" ]
+    (unclassified_art |> to_assoc |> List.map fst);
 
   List.iter
     (fun (label, target) ->
@@ -1362,6 +1444,8 @@ let () =
           Alcotest.test_case "memory lookup" `Quick test_memory_database;
           Alcotest.test_case "memory art context and rarity" `Quick
             test_memory_art_context_and_rarity;
+          Alcotest.test_case "memory unclassified art" `Quick
+            test_memory_unclassified_arts;
           Alcotest.test_case "SQLite queries" `Quick test_sqlite_database;
         ] );
       ( "http",

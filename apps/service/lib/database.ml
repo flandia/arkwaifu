@@ -10,6 +10,7 @@ type t = {
   health : unit -> (unit, error) result Lwt.t;
   art : string -> string -> (Model.art, error) result Lwt.t;
   source_art : string -> (Model.source_art, error) result Lwt.t;
+  unclassified_arts : unit -> (Model.unclassified_art list, error) result Lwt.t;
   art_context :
     string -> string -> string -> (Model.art_context, error) result Lwt.t;
   story_groups : string -> (Model.story_group_summary list, error) result Lwt.t;
@@ -208,6 +209,53 @@ let group_references snapshot locale group_id =
   |> List.concat_map (fun (story : Model.story) -> story.art_references)
   |> available_references snapshot.arts |> unique_references
 
+let art_category_rank = function
+  | "image" -> 0
+  | "background" -> 1
+  | "item" -> 2
+  | "character" -> 3
+  | _ -> 4
+
+let compare_unclassified_art (left : Model.unclassified_art)
+    (right : Model.unclassified_art) =
+  match
+    Int.compare
+      (art_category_rank left.category)
+      (art_category_rank right.category)
+  with
+  | 0 -> String.compare left.id right.id
+  | order -> order
+
+let unclassified_arts_from_snapshot snapshot =
+  let tracked = Hashtbl.create (List.length snapshot.arts) in
+  let track category art_id = Hashtbl.replace tracked (category, art_id) () in
+  snapshot.stories
+  |> List.iter (fun (_, stories) ->
+         stories
+         |> List.iter (fun (story : Model.story) ->
+                story.art_references
+                |> List.iter (fun (reference : Model.art_reference) ->
+                       track reference.category reference.art_id)));
+  snapshot.galleries
+  |> List.iter (fun (_, galleries) ->
+         galleries
+         |> List.iter (fun (gallery : Model.gallery) ->
+                gallery.entries
+                |> List.iter (fun (entry : Model.gallery_entry) ->
+                       track entry.category entry.art_id)));
+  snapshot.arts
+  |> List.filter_map (fun (art : Model.art) ->
+         if Hashtbl.mem tracked (art.category, art.id) then None
+         else
+           Some
+             Model.
+               {
+                 id = art.id;
+                 category = art.category;
+                 composition_object_key = art.image.object_key;
+               })
+  |> List.sort compare_unclassified_art
+
 let memory snapshot =
   {
     close = (fun () -> Lwt.return_unit);
@@ -226,6 +274,8 @@ let memory snapshot =
           (find_by_id id
              (fun (value : Model.source_art) -> value.id)
              snapshot.source_arts));
+    unclassified_arts =
+      (fun () -> Lwt.return (Ok (unclassified_arts_from_snapshot snapshot)));
     art_context =
       (fun locale category id ->
         match
@@ -466,6 +516,34 @@ module Query = struct
         SELECT character_id, role, variant, object_key, byte_size, width, height
         FROM source_arts
         WHERE source_art_id = ?
+      |}
+
+  let unclassified_arts =
+    let row = t2 string (t2 string string) in
+    (unit ->* row)
+      {|
+        SELECT art.category, art.art_id, art.object_key
+        FROM arts AS art
+        WHERE NOT EXISTS (
+          SELECT 1
+          FROM story_art_references AS reference
+          -- This is the schema's complete locale set; spelling it out lets
+          -- SQLite use the (locale, art_id) index for each lookup.
+          WHERE reference.locale IN ('CN', 'EN', 'JP', 'KR', 'TW')
+            AND reference.art_id = art.art_id
+            AND reference.category = art.category
+        )
+          AND (art.category, art.art_id) NOT IN (
+            SELECT category, art_id FROM gallery_entries
+          )
+        ORDER BY CASE art.category
+                   WHEN 'image' THEN 0
+                   WHEN 'background' THEN 1
+                   WHEN 'item' THEN 2
+                   WHEN 'character' THEN 3
+                   ELSE 4
+                 END,
+                 art.art_id
       |}
 
   let art_context_exists =
@@ -898,6 +976,13 @@ let sqlite path =
                   image = { object_key; byte_size; width; height };
                 }
       in
+      let unclassified_arts () =
+        use (fun (module Db) -> Db.collect_list Query.unclassified_arts ())
+        >|= Result.map (fun rows ->
+                rows
+                |> List.map (fun (category, (id, composition_object_key)) ->
+                       Model.{ id; category; composition_object_key }))
+      in
       let names_from_json = function
         | None -> []
         | Some raw ->
@@ -1243,6 +1328,7 @@ let sqlite path =
           health;
           art;
           source_art;
+          unclassified_arts;
           art_context;
           story_groups;
           stories_by_group;
@@ -1416,6 +1502,8 @@ let live ~url ~cache_dir ~poll_seconds ~download_timeout_seconds =
             art = (fun category id -> with_current (fun value -> value.art category id));
             source_art =
               (fun id -> with_current (fun value -> value.source_art id));
+            unclassified_arts =
+              (fun () -> with_current (fun value -> value.unclassified_arts ()));
             art_context =
               (fun locale category id ->
                 with_current (fun value -> value.art_context locale category id));
@@ -1442,6 +1530,7 @@ let close (database : t) = database.close ()
 let health (database : t) = database.health ()
 let art (database : t) category id = database.art category id
 let source_art (database : t) id = database.source_art id
+let unclassified_arts (database : t) = database.unclassified_arts ()
 let art_context (database : t) locale category id =
   database.art_context locale category id
 let story_groups (database : t) locale = database.story_groups locale

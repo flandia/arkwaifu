@@ -25,6 +25,13 @@ type source_art = {
   image : object_metadata;
 }
 
+(** One art indexed by [arts] but absent from every story and gallery. *)
+type unclassified_art = {
+  id : string;
+  category : string;
+  composition_object_key : string;
+}
+
 (** One picture or character referenced by a story. The composition key is
     present only when the logical reference resolves against [arts]. *)
 type art_reference = {
@@ -144,6 +151,10 @@ val art_json : object_base_url:string -> art -> Yojson.Safe.t
 
 (** Encode one original source art record. *)
 val source_art_json : object_base_url:string -> source_art -> Yojson.Safe.t
+
+(** Encode one compact unclassified-art card. *)
+val unclassified_art_json :
+  object_base_url:string -> unclassified_art -> Yojson.Safe.t
 
 (** Encode one story with all art references. *)
 val story_json : object_base_url:string -> story -> Yojson.Safe.t

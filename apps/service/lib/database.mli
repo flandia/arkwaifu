@@ -47,6 +47,11 @@ val art : t -> string -> string -> (Model.art, error) result Lwt.t
 (** Get one original source art record by its logical identifier. *)
 val source_art : t -> string -> (Model.source_art, error) result Lwt.t
 
+(** List every indexed art absent from every locale's stories and galleries.
+    Results are ordered by image, background, item, character, then art ID. *)
+val unclassified_arts :
+  t -> (Model.unclassified_art list, error) result Lwt.t
+
 (** Get localized names, character siblings, and story occurrences for one
     available art. *)
 val art_context :

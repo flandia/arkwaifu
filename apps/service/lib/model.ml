@@ -20,6 +20,12 @@ type source_art = {
   image : object_metadata;
 }
 
+type unclassified_art = {
+  id : string;
+  category : string;
+  composition_object_key : string;
+}
+
 type art_reference = {
   art_id : string;
   kind : string;
@@ -167,6 +173,17 @@ let source_art_json ~object_base_url (source : source_art) =
       ("role", `String source.role);
       ("variant", `String source.variant);
       ("image", object_json ~object_base_url source.image);
+    ]
+
+let unclassified_art_json ~object_base_url (art : unclassified_art) =
+  `Assoc
+    [
+      ("id", `String art.id);
+      ("category", `String art.category);
+      ( "thumbnailContentUrl",
+        `String
+          (thumbnail_content_url ~object_base_url
+             art.composition_object_key) );
     ]
 
 let option_thumbnail_content_url ~object_base_url = function

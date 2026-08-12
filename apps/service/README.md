@@ -13,6 +13,7 @@ images, or needs updater/S3 credentials.
 | `GET /health` | Current local SQLite connectivity |
 | `GET /api/arts/:category/:id` | Selected composition metadata with direct composition and thumbnail object-store URLs |
 | `GET /api/source-arts/:id` | Original body, face, or whole-body layer metadata with a direct object-store URL |
+| `GET /api/unclassified-arts` | Compact cards for indexed art unused by any story or gallery |
 | `GET /api/:locale/arts/:category/:id/context` | Localized names, related character variants, and every story occurrence of an available art |
 | `GET /api/:locale/story-groups` | Ordered story groups with rotating-card preview references |
 | `GET /api/:locale/story-groups/:id` | One group with previews and all available, deduplicated `artReferences` |
@@ -31,6 +32,16 @@ Its group-detail route also returns `200`, with a `null`
 All responses allow public cross-origin reads with
 `Access-Control-Allow-Origin: *`. `OPTIONS` requests return `204` and advertise
 the supported `GET, OPTIONS` methods.
+
+The unclassified-art list is global rather than localized. It computes the set
+difference directly from the current database: an `arts` row is included only
+when its exact `(category, art_id)` identity appears in neither
+`story_art_references` nor `gallery_entries` for any locale. Rows are ordered by
+`image`, `background`, `item`, then `character`, and by ID within each category.
+Each row contains only `id`, `category`, and `thumbnailContentUrl`; the existing
+art-detail route supplies full image metadata when a card is opened. No
+classification table, copied row, schema migration, or locale-specific duplicate
+is introduced. An archive with no such art returns `200` and `[]`.
 
 Every story-group payload exposes one of the schema-defined `type` values:
 
