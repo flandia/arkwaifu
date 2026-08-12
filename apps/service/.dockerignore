@@ -1,3 +1,10 @@
-_build
-*.install
-*.opam.locked
+**
+!Dockerfile
+!arkwaifu_service.opam
+!dune-project
+!lib/
+!lib/**
+!bin/
+!bin/**
+!test/
+!test/**
