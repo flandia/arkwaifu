@@ -144,3 +144,83 @@ def test_current_schema_can_create_a_gallery_without_legacy_metadata(tmp_path: P
 
     assert (gallery.id, gallery.name, gallery.description) == ("act49side", "Event", "Story")
     assert gallery.entries[0].art_id == "70_i01_2"
+
+
+def test_current_schema_uses_cg_source_and_keeps_category_qualified_art(tmp_path: Path):
+    _base(tmp_path)
+    _write(
+        tmp_path,
+        "story_review_meta_table.json",
+        {
+            "actArchiveResData": {
+                "pics": {
+                    "legacy": {
+                        "id": "legacy",
+                        "desc": "Legacy illustration",
+                        "assetPath": "66_i15_3",
+                    }
+                }
+            },
+            "actArchiveData": {
+                "components": {
+                    "act3mainss": {"pic": {"pics": [{"picId": "legacy", "picSortId": 1}]}}
+                }
+            },
+        },
+    )
+    _write(
+        tmp_path,
+        "retro_table.json",
+        {"retroActList": {"retro": {"linkedActId": ["act3mainss"], "name": "Event"}}},
+    )
+    _write(tmp_path, "activity_table.json", {"basicInfo": {"act3mainss": {"name": "Event"}}})
+    _write(
+        tmp_path,
+        "stage_table.json",
+        {
+            "storylineStorySets": {
+                "set": {"relevantActivityId": "act3mainss", "ssData": {"desc": "Story"}}
+            },
+            "cgGalleryGroups": {"set": {"displays": ["backgrounds"]}},
+            "cgGalleryDisplays": {
+                "backgrounds": {
+                    "cgSource": "BACKGROUND",
+                    "cgList": ["66_i15_3", "66_i16_3"],
+                    "displayName": "Chapter",
+                    "displayDesc": "Description",
+                }
+            },
+        },
+    )
+
+    (gallery,) = parse_galleries(tmp_path)
+
+    assert [(entry.art_id, entry.category) for entry in gallery.entries] == [
+        ("66_i15_3", "image"),
+        ("66_i15_3", "background"),
+        ("66_i16_3", "background"),
+    ]
+
+
+def test_unknown_cg_source_preserves_the_image_default(tmp_path: Path):
+    _base(tmp_path)
+    _write(
+        tmp_path,
+        "story_review_meta_table.json",
+        {"actArchiveResData": {"pics": {}}, "actArchiveData": {"components": {}}},
+    )
+    _write(tmp_path, "retro_table.json", {"retroActList": {}})
+    _write(tmp_path, "activity_table.json", {"basicInfo": {"act1": {"name": "Event"}}})
+    _write(
+        tmp_path,
+        "stage_table.json",
+        {
+            "storylineStorySets": {"set": {"relevantActivityId": "act1"}},
+            "cgGalleryGroups": {"set": {"displays": ["display"]}},
+            "cgGalleryDisplays": {"display": {"cgSource": "UNKNOWN", "cgList": ["asset"]}},
+        },
+    )
+
+    (gallery,) = parse_galleries(tmp_path)
+
+    assert gallery.entries[0].category == "image"

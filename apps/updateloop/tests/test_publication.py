@@ -33,6 +33,7 @@ from arkwaifu_updateloop.domain import (
     StoryGroupRecord,
     StoryRecord,
 )
+from arkwaifu_updateloop.thumbnail import make_thumbnail
 from arkwaifu_updateloop.updater import art_object_key
 
 
@@ -269,6 +270,55 @@ async def test_s3_remote_rejects_conflicting_immutable_png(monkeypatch):
         await remote.put_png("ART/v1/composition/image/art.png", artifact)
 
 
+async def test_s3_remote_always_replaces_thumbnail_with_storage_defaults(monkeypatch):
+    first = make_thumbnail(PngArtifact.from_image(Image.new("RGBA", (2, 3), (1, 2, 3, 255))))
+    second = make_thumbnail(PngArtifact.from_image(Image.new("RGBA", (2, 3), (4, 5, 6, 255))))
+
+    class Client:
+        def __init__(self) -> None:
+            self.puts = []
+
+        def head_object(self, **_kwargs):
+            raise AssertionError("mutable thumbnails must not be inspected before replacement")
+
+        def put_object(self, **kwargs):
+            self.puts.append(kwargs)
+
+    client = Client()
+    monkeypatch.setattr(remote_module.boto3, "client", lambda *_args, **_kwargs: client)
+    remote = S3ObjectStore(
+        bucket="bucket",
+        region="region",
+        access_key_id="access",
+        secret_access_key="secret",
+    )
+    key = "ART/v1/thumbnail/image/art.webp"
+
+    await remote.put_thumbnail(key, first)
+    await remote.put_thumbnail(key, second)
+
+    assert [put["Body"] for put in client.puts] == [first, second]
+    assert all(put["ContentType"] == "image/webp" for put in client.puts)
+    assert all("CacheControl" not in put for put in client.puts)
+    assert all("Metadata" not in put for put in client.puts)
+    assert [put["ContentLength"] for put in client.puts] == [
+        len(first),
+        len(second),
+    ]
+
+
+async def test_memory_remote_replaces_mutable_thumbnail():
+    remote = MemoryObjectStore()
+    key = "ART/v1/thumbnail/image/art.webp"
+    first = make_thumbnail(PngArtifact.from_image(Image.new("RGBA", (2, 3), (1, 2, 3, 255))))
+    second = make_thumbnail(PngArtifact.from_image(Image.new("RGBA", (2, 3), (4, 5, 6, 255))))
+
+    await remote.put_thumbnail(key, first)
+    await remote.put_thumbnail(key, second)
+
+    assert remote.objects[key] == second
+
+
 async def test_memory_remote_does_not_replace_versioned_png():
     remote = MemoryObjectStore()
     key = "ART/v1/composition/image/art.png"
@@ -383,6 +433,50 @@ async def test_equal_res_version_is_a_noop_without_calling_builder():
     assert remote.database == original
 
 
+async def test_missing_performance_index_is_published_without_rebuilding(tmp_path):
+    class CountingRemote(MemoryObjectStore):
+        def __init__(self) -> None:
+            super().__init__()
+            self.pushes = 0
+
+        async def push_database(self, source):
+            self.pushes += 1
+            await super().push_database(source)
+
+    legacy_path = tmp_path / "legacy.sqlite3"
+    initialize_or_validate(legacy_path)
+    connection = sqlite3.connect(legacy_path)
+    try:
+        connection.execute("INSERT INTO unit_versions VALUES ('art', 'v1')")
+        connection.execute("DROP INDEX story_art_references_by_art")
+        connection.commit()
+    finally:
+        connection.close()
+
+    remote = CountingRemote()
+    remote.database = legacy_path.read_bytes()
+    called = False
+
+    async def should_not_build(_active: str | None, _force: bool):
+        nonlocal called
+        called = True
+        return art_manifest("v1", "unused")
+
+    result = await Updateloop(remote).run([Update("art", "v1", should_not_build)])
+
+    assert result == (UpdateResult("art", "v1", "unchanged"),)
+    assert called is False
+    assert remote.pushes == 1
+    with database_connection(remote, tmp_path) as published:
+        assert [
+            row[2] for row in published.execute("PRAGMA index_info(story_art_references_by_art)")
+        ] == ["locale", "art_id"]
+
+    await Updateloop(remote).run([Update("art", "v1", should_not_build)])
+    assert called is False
+    assert remote.pushes == 1
+
+
 async def test_complete_art_builds_at_current_version_and_pushes_database_once(
     tmp_path,
     caplog,
@@ -427,13 +521,14 @@ async def test_complete_art_builds_at_current_version_and_pushes_database_once(
     records = [record for record in caplog.records if hasattr(record, "action")]
     assert (records[0].action, records[0].status) == ("apply", "done")
     assert (records[-1].action, records[-1].status) == ("publish", "done")
-    assert [record.action for record in records].count("upload") == 2
+    assert [record.action for record in records].count("thumbnail") == 2
+    assert [record.action for record in records].count("upload") == 4
     assert [record.status for record in records if record.action in {"apply", "publish"}] == [
         "done",
         "done",
     ]
-    uploads = [record for record in records if record.action == "upload"]
-    assert sorted((record.current, record.total) for record in uploads) == [(1, 2), (2, 2)]
+    thumbnails = [record for record in records if record.action == "thumbnail"]
+    assert sorted((record.current, record.total) for record in thumbnails) == [(1, 2), (2, 2)]
     assert all(record.res_version == "v3" for record in records)
     with database_connection(remote, tmp_path) as connection:
         assert {tuple(row) for row in connection.execute("SELECT category, art_id FROM arts")} == {
@@ -446,7 +541,9 @@ async def test_complete_art_builds_at_current_version_and_pushes_database_once(
         }
     assert set(remote.objects) >= {
         "ART/v1/composition/background/historical.png",
+        "ART/v1/thumbnail/background/historical.webp",
         "ART/v3/composition/image/current.png",
+        "ART/v3/thumbnail/image/current.webp",
     }
 
 
@@ -709,7 +806,50 @@ async def test_final_artifact_batch_has_bounded_concurrency_and_one_upload_per_w
     assert remote.maximum_active == 2
     assert len(remote.keys) == 5
     assert len(set(remote.keys)) == 5
-    assert len(remote.objects) == 5
+    assert len(remote.objects) == 10
+
+
+async def test_thumbnail_workers_generate_then_upload_one_image_at_a_time(monkeypatch):
+    class GatedRemote(MemoryObjectStore):
+        def __init__(self) -> None:
+            super().__init__()
+            self.started = asyncio.Event()
+            self.release = asyncio.Event()
+            self.active = 0
+
+        async def put_thumbnail(self, key, thumbnail):
+            self.active += 1
+            if self.active == 2:
+                self.started.set()
+            await self.release.wait()
+            await super().put_thumbnail(key, thumbnail)
+
+    remote = GatedRemote()
+    manifest = ArtManifest(
+        "v1",
+        tuple(art_manifest("v1", f"winner-{index}").arts[0] for index in range(5)),
+        (),
+    )
+    generated = 0
+    real_make_thumbnail = updater_module.make_thumbnail
+
+    def counting_make_thumbnail(source):
+        nonlocal generated
+        generated += 1
+        return real_make_thumbnail(source)
+
+    monkeypatch.setattr(updater_module, "_THUMBNAIL_WORKERS", 2)
+    monkeypatch.setattr(updater_module, "make_thumbnail", counting_make_thumbnail)
+    run = asyncio.create_task(Updateloop(remote).run([request(manifest)]))
+    await asyncio.wait_for(remote.started.wait(), timeout=1)
+
+    assert generated == 2
+    assert remote.database is None
+
+    remote.release.set()
+    await asyncio.wait_for(run, timeout=1)
+
+    assert generated == 5
 
 
 async def test_batch_upload_failure_prevents_database_publication():
@@ -726,6 +866,102 @@ async def test_batch_upload_failure_prevents_database_publication():
     with pytest.raises(RuntimeError, match="batch upload failed"):
         await Updateloop(remote).run([Update("art", "v1", build)])
 
+    assert remote.database is None
+
+
+async def test_thumbnail_upload_finishes_before_database_publication():
+    class RecordingRemote(MemoryObjectStore):
+        def __init__(self) -> None:
+            super().__init__()
+            self.events = []
+
+        async def put_png(self, key, artifact):
+            self.events.append(("png", key))
+            await super().put_png(key, artifact)
+
+        async def put_thumbnail(self, key, thumbnail):
+            self.events.append(("thumbnail", key))
+            await super().put_thumbnail(key, thumbnail)
+
+        async def push_database(self, source):
+            self.events.append(("database", DATABASE_OBJECT_KEY))
+            await super().push_database(source)
+
+    remote = RecordingRemote()
+
+    await Updateloop(remote).run([request(art_manifest("v1", "candidate"))])
+
+    assert remote.events == [
+        ("png", "ART/v1/composition/image/candidate.png"),
+        ("thumbnail", "ART/v1/thumbnail/image/candidate.webp"),
+        ("database", DATABASE_OBJECT_KEY),
+    ]
+
+
+async def test_thumbnail_upload_failure_prevents_database_publication():
+    class FailingRemote(MemoryObjectStore):
+        async def put_thumbnail(self, _key, _thumbnail):
+            raise RuntimeError("thumbnail upload failed")
+
+    remote = FailingRemote()
+
+    with pytest.raises(RuntimeError, match="thumbnail upload failed"):
+        await Updateloop(remote).run([request(art_manifest("v1", "candidate"))])
+
+    assert remote.database is None
+    assert "ART/v1/composition/image/candidate.png" in remote.objects
+
+
+async def test_database_push_failure_can_retry_mutable_thumbnail_publication():
+    class FailOnceRemote(MemoryObjectStore):
+        def __init__(self) -> None:
+            super().__init__()
+            self.thumbnail_puts = 0
+            self.database_pushes = 0
+
+        async def put_thumbnail(self, key, content):
+            self.thumbnail_puts += 1
+            await super().put_thumbnail(key, content)
+
+        async def push_database(self, source):
+            self.database_pushes += 1
+            if self.database_pushes == 1:
+                raise RuntimeError("database push failed")
+            await super().push_database(source)
+
+    remote = FailOnceRemote()
+    update = request(art_manifest("v1", "candidate"))
+
+    with pytest.raises(RuntimeError, match="database push failed"):
+        await Updateloop(remote).run([update])
+    result = await Updateloop(remote).run([update])
+
+    assert result == (UpdateResult("art", "v1", "updated"),)
+    assert remote.thumbnail_puts == 2
+    assert remote.database is not None
+
+
+async def test_thumbnail_failure_logs_only_terminal_status_and_publishes_nothing(
+    monkeypatch,
+    caplog,
+):
+    def fail(_source):
+        raise RuntimeError("thumbnail generation failed")
+
+    monkeypatch.setattr(updater_module, "make_thumbnail", fail)
+    remote = MemoryObjectStore()
+    caplog.set_level("INFO", logger=updater_module.__name__)
+
+    with pytest.raises(RuntimeError, match="thumbnail generation failed"):
+        await Updateloop(remote).run([request(art_manifest("v1", "candidate"))])
+
+    records = [
+        record for record in caplog.records if getattr(record, "action", None) == "thumbnail"
+    ]
+    assert [(record.status, record.current, record.total) for record in records] == [
+        ("failed", 1, 1)
+    ]
+    assert set(remote.objects) == {"ART/v1/composition/image/candidate.png"}
     assert remote.database is None
 
 
@@ -891,7 +1127,7 @@ def test_schema_rejects_non_string_story_reference_names(tmp_path):
     connection = sqlite3.connect(path)
     try:
         connection.execute("INSERT INTO unit_versions VALUES ('EN', 'en-v1')")
-        connection.execute("INSERT INTO story_groups VALUES ('EN', 'group', 'Group', 'other', 0)")
+        connection.execute("INSERT INTO story_groups VALUES ('EN', 'group', 'Group', 'others', 0)")
         connection.execute(
             """
             INSERT INTO stories VALUES

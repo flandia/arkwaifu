@@ -1,7 +1,7 @@
 """Coordinate remote preparation and publication of Arkwaifu data.
 
 The operation has three parts, following the previous Go update loop: pull and
-prepare the upstream data, convert it into the database and PNG forms consumed
+prepare the upstream data, convert it into the database and image forms consumed
 by the reader, and submit the resulting objects. Preparation may use cached
 intermediate files, but one database overwrite is the metadata visibility point.
 """
@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import tempfile
 import time
 from collections.abc import Awaitable, Callable, Sequence
@@ -27,6 +28,7 @@ from .database import (
 )
 from .domain import ArtManifest, LocaleManifest, PngImage
 from .object_store import ObjectStore
+from .thumbnail import make_thumbnail, thumbnail_object_key
 
 UpdateUnit = Literal["art", "CN", "EN", "JP", "KR", "TW"]
 Manifest = ArtManifest | LocaleManifest
@@ -36,6 +38,7 @@ UpdateStatus = Literal["updated", "unchanged"]
 _UNITS = frozenset({"art", "CN", "EN", "JP", "KR", "TW"})
 _INCOMPLETE_UPSTREAM_LOGGER = logging.getLogger("arkwaifu_updateloop.incomplete_upstream")
 _LOGGER = logging.getLogger(__name__)
+_THUMBNAIL_WORKERS = os.cpu_count() or 1
 
 
 @dataclass(frozen=True, slots=True)
@@ -150,7 +153,7 @@ def art_object_key(
 
 
 class Updateloop:
-    """Keep the remote Arkwaifu database and its PNG objects up-to-date."""
+    """Keep the remote Arkwaifu database and its art objects up-to-date."""
 
     def __init__(self, remote: ObjectStore, *, upload_workers: int = 16) -> None:
         if upload_workers <= 0:
@@ -167,10 +170,11 @@ class Updateloop:
         """Prepare and publish all requested changes as one operation.
 
         Builders run concurrently. Successful manifests enter one local SQLite
-        transaction, final PNG winners upload with bounded concurrency, and the
-        database uploads last. A failure before the final upload leaves the
-        previously published database current, although completed versioned PNG
-        creations can remain unreferenced.
+        transaction, immutable PNG winners and derived thumbnails upload with
+        bounded concurrency, and the database uploads last. A failure before
+        the final upload leaves the previously published database current,
+        although PNG creations can remain unreferenced and mutable thumbnails
+        can be partially refreshed.
         """
 
         self._validate_requests(requests)
@@ -184,7 +188,9 @@ class Updateloop:
         with tempfile.TemporaryDirectory(prefix="arkwaifu-database-") as temporary:
             database_path = Path(temporary) / "arkwaifu.sqlite3"
             await await_owned(self._remote.pull_database(database_path))
-            await await_owned(asyncio.to_thread(initialize_or_validate, database_path))
+            database_changed = await await_owned(
+                asyncio.to_thread(initialize_or_validate, database_path)
+            )
             active_versions = await await_owned(asyncio.to_thread(read_versions, database_path))
 
             changed_requests = [
@@ -195,6 +201,8 @@ class Updateloop:
                 or request.complete
             ]
             if not changed_requests:
+                if database_changed:
+                    await await_owned(self._remote.push_database(database_path))
                 return tuple(
                     UpdateResult(request.unit, request.res_version, "unchanged")
                     for request in requests
@@ -243,6 +251,20 @@ class Updateloop:
                 for key, artifact in candidate_uploads
                 if key in committed_object_keys
             )
+            if art_manifest is None:
+                thumbnail_candidates = ()
+            else:
+                thumbnail_candidates = tuple(
+                    (
+                        thumbnail_object_key(
+                            res_version=art.res_version or art_manifest.upstream_version,
+                            category=art.category,
+                            identifier=art.id,
+                        ),
+                        art.image,
+                    )
+                    for art in art_manifest.arts
+                )
             missing = await await_owned(
                 asyncio.to_thread(find_missing_art_references, database_path)
             )
@@ -254,6 +276,10 @@ class Updateloop:
                 )
             await self._upload_artifacts(
                 referenced_uploads,
+                version=art_manifest.upstream_version if art_manifest is not None else None,
+            )
+            await self._publish_thumbnails(
+                thumbnail_candidates,
                 version=art_manifest.upstream_version if art_manifest is not None else None,
             )
             publish_started = time.perf_counter()
@@ -410,6 +436,99 @@ class Updateloop:
         tasks = [
             asyncio.create_task(worker(), name=f"batch-art-upload-{index}")
             for index in range(min(self._upload_workers, len(uploads)))
+        ]
+        batch = asyncio.gather(*tasks)
+        try:
+            await asyncio.shield(batch)
+        except asyncio.CancelledError:
+            stop.set()
+            await await_owned(batch)
+            raise
+        if first_error is not None:
+            raise first_error
+
+    async def _publish_thumbnails(
+        self,
+        candidates: Sequence[tuple[str, PngImage]],
+        *,
+        version: str | None,
+    ) -> None:
+        """Render and upload final winners without retaining the complete batch."""
+
+        if not candidates:
+            return
+        iterator = iter(enumerate(candidates, start=1))
+        total = len(candidates)
+        stop = asyncio.Event()
+        first_error: Exception | None = None
+
+        async def worker() -> None:
+            nonlocal first_error
+            while not stop.is_set():
+                try:
+                    current, (key, source) = next(iterator)
+                except StopIteration:
+                    return
+                started = time.perf_counter()
+                try:
+                    thumbnail = await asyncio.to_thread(make_thumbnail, source)
+                except Exception as error:  # noqa: BLE001 - image decoder errors are opaque
+                    if version is not None:
+                        _log_art_action(
+                            "thumbnail",
+                            version=version,
+                            resource=key,
+                            current=current,
+                            total=total,
+                            status="failed",
+                            elapsed_seconds=time.perf_counter() - started,
+                        )
+                    if first_error is None:
+                        first_error = error
+                    stop.set()
+                    return
+                if version is not None:
+                    _log_art_action(
+                        "thumbnail",
+                        version=version,
+                        resource=key,
+                        current=current,
+                        total=total,
+                        status="done",
+                        elapsed_seconds=time.perf_counter() - started,
+                    )
+                started = time.perf_counter()
+                try:
+                    await self._remote.put_thumbnail(key, thumbnail)
+                except Exception as error:  # noqa: BLE001 - adapter errors are opaque
+                    if version is not None:
+                        _log_art_action(
+                            "upload",
+                            version=version,
+                            resource=key,
+                            current=current,
+                            total=total,
+                            status="failed",
+                            elapsed_seconds=time.perf_counter() - started,
+                        )
+                    if first_error is None:
+                        first_error = error
+                    stop.set()
+                    return
+                if version is not None:
+                    _log_art_action(
+                        "upload",
+                        version=version,
+                        resource=key,
+                        current=current,
+                        total=total,
+                        status="done",
+                        elapsed_seconds=time.perf_counter() - started,
+                    )
+
+        tasks = [
+            asyncio.create_task(worker(), name=f"thumbnail-publish-{index}")
+            for index in range(min(_THUMBNAIL_WORKERS, len(candidates)))
         ]
         batch = asyncio.gather(*tasks)
         try:

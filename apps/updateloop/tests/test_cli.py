@@ -1,5 +1,6 @@
 import json
 import logging
+import os
 
 import pytest
 
@@ -8,6 +9,7 @@ from arkwaifu_updateloop.cli import (
     _JsonFormatter,
     _parser,
     _validate_arguments,
+    main,
 )
 
 
@@ -75,6 +77,37 @@ def test_no_cache_flag_is_available_on_run():
 
     assert args.units == ["art"]
     assert args.no_cache is True
+
+
+def test_main_loads_dotenv_without_overriding_process_environment(monkeypatch, tmp_path):
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / ".env").write_text(
+        "ARKWAIFU_S3_BUCKET=file-bucket\n"
+        "ARKWAIFU_S3_ACCESS_KEY_ID=file-access\n"
+        "ARKWAIFU_DOWNLOAD_WORKERS=3\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("ARKWAIFU_S3_BUCKET", "process-bucket")
+    for name in ("ARKWAIFU_S3_ACCESS_KEY_ID", "ARKWAIFU_DOWNLOAD_WORKERS"):
+        monkeypatch.delenv(name, raising=False)
+    observed = []
+
+    async def capture(*_args, **_kwargs):
+        observed.append(
+            (
+                os.environ["ARKWAIFU_S3_BUCKET"],
+                os.environ["ARKWAIFU_S3_ACCESS_KEY_ID"],
+                os.environ["ARKWAIFU_DOWNLOAD_WORKERS"],
+            )
+        )
+        return 0
+
+    monkeypatch.setattr("arkwaifu_updateloop.cli._run", capture)
+
+    with pytest.raises(SystemExit, match="0"):
+        main(["run", "CN"])
+
+    assert observed == [("process-bucket", "file-access", "3")]
 
 
 def test_complete_is_available_for_exactly_the_art_unit():

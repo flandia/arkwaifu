@@ -25,6 +25,11 @@ def _write_story(root: Path, relative: str, value: str) -> None:
     path.write_text(value, encoding="utf-8")
 
 
+def _write_empty_story_catalogs(root: Path) -> None:
+    _write_json(root, "excel/roguelike_topic_table.json", {"topics": {}, "details": {}})
+    _write_json(root, "excel/sandbox_perm_table.json", {"basicInfo": {}, "detail": {}})
+
+
 def test_directive_parameters_keep_quoted_commas():
     (directive,) = parse_directives('[image(image="event",label="one,two")]')
 
@@ -69,6 +74,7 @@ def test_character_identifier_defaults(raw: str, expected: str):
 
 
 def test_story_parser_preserves_order_metadata_and_character_names(tmp_path: Path):
+    _write_empty_story_catalogs(tmp_path)
     _write_json(
         tmp_path,
         "excel/story_review_table.json",
@@ -117,6 +123,8 @@ def test_story_parser_preserves_order_metadata_and_character_names(tmp_path: Pat
         '[name="Doctor"] \n'
         '[charslot(name="left",posfrom="0,0",posto="-200,0")] \n'
         '[name="Kal\'tsit"] \n'
+        '[character(name="CHAR_TEST#2",focus="1")] \n'
+        '[name="Closure"] \n'
         '[charslot(slot="1",name="char_empty")] \n'
         '[name="Nobody"] \n'
         '[showitem(image="ITEM_ONE")] ',
@@ -136,10 +144,11 @@ def test_story_parser_preserves_order_metadata_and_character_names(tmp_path: Pat
     ]
     assert story.art_references[1].title == "Title"
     assert story.art_references[1].subtitle == "Subtitle"
-    assert story.art_references[3].names == ("Amiya", "Doctor", "Kal'tsit")
+    assert story.art_references[3].names == ("Amiya", "Doctor", "Kal'tsit", "Closure")
 
 
 def test_story_parser_resolves_character_variables(tmp_path: Path):
+    _write_empty_story_catalogs(tmp_path)
     _write_json(
         tmp_path,
         "excel/story_review_table.json",
@@ -178,6 +187,7 @@ def test_story_parser_resolves_character_variables(tmp_path: Path):
 
 
 def test_missing_optional_info_is_empty(tmp_path: Path):
+    _write_empty_story_catalogs(tmp_path)
     _write_json(
         tmp_path,
         "excel/story_review_table.json",
@@ -206,6 +216,7 @@ def test_missing_optional_info_is_empty(tmp_path: Path):
 
 
 def test_missing_story_text_warns_and_keeps_story(tmp_path: Path, caplog):
+    _write_empty_story_catalogs(tmp_path)
     _write_json(
         tmp_path,
         "excel/story_review_table.json",
@@ -234,3 +245,266 @@ def test_missing_story_text_warns_and_keeps_story(tmp_path: Path, caplog):
     assert story.art_references == ()
     assert "story_id=story" in caplog.text
     assert "gamedata/story/missing/story.txt" in caplog.text
+
+
+def test_story_parser_classifies_records_endings_reclamation_and_others(tmp_path: Path):
+    _write_json(
+        tmp_path,
+        "excel/story_review_table.json",
+        {
+            "record": {
+                "id": "record",
+                "name": "Operator Record",
+                "actType": "NONE",
+                "infoUnlockDatas": [
+                    {
+                        "storyId": "record-story",
+                        "storyTxt": "obt/memory/record",
+                        "storyInfo": "obt/memory/record",
+                        "avgTag": "Interlude",
+                    },
+                    {
+                        "storyId": "record-sandbox-story",
+                        "storyTxt": "obt/sandboxperm/sandbox_1/reviewed",
+                        "storyInfo": "",
+                        "avgTag": "Interlude",
+                    },
+                ],
+            }
+        },
+    )
+    _write_json(
+        tmp_path,
+        "excel/story_review_meta_table.json",
+        {
+            "actArchiveResData": {
+                "pics": {},
+                "avgs": {
+                    "intro": {
+                        "id": "intro",
+                        "desc": "Opening",
+                        "contentPath": "Obt/Roguelike/RO1/level_rogue1_entry",
+                    },
+                    "ending_2": {
+                        "id": "ending_2",
+                        "desc": "Second ending",
+                        "contentPath": "Obt/Roguelike/RO1/level_rogue1_ending_2",
+                    },
+                    "ending_1": {
+                        "id": "ending_1",
+                        "desc": "First ending",
+                        "rawBrief": "Ending summary",
+                        "contentPath": "Obt/Roguelike/RO1/level_rogue1_ending_1",
+                    },
+                },
+            }
+        },
+    )
+    _write_json(
+        tmp_path,
+        "excel/roguelike_topic_table.json",
+        {
+            "topics": {
+                "rogue_2": {"id": "rogue_2", "name": "Second Theme", "sort": 2},
+                "rogue_1": {"id": "rogue_1", "name": "Theme", "sort": 1},
+            },
+            "details": {
+                "rogue_1": {
+                    "monthSquad": {"squad": {"chatId": "month_chat_1"}},
+                    "archiveComp": {
+                        "chat": {
+                            "chat": {
+                                "month_chat_1": {
+                                    "chatItemList": [
+                                        {
+                                            "chatStoryId": "obt/rogue/month/first",
+                                        }
+                                    ],
+                                },
+                                "unrelated_chat": {
+                                    "chatItemList": [
+                                        {
+                                            "chatStoryId": "obt/rogue/month/unrelated",
+                                        }
+                                    ],
+                                },
+                            }
+                        }
+                    },
+                },
+                "rogue_2": {
+                    "monthSquad": {"squad": {"chatId": "second_chat"}},
+                    "archiveComp": {
+                        "chat": {
+                            "chat": {
+                                "second_chat": {
+                                    "chatItemList": [
+                                        {
+                                            "chatStoryId": "obt/rogue/month/second_theme",
+                                        }
+                                    ],
+                                }
+                            }
+                        },
+                        "endbook": {
+                            "endbook": {
+                                "ending_2": {
+                                    "sortId": 2,
+                                    "endingId": "rogue-2-ending-2",
+                                    "title": "Later ending",
+                                    "avgId": "Obt/Roguelike/RO2/level_rogue2_ending_2",
+                                },
+                                "ending_1": {
+                                    "sortId": 1,
+                                    "endingId": "rogue-2-ending-1",
+                                    "title": "Earlier ending",
+                                    "avgId": "Obt/Roguelike/RO2/level_rogue2_ending_1",
+                                },
+                            }
+                        },
+                    },
+                },
+            },
+        },
+    )
+    _write_json(
+        tmp_path,
+        "excel/sandbox_perm_table.json",
+        {
+            "basicInfo": {
+                "sandbox_1": {
+                    "topicId": "sandbox_1",
+                    "topicTemplate": "SANDBOX_V2",
+                    "topicName": "Reclamation",
+                    "sortId": 1,
+                }
+            },
+            "detail": {
+                "SANDBOX_V2": {
+                    "sandbox_1": {
+                        "archiveQuestData": {
+                            "story_1": {
+                                "sortId": 1,
+                                "desc": "Chapter description",
+                                "avgDataList": [
+                                    {
+                                        "avgId": "obt/sandboxperm/sandbox_1/entry",
+                                        "avgName": "Arrival",
+                                    },
+                                    {
+                                        "avgId": "obt/sandboxperm/sandbox_1/visual",
+                                        "avgName": "Visible story",
+                                    },
+                                ],
+                            }
+                        }
+                    }
+                }
+            },
+        },
+    )
+    _write_story(tmp_path, "[uc]obt/memory/record.txt", "Record summary")
+    _write_story(tmp_path, "[uc]orphan.txt", "Not a playable story")
+    _write_story(tmp_path, "obt/memory/record.txt", '[image(image="record")]')
+    _write_story(tmp_path, "obt/rogue/month/first.txt", '[image(image="monthly")]')
+    _write_story(tmp_path, "obt/rogue/month/second_theme.txt", "")
+    _write_story(
+        tmp_path,
+        "obt/rogue/month/unrelated.txt",
+        '[image(image="unrelated")]',
+    )
+    _write_story(
+        tmp_path,
+        "obt/roguelike/ro1/level_rogue1_entry.txt",
+        '[background(image="opening")]',
+    )
+    _write_story(
+        tmp_path,
+        "obt/roguelike/ro1/ref/ref_rogue_1.txt",
+        '[image(image="preloaded-only")]',
+    )
+    _write_story(
+        tmp_path,
+        "obt/roguelike/ro1/level_rogue1_ending_1.txt",
+        '[background(image="ending-one")]',
+    )
+    _write_story(
+        tmp_path,
+        "obt/roguelike/ro1/level_rogue1_ending_2.txt",
+        '[character(name="ending-two")]',
+    )
+    _write_story(
+        tmp_path,
+        "obt/roguelike/ro2/level_rogue2_ending_1.txt",
+        '[image(image="second-theme-one")]',
+    )
+    _write_story(
+        tmp_path,
+        "obt/roguelike/ro2/level_rogue2_ending_2.txt",
+        '[image(image="second-theme-two")]',
+    )
+    _write_story(
+        tmp_path,
+        "obt/roguelike/ro2/level_rogue2_entry.txt",
+        '[background(image="second-theme-opening")]',
+    )
+    _write_story(tmp_path, "obt/sandboxperm/sandbox_1/entry.txt", "")
+    _write_story(
+        tmp_path,
+        "obt/sandboxperm/sandbox_1/visual.txt",
+        '[background(image="reclamation")]',
+    )
+    _write_story(tmp_path, "obt/sandboxperm/sandbox_1/reviewed.txt", "")
+    _write_story(
+        tmp_path,
+        "obt/sandboxperm/sandbox_1/traininglevel/tutorial.txt",
+        "",
+    )
+    _write_story(tmp_path, "obt/sandboxperm/sandbox_1/uiavg/help.txt", "")
+    _write_story(
+        tmp_path,
+        "obt/sandboxperm/sandbox_1/sandbox_1_challenge_mode_guide.txt",
+        "",
+    )
+    _write_story(tmp_path, "misc/free.txt", '[background(image="free")]')
+
+    groups = parse_story_groups(tmp_path)
+    by_type = {
+        group_type: [group for group in groups if group.group_type == group_type]
+        for group_type in {group.group_type for group in groups}
+    }
+
+    (record,) = by_type["operator_record"]
+    assert record.stories[0].info == "Record summary"
+    assert [story.id for story in record.stories] == [
+        "record-story",
+        "record-sandbox-story",
+    ]
+    endings = by_type["integrated_strategies"]
+    assert [group.name for group in endings] == ["Theme", "Second Theme"]
+    assert [(story.code, story.name, story.info) for story in endings[0].stories] == [
+        ("ending_1", "First ending", "Ending summary"),
+        ("ending_2", "Second ending", ""),
+    ]
+    assert [(story.code, story.name) for story in endings[1].stories] == [
+        ("rogue-2-ending-1", "Earlier ending"),
+        ("rogue-2-ending-2", "Later ending"),
+    ]
+    (reclamation,) = by_type["reclamation_algorithm"]
+    assert reclamation.name == "Reclamation"
+    assert [(story.name, story.info) for story in reclamation.stories] == [
+        ("Visible story", "Chapter description")
+    ]
+
+    other_ids = {story.id for group in by_type["others"] for story in group.stories}
+    assert other_ids == {
+        "others:misc:free",
+        "others:obt:rogue:month:unrelated",
+        "others:obt:sandboxperm:sandbox_1:sandbox_1_challenge_mode_guide",
+        "others:obt:sandboxperm:sandbox_1:traininglevel:tutorial",
+        "others:obt:sandboxperm:sandbox_1:uiavg:help",
+    }
+    assert not any(story_id.startswith("others:obt:roguelike:ro1:") for story_id in other_ids)
+    assert not any(story_id.startswith("others:obt:roguelike:ro2:") for story_id in other_ids)
+    all_story_ids = [story.id for group in groups for story in group.stories]
+    assert len(all_story_ids) == len(set(all_story_ids))

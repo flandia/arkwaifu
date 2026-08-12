@@ -11,6 +11,8 @@ from pathlib import Path
 from .domain import ArtManifest, LocaleManifest
 
 SCHEMA_VERSION = 2
+_ART_REFERENCE_INDEX = "story_art_references_by_art"
+_ART_REFERENCE_INDEX_COLUMNS = ("locale", "art_id")
 
 
 def _connect(path: Path) -> sqlite3.Connection:
@@ -25,17 +27,40 @@ def _read_schema() -> str:
     return files("arkwaifu_updateloop").joinpath("arkwaifu.sql").read_text(encoding="utf-8")
 
 
-def initialize_or_validate(path: Path) -> None:
-    """Create a missing database or require the supported schema version."""
+def initialize_or_validate(path: Path) -> bool:
+    """Prepare a supported database and report whether it must be republished."""
 
     path.parent.mkdir(parents=True, exist_ok=True)
-    if not path.exists():
+    created = not path.exists()
+    if created:
         connection = _connect(path)
         try:
             connection.executescript(_read_schema())
         finally:
             connection.close()
     validate_schema_version(path)
+    return created or _ensure_performance_indexes(path)
+
+
+def _ensure_performance_indexes(path: Path) -> bool:
+    connection = _connect(path)
+    try:
+        columns = tuple(
+            str(row[2]) for row in connection.execute(f"PRAGMA index_info({_ART_REFERENCE_INDEX})")
+        )
+        if columns == _ART_REFERENCE_INDEX_COLUMNS:
+            return False
+        if columns:
+            raise ValueError(
+                f"SQLite index {_ART_REFERENCE_INDEX} has columns {columns}, "
+                f"expected {_ART_REFERENCE_INDEX_COLUMNS}"
+            )
+        connection.execute(
+            f"CREATE INDEX {_ART_REFERENCE_INDEX} ON story_art_references (locale, art_id)"
+        )
+        return True
+    finally:
+        connection.close()
 
 
 def validate_schema_version(path: Path) -> None:

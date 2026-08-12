@@ -1,4 +1,4 @@
-"""Store the Arkwaifu database and PNG objects in S3-compatible storage."""
+"""Store the Arkwaifu database and art objects in S3-compatible storage."""
 
 from __future__ import annotations
 
@@ -17,6 +17,7 @@ DATABASE_OBJECT_KEY = "arkwaifu.sqlite3"
 _DATABASE_CONTENT_TYPE = "application/vnd.sqlite3"
 _PNG_CONTENT_TYPE = "image/png"
 _PNG_CACHE_CONTROL = "public, max-age=31536000, immutable"
+_THUMBNAIL_CONTENT_TYPE = "image/webp"
 _MAX_POOL_CONNECTIONS = 16
 
 
@@ -34,7 +35,7 @@ def _is_missing(error: ClientError) -> bool:
 
 
 class ObjectStore(Protocol):
-    """Pull and push the database and its PNG objects."""
+    """Pull and push the database and its art objects."""
 
     async def pull_database(self, destination: Path) -> bool:
         """Download the current database, returning false when it does not exist."""
@@ -48,9 +49,13 @@ class ObjectStore(Protocol):
         """Create one immutable composition or source PNG object."""
         ...
 
+    async def put_thumbnail(self, key: str, content: bytes) -> None:
+        """Replace one derived WebP thumbnail object."""
+        ...
+
 
 class S3ObjectStore:
-    """Store database and PNG objects in one S3-compatible bucket.
+    """Store database and art objects in one S3-compatible bucket.
 
     The bucket must have versioning enabled before this adapter is used.
     Versioning retains overwritten databases; the updater deliberately does
@@ -137,6 +142,20 @@ class S3ObjectStore:
             with artifact.path.open("rb") as content:
                 self._client.put_object(Body=content, **request)
 
+    async def put_thumbnail(self, key: str, content: bytes) -> None:
+        """Replace one mutable WebP thumbnail."""
+
+        await await_owned(asyncio.to_thread(self._put_thumbnail, key, content))
+
+    def _put_thumbnail(self, key: str, content: bytes) -> None:
+        self._client.put_object(
+            Bucket=self._bucket,
+            Key=key,
+            Body=content,
+            ContentLength=len(content),
+            ContentType=_THUMBNAIL_CONTENT_TYPE,
+        )
+
     @staticmethod
     def _validate_png(key: str, artifact: PngImage, metadata: dict[str, object]) -> None:
         """Require an existing object to match the immutable PNG contract."""
@@ -160,7 +179,7 @@ class S3ObjectStore:
 
 
 class MemoryObjectStore:
-    """Store database and PNG bytes in memory for deterministic updater tests."""
+    """Store database and art bytes in memory for deterministic updater tests."""
 
     def __init__(self) -> None:
         self.database: bytes | None = None
@@ -186,3 +205,8 @@ class MemoryObjectStore:
         existing = self.objects.setdefault(key, content)
         if existing != content:
             raise ValueError(f"immutable PNG object conflicts with {key}")
+
+    async def put_thumbnail(self, key: str, content: bytes) -> None:
+        """Replace one mutable WebP thumbnail."""
+
+        self.objects[key] = content

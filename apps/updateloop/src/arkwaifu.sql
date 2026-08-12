@@ -60,7 +60,15 @@ CREATE TABLE story_groups (
         CHECK (length(group_id) > 0 AND group_id = lower(group_id)),
     name TEXT NOT NULL,
     group_type TEXT NOT NULL
-        CHECK (group_type IN ('main_story', 'major_event', 'minor_event', 'other')),
+        CHECK (group_type IN (
+            'main_story',
+            'major_event',
+            'minor_event',
+            'operator_record',
+            'integrated_strategies',
+            'reclamation_algorithm',
+            'others'
+        )),
     position INTEGER NOT NULL CHECK (position >= 0),
     PRIMARY KEY (locale, group_id),
     UNIQUE (locale, position),
@@ -102,6 +110,9 @@ CREATE TABLE story_art_references (
         REFERENCES stories (locale, story_id) ON DELETE CASCADE,
     CHECK (kind <> 'character' OR category = 'character')
 ) STRICT;
+
+CREATE INDEX story_art_references_by_art
+    ON story_art_references (locale, art_id);
 
 -- Art references deliberately have no foreign key to arts. It is common for
 -- an upstream locale snapshot to mention art which is not available yet; the

@@ -12,7 +12,15 @@ from PIL import Image
 ArtCategory = Literal["image", "background", "item", "character"]
 SourceRole = Literal["body", "face", "whole_body"]
 LocaleUnit = Literal["CN", "EN", "JP", "KR", "TW"]
-StoryGroupType = Literal["main_story", "major_event", "minor_event", "other"]
+StoryGroupType = Literal[
+    "main_story",
+    "major_event",
+    "minor_event",
+    "operator_record",
+    "integrated_strategies",
+    "reclamation_algorithm",
+    "others",
+]
 StoryTag = Literal["before", "after", "interlude"]
 
 

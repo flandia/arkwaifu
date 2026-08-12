@@ -7,7 +7,7 @@ from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
-from ..domain import Gallery, GalleryEntry
+from ..domain import ArtCategory, Gallery, GalleryEntry
 
 _EXCEL_ROOT = Path("assets/torappu/dynamicassets/gamedata/excel")
 
@@ -122,7 +122,9 @@ def _merge_current_cg_schema(
         )
 
         entries = list(gallery.entries)
-        index_by_art_id = {entry.art_id: index for index, entry in enumerate(entries)}
+        index_by_art = {
+            (entry.category, entry.art_id): index for index, entry in enumerate(entries)
+        }
         next_position = max((entry.position for entry in entries), default=0)
         for display_id_value in _values(_at(group, "displays")):
             display_id = _text(display_id_value)
@@ -131,11 +133,13 @@ def _merge_current_cg_schema(
             display = displays.get(display_id)
             name = _text(_at(display, "displayName"))
             description = _text(_at(display, "displayDesc"))
+            category = _gallery_art_category(_at(display, "cgSource"))
             for index, art_id_value in enumerate(_values(_at(display, "cgList")), start=1):
                 art_id = _text(art_id_value).lower()
                 if not art_id:
                     continue
-                existing_index = index_by_art_id.get(art_id)
+                art_identity = (category, art_id)
+                existing_index = index_by_art.get(art_identity)
                 if existing_index is not None:
                     existing = entries[existing_index]
                     entries[existing_index] = replace(
@@ -146,8 +150,10 @@ def _merge_current_cg_schema(
                     continue
                 next_position += 1
                 entry_id = _unique_id(f"{display_id.lower()}_{index}", used_entry_ids)
-                entries.append(GalleryEntry(entry_id, next_position, name, description, art_id))
-                index_by_art_id[art_id] = len(entries) - 1
+                entries.append(
+                    GalleryEntry(entry_id, next_position, name, description, art_id, category)
+                )
+                index_by_art[art_identity] = len(entries) - 1
         galleries[gallery_id] = replace(gallery, entries=tuple(entries))
 
 
@@ -197,6 +203,10 @@ def _story_set_description(story_set: Any) -> str:
 
 def _activity_name(activity: Any, gallery_id: str) -> str:
     return _text(_at(activity, "basicInfo", gallery_id, "name"))
+
+
+def _gallery_art_category(value: Any) -> ArtCategory:
+    return "background" if _text(value).upper() == "BACKGROUND" else "image"
 
 
 def _unique_id(base: str, used: set[str]) -> str:

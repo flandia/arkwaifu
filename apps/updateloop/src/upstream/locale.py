@@ -11,11 +11,11 @@ from __future__ import annotations
 
 import asyncio
 import json
-import logging
+import os
+import subprocess
 import tempfile
 import zipfile
 from pathlib import Path, PurePosixPath
-from urllib.parse import quote
 
 import httpx
 
@@ -27,26 +27,50 @@ from .cache import UpstreamCache
 _REPOSITORY = "ArknightsAssets/ArknightsGamedata"
 _BRANCH = "master"
 _SERVER_DIRECTORIES = {"CN": "cn", "EN": "en", "JP": "jp", "KR": "kr", "TW": "tw"}
+# These repositories record periodic snapshots rather than every resVersion,
+# so files added and removed between snapshots may still be unrecoverable.
+_STORY_HISTORY_SOURCES = {
+    "CN": (
+        ("https://github.com/ArknightsAssets/ArknightsGamedata.git", _BRANCH, "cn"),
+        ("https://github.com/Kengxxiao/ArknightsGameData.git", "master", "zh_CN"),
+    ),
+    "EN": (
+        ("https://github.com/ArknightsAssets/ArknightsGamedata.git", _BRANCH, "en"),
+        ("https://github.com/Kengxxiao/ArknightsGameData_YoStar.git", "main", "en_US"),
+        ("https://github.com/Kengxxiao/ArknightsGameData.git", "master", "en_US"),
+    ),
+    "JP": (
+        ("https://github.com/ArknightsAssets/ArknightsGamedata.git", _BRANCH, "jp"),
+        ("https://github.com/Kengxxiao/ArknightsGameData_YoStar.git", "main", "ja_JP"),
+        ("https://github.com/Kengxxiao/ArknightsGameData.git", "master", "ja_JP"),
+    ),
+    "KR": (
+        ("https://github.com/ArknightsAssets/ArknightsGamedata.git", _BRANCH, "kr"),
+        ("https://github.com/Kengxxiao/ArknightsGameData_YoStar.git", "main", "ko_KR"),
+        ("https://github.com/Kengxxiao/ArknightsGameData.git", "master", "ko_KR"),
+    ),
+    "TW": (
+        ("https://github.com/ArknightsAssets/ArknightsGamedata.git", _BRANCH, "tw"),
+        ("https://github.com/aelurum/ArknightsGameData.git", "master_v2", "zh_TW"),
+    ),
+}
 _SELECTED_PATHS = {
     "gamedata/excel/activity_table.json",
     "gamedata/excel/replicate_table.json",
     "gamedata/excel/retro_table.json",
     "gamedata/excel/roguelike_topic_table.json",
+    "gamedata/excel/sandbox_perm_table.json",
     "gamedata/excel/stage_table.json",
     "gamedata/excel/story_review_meta_table.json",
     "gamedata/excel/story_review_table.json",
 }
 # Bump this when the selected inputs or extracted directory layout changes;
 # resVersion identifies upstream content, not the local extraction recipe.
-_LOCALE_EXTRACTION_CACHE_FORMAT = "3"
+_LOCALE_EXTRACTION_CACHE_FORMAT = "5"
 _RAW_CONTENT_ACCEPT = "application/vnd.github.raw+json"
-_HISTORY_PAGE_SIZE = 100
-_HISTORY_API_REQUEST_LIMIT = 48
-_HISTORY_DOWNLOAD_CONCURRENCY = 8
 
 _ASSET_PREFIX = Path("assets/torappu/dynamicassets")
 _DATA_ROOT = _ASSET_PREFIX / "gamedata"
-_INCOMPLETE_UPSTREAM_LOGGER = logging.getLogger("arkwaifu_updateloop.incomplete_upstream")
 
 _ARCHIVE_CACHE_NAMESPACE = "game-data"
 _ARCHIVE_CACHE_PATH = PurePosixPath("archive.zip")
@@ -60,10 +84,6 @@ class _SnapshotVersionMismatch(RuntimeError):
         super().__init__(
             f"{unit} cached master snapshot has version {embedded}, expected {expected}"
         )
-
-
-class _HistoryRequestBudgetExhausted(RuntimeError):
-    """Stop optional history recovery before exhausting GitHub's API quota."""
 
 
 def _parse_manifest(
@@ -82,26 +102,72 @@ def _parse_manifest(
 
 
 def _missing_story_paths(data_root: Path) -> tuple[PurePosixPath, ...]:
-    """Return referenced story text paths absent from the current snapshot."""
+    """Return indexed story text paths absent from the current snapshot."""
 
     with (data_root / _DATA_ROOT / "excel/story_review_table.json").open(
         encoding="utf-8"
     ) as handle:
-        table = json.load(handle)
-    missing: dict[PurePosixPath, None] = {}
-    for group in _json_values(table):
+        review_table = json.load(handle)
+    with (data_root / _DATA_ROOT / "excel/roguelike_topic_table.json").open(
+        encoding="utf-8"
+    ) as handle:
+        roguelike_table = json.load(handle)
+    with (data_root / _DATA_ROOT / "excel/story_review_meta_table.json").open(
+        encoding="utf-8"
+    ) as handle:
+        review_meta = json.load(handle)
+    with (data_root / _DATA_ROOT / "excel/sandbox_perm_table.json").open(
+        encoding="utf-8"
+    ) as handle:
+        sandbox_table = json.load(handle)
+
+    story_names = []
+    for group in _json_values(review_table):
         if not isinstance(group, dict):
             continue
         for story in _json_values(group.get("infoUnlockDatas")):
-            story_name = story.get("storyTxt") if isinstance(story, dict) else None
-            if not isinstance(story_name, str) or not story_name:
-                continue
-            path = PurePosixPath(f"gamedata/story/{story_name}.txt")
-            if path.is_absolute() or ".." in path.parts:
-                raise ValueError(f"unsafe historical story path: {path}")
-            local_path = data_root / _ASSET_PREFIX.joinpath(*path.parts)
-            if not local_path.is_file():
-                missing[path] = None
+            if isinstance(story, dict):
+                story_names.append(story.get("storyTxt"))
+    details = roguelike_table.get("details") if isinstance(roguelike_table, dict) else None
+    for detail in _json_values(details):
+        archive = detail.get("archiveComp") if isinstance(detail, dict) else None
+        endbook_group = archive.get("endbook") if isinstance(archive, dict) else None
+        endbooks = endbook_group.get("endbook") if isinstance(endbook_group, dict) else None
+        for ending in _json_values(endbooks):
+            if isinstance(ending, dict):
+                story_names.append(ending.get("avgId"))
+    sandbox_details = sandbox_table.get("detail") if isinstance(sandbox_table, dict) else None
+    for template in _json_values(sandbox_details):
+        for detail in _json_values(template):
+            quests = detail.get("archiveQuestData") if isinstance(detail, dict) else None
+            for quest in _json_values(quests):
+                stories = quest.get("avgDataList") if isinstance(quest, dict) else None
+                for story in _json_values(stories):
+                    if isinstance(story, dict):
+                        story_names.append(story.get("avgId"))
+    archive_data = review_meta.get("actArchiveResData") if isinstance(review_meta, dict) else None
+    avgs = archive_data.get("avgs") if isinstance(archive_data, dict) else None
+    for avg in _json_values(avgs):
+        story_name = avg.get("contentPath") if isinstance(avg, dict) else None
+        if isinstance(story_name, str) and story_name.lower().startswith(
+            "obt/roguelike/ro1/level_rogue1_ending_"
+        ):
+            story_names.append(story_name)
+
+    missing: dict[PurePosixPath, None] = {}
+    for story_name in story_names:
+        if not isinstance(story_name, str) or not story_name:
+            continue
+        relative = PurePosixPath(story_name.replace("\\", "/"))
+        if relative.suffix.lower() == ".txt":
+            relative = relative.with_suffix("")
+        path = PurePosixPath(f"gamedata/story/{relative.as_posix()}.txt")
+        path = PurePosixPath(path.as_posix().lower())
+        if relative.is_absolute() or ".." in relative.parts:
+            raise ValueError(f"unsafe historical story path: {path}")
+        local_path = data_root / _ASSET_PREFIX.joinpath(*path.parts)
+        if not local_path.is_file():
+            missing[path] = None
     return tuple(missing)
 
 
@@ -117,10 +183,6 @@ def _write_story_text(data_root: Path, path: PurePosixPath, content: bytes) -> N
     output = data_root / _ASSET_PREFIX.joinpath(*path.parts)
     output.parent.mkdir(parents=True, exist_ok=True)
     output.write_bytes(content)
-
-
-def _quoted_path(path: PurePosixPath) -> str:
-    return "/".join(quote(part, safe="") for part in path.parts)
 
 
 def _version_id(payload: object, context: str) -> str:
@@ -145,24 +207,20 @@ class LiveLocaleBuilder:
         self,
         *,
         github_api_url: str = "https://api.github.com",
-        github_raw_url: str = "https://raw.githubusercontent.com",
         github_token: str | None = None,
         transport: httpx.AsyncBaseTransport | None = None,
         cache: UpstreamCache | None = None,
     ) -> None:
         self._api_url = github_api_url.rstrip("/")
-        self._raw_url = github_raw_url.rstrip("/")
-        self._token = github_token
+        self._token = github_token or None
         self._transport = transport
         self._cache = cache
         self._detected_versions: dict[LocaleUnit, str] = {}
         self._archive_task: asyncio.Task[Path] | None = None
         self._archive_directory: tempfile.TemporaryDirectory[str] | None = None
-        self._history_api_requests = 0
-        self._history_api_lock = asyncio.Lock()
-        self._history_downloads = asyncio.Semaphore(_HISTORY_DOWNLOAD_CONCURRENCY)
-        self._history_directory_locks: dict[tuple[str, PurePosixPath], asyncio.Lock] = {}
-        self._historical_story_text: dict[tuple[str, PurePosixPath], bytes | None] = {}
+        self._history_directory: tempfile.TemporaryDirectory[str] | None = None
+        self._history_clone_tasks: dict[tuple[str, str], asyncio.Task[Path]] = {}
+        self._history_repository_locks: dict[tuple[str, str], asyncio.Lock] = {}
         self._closed = False
 
     async def detect_version(self, unit: LocaleUnit) -> str:
@@ -251,212 +309,147 @@ class LiveLocaleBuilder:
         unit: LocaleUnit,
         data_root: Path,
     ) -> None:
-        """Fill story paths removed from ``master`` with their latest history copy.
-
-        Lookups are grouped by repository directory. One commits request finds
-        every historical state of that directory, and one contents request
-        identifies all requested files present in a state. The recovered text
-        becomes part of the extracted cache entry; commit identifiers remain
-        transient implementation details and are never published or persisted.
-        """
+        """Fill missing story paths with the latest copy in the source order."""
 
         missing = await await_owned(asyncio.to_thread(_missing_story_paths, data_root))
         if not missing:
             return
-        grouped: dict[PurePosixPath, set[str]] = {}
-        for path in missing:
-            grouped.setdefault(path.parent, set()).add(path.name)
-
-        async with self._client() as client, self._raw_client() as raw_client:
-            for directory, names in grouped.items():
-                try:
-                    await self._recover_story_directory(
-                        client,
-                        raw_client,
-                        _SERVER_DIRECTORIES[unit],
-                        data_root,
-                        directory,
-                        names,
+        unresolved = dict.fromkeys(missing)
+        for repository_url, branch, root in _STORY_HISTORY_SOURCES[unit]:
+            clone = await self._history_repository(repository_url, branch)
+            lock = self._history_repository_locks.setdefault(
+                (repository_url, branch),
+                asyncio.Lock(),
+            )
+            async with lock:
+                for path in tuple(unresolved):
+                    repository_path = PurePosixPath(root) / path
+                    content = await await_owned(
+                        asyncio.to_thread(
+                            self._latest_historical_story,
+                            clone,
+                            repository_path,
+                        )
                     )
-                except (
-                    _HistoryRequestBudgetExhausted,
-                    httpx.HTTPError,
-                    OSError,
-                    TypeError,
-                    ValueError,
-                ) as error:
-                    _INCOMPLETE_UPSTREAM_LOGGER.warning(
-                        "historical story lookup failed; continuing with current snapshot "
-                        "unit=%s directory=%s error=%s",
-                        unit,
-                        directory,
-                        error,
+                    if content is None:
+                        continue
+                    await await_owned(
+                        asyncio.to_thread(_write_story_text, data_root, path, content)
                     )
-
-    async def _recover_story_directory(
-        self,
-        client: httpx.AsyncClient,
-        raw_client: httpx.AsyncClient,
-        server: str,
-        data_root: Path,
-        directory: PurePosixPath,
-        names: set[str],
-    ) -> None:
-        key = (server, directory)
-        lock = self._history_directory_locks.setdefault(key, asyncio.Lock())
-        async with lock:
-            unresolved = set(names)
-            for name in tuple(unresolved):
-                path = directory / name
-                cached = self._historical_story_text.get((server, path), ...)
-                if cached is ...:
-                    continue
-                unresolved.remove(name)
-                if cached is not None:
-                    await await_owned(asyncio.to_thread(_write_story_text, data_root, path, cached))
+                    del unresolved[path]
             if not unresolved:
                 return
 
-            repository_directory = PurePosixPath(server) / directory
-            seen_refs: set[str] = set()
-            page = 1
-            while unresolved:
-                response = await self._history_api_get(
-                    client,
-                    f"{self._api_url}/repos/{_REPOSITORY}/commits",
-                    params={
-                        "sha": _BRANCH,
-                        "path": repository_directory.as_posix(),
-                        "per_page": _HISTORY_PAGE_SIZE,
-                        "page": page,
-                    },
-                )
-                response.raise_for_status()
-                commits = response.json()
-                if not isinstance(commits, list):
-                    raise TypeError("GitHub commits response is not a list")
+    async def _history_repository(self, repository_url: str, branch: str) -> Path:
+        """Clone one branch without blobs and share it across locale builds."""
 
-                for commit in commits:
-                    if not isinstance(commit, dict):
-                        raise TypeError("GitHub commit entry is not an object")
-                    parents = commit.get("parents")
-                    if not isinstance(parents, list):
-                        raise TypeError("GitHub commit parents are not a list")
-                    refs = [parent.get("sha") for parent in parents[:1] if isinstance(parent, dict)]
-                    if not refs:
-                        refs = [commit.get("sha")]
-                    for ref in refs:
-                        if not isinstance(ref, str) or not ref or ref in seen_refs:
-                            continue
-                        seen_refs.add(ref)
-                        recovered = await self._recover_story_snapshot(
-                            client,
-                            raw_client,
-                            server,
-                            directory,
-                            ref,
-                            unresolved,
-                        )
-                        for name, content in recovered.items():
-                            path = directory / name
-                            self._historical_story_text[(server, path)] = content
-                            await await_owned(
-                                asyncio.to_thread(
-                                    _write_story_text,
-                                    data_root,
-                                    path,
-                                    content,
-                                )
-                            )
-                            unresolved.remove(name)
-                        if not unresolved:
-                            break
-                    if not unresolved:
-                        break
+        self._ensure_open()
+        key = (repository_url, branch)
+        task = self._history_clone_tasks.get(key)
+        if task is None:
+            destination = self._history_root() / f"repository-{len(self._history_clone_tasks)}"
+            task = asyncio.create_task(
+                self._clone_history_repository(repository_url, branch, destination),
+                name=f"clone-story-history-{len(self._history_clone_tasks)}",
+            )
+            self._history_clone_tasks[key] = task
+        return await asyncio.shield(task)
 
-                if len(commits) < _HISTORY_PAGE_SIZE or not commits:
-                    break
-                page += 1
+    def _history_root(self) -> Path:
+        """Create the run-scoped clone root on the configured cache drive."""
 
-            for name in unresolved:
-                self._historical_story_text[(server, directory / name)] = None
+        if self._history_directory is None:
+            parent = self._cache.root if self._cache is not None else None
+            if parent is not None:
+                parent.mkdir(parents=True, exist_ok=True)
+            self._history_directory = tempfile.TemporaryDirectory(
+                prefix=".story-history-",
+                dir=parent,
+            )
+        return Path(self._history_directory.name)
 
-    async def _recover_story_snapshot(
+    async def _clone_history_repository(
         self,
-        client: httpx.AsyncClient,
-        raw_client: httpx.AsyncClient,
-        server: str,
-        directory: PurePosixPath,
-        ref: str,
-        unresolved: set[str],
-    ) -> dict[str, bytes]:
-        repository_directory = PurePosixPath(server) / directory
-        response = await self._history_api_get(
-            client,
-            f"{self._api_url}/repos/{_REPOSITORY}/contents/{_quoted_path(repository_directory)}",
-            params={"ref": ref},
-        )
-        if response.status_code == 404:
-            return {}
-        response.raise_for_status()
-        entries = response.json()
-        if not isinstance(entries, list):
-            raise TypeError("GitHub directory contents response is not a list")
-        present = {
-            entry.get("name")
-            for entry in entries
-            if isinstance(entry, dict)
-            and entry.get("type") == "file"
-            and entry.get("name") in unresolved
-        }
-        downloads = await asyncio.gather(
-            *(
-                self._download_historical_story(
-                    raw_client,
-                    ref,
-                    PurePosixPath(server) / directory / name,
-                )
-                for name in sorted(present)
+        repository_url: str,
+        branch: str,
+        destination: Path,
+    ) -> Path:
+        await await_owned(
+            asyncio.to_thread(
+                self._run_git,
+                "clone",
+                "--quiet",
+                "--filter=blob:none",
+                "--no-checkout",
+                "--single-branch",
+                "--no-tags",
+                "--branch",
+                branch,
+                repository_url,
+                str(destination),
             )
         )
-        return {
-            name: content
-            for name, content in zip(sorted(present), downloads, strict=True)
-            if content is not None
-        }
+        return destination
 
-    async def _download_historical_story(
-        self,
-        client: httpx.AsyncClient,
-        ref: str,
+    @classmethod
+    def _latest_historical_story(
+        cls,
+        repository: Path,
         path: PurePosixPath,
     ) -> bytes | None:
-        async with self._history_downloads:
-            response = await client.get(
-                f"{self._raw_url}/{_REPOSITORY}/{quote(ref, safe='')}/{_quoted_path(path)}",
-                headers={"Accept": "text/plain"},
+        """Read the newest revision which added or modified an exact path."""
+
+        revision = (
+            cls._run_git(
+                "--literal-pathspecs",
+                "-C",
+                str(repository),
+                "log",
+                "-1",
+                "--full-history",
+                "--no-renames",
+                "--diff-filter=AM",
+                "--format=%H",
+                "--",
+                path.as_posix(),
             )
-        if response.status_code == 404:
+            .decode("ascii")
+            .strip()
+        )
+        if not revision:
             return None
-        response.raise_for_status()
-        content = response.content
+        content = cls._run_git(
+            "-C",
+            str(repository),
+            "cat-file",
+            "blob",
+            f"{revision}:{path.as_posix()}",
+        )
         content.decode("utf-8")
         return content
 
-    async def _history_api_get(
-        self,
-        client: httpx.AsyncClient,
-        url: str,
-        *,
-        params: dict[str, str | int],
-    ) -> httpx.Response:
-        async with self._history_api_lock:
-            if self._history_api_requests >= _HISTORY_API_REQUEST_LIMIT:
-                raise _HistoryRequestBudgetExhausted(
-                    f"reached the run limit of {_HISTORY_API_REQUEST_LIMIT} GitHub API requests"
-                )
-            self._history_api_requests += 1
-        return await client.get(url, params=params)
+    @staticmethod
+    def _run_git(*arguments: str) -> bytes:
+        """Run Git without a shell or an interactive credential prompt."""
+
+        environment = os.environ.copy()
+        environment["GIT_TERMINAL_PROMPT"] = "0"
+        try:
+            result = subprocess.run(
+                ("git", *arguments),
+                capture_output=True,
+                check=False,
+                env=environment,
+            )
+        except FileNotFoundError as error:
+            raise RuntimeError("git is required to recover historical story text") from error
+        if result.returncode != 0:
+            detail = result.stderr.decode("utf-8", errors="replace").strip()
+            message = f"git command failed with exit code {result.returncode}"
+            if detail:
+                message = f"{message}: {detail}"
+            raise RuntimeError(message)
+        return result.stdout
 
     async def _archive(self) -> Path:
         """Get the one all-server branch snapshot owned by this builder."""
@@ -535,21 +528,30 @@ class LiveLocaleBuilder:
             raise
 
     async def aclose(self) -> None:
-        """Cancel snapshot acquisition and release any run-scoped archive."""
+        """Cancel owned work and release run-scoped archives and clones."""
 
         if self._closed:
             return
         self._closed = True
-        task = self._archive_task
+        archive_task = self._archive_task
         self._archive_task = None
-        if task is not None and not task.done():
-            task.cancel()
-        if task is not None:
-            await asyncio.gather(task, return_exceptions=True)
-        directory = self._archive_directory
+        history_tasks = tuple(self._history_clone_tasks.values())
+        self._history_clone_tasks.clear()
+        tasks = (*history_tasks, *((archive_task,) if archive_task is not None else ()))
+        for task in tasks:
+            if not task.done():
+                task.cancel()
+        if tasks:
+            await asyncio.gather(*tasks, return_exceptions=True)
+
+        archive_directory = self._archive_directory
         self._archive_directory = None
-        if directory is not None:
-            await await_owned(asyncio.to_thread(directory.cleanup))
+        history_directory = self._history_directory
+        self._history_directory = None
+        if history_directory is not None:
+            await await_owned(asyncio.to_thread(history_directory.cleanup))
+        if archive_directory is not None:
+            await await_owned(asyncio.to_thread(archive_directory.cleanup))
 
     def _ensure_open(self) -> None:
         if self._closed:
@@ -563,16 +565,6 @@ class LiveLocaleBuilder:
             headers["Authorization"] = f"Bearer {self._token}"
         return httpx.AsyncClient(
             headers=headers,
-            timeout=httpx.Timeout(120, connect=30),
-            follow_redirects=True,
-            transport=self._transport,
-        )
-
-    def _raw_client(self) -> httpx.AsyncClient:
-        """Create an unauthenticated client for public historical story bytes."""
-
-        return httpx.AsyncClient(
-            headers={"User-Agent": "arkwaifu-updateloop"},
             timeout=httpx.Timeout(120, connect=30),
             follow_redirects=True,
             transport=self._transport,

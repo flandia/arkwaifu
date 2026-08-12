@@ -1,8 +1,8 @@
 # Arkwaifu updateloop
 
 The Python 3.14 writer downloads upstream game data, extracts Unity assets in a
-bounded process pool, and publishes one monolithic SQLite database plus PNGs
-under art-version prefixes in S3-compatible storage. It does not connect to
+bounded process pool, and publishes one monolithic SQLite database plus art
+images under art-version prefixes in S3-compatible storage. It does not connect to
 PostgreSQL and does not create staged, validated, active, or release-scoped
 database records.
 
@@ -62,8 +62,15 @@ warnings; other updater warnings remain visible.
 1. Detect every requested unit's current upstream `resVersion` concurrently.
 2. Pull `arkwaifu.sqlite3` to a temporary directory. If it does not exist,
    initialize schema version 2. An existing database must already declare
-   version 2; recreate development databases made with an earlier schema.
+   version 2 and have the current beta table shape and constraints. There are
+   no table migrations or compatibility shims; recreate a development database
+   after either changes, even while `user_version` remains 2. The additive read
+   index repair below is the sole in-place exception.
 3. Check the schema version, then read the database's unit `resVersion` values.
+   The updater also restores the additive
+   `story_art_references_by_art (locale, art_id)` read index when an older
+   version-2 database lacks it. That one-time repair republishes the database
+   even when all requested upstream versions are otherwise unchanged.
    Publication runs no `quick_check`, `integrity_check`, or post-write
    `foreign_key_check`.
 4. Build every changed requested manifest concurrently and retain rendered PNGs
@@ -76,10 +83,16 @@ warnings; other updater warnings remain visible.
 6. In one local `BEGIN IMMEDIATE` transaction, apply art first and replace each
    changed locale. SQLite enforces `STRICT`, `CHECK`, primary-key, unique, and
    foreign-key constraints on statements and commit.
-7. After that transaction commits successfully, batch-upload every changed PNG
+7. After that transaction commits successfully, fit each final art winner
+   within 512 by 512 pixels without cropping or upscaling and encode it as
+   WebP at quality 75.
+8. Batch-upload every changed PNG
    with bounded concurrency and
    `Cache-Control: public, max-age=31536000, immutable`.
-8. Overwrite `arkwaifu.sqlite3` once with `Cache-Control: no-cache`. The
+9. Replace each derived thumbnail at
+   `ART/<resVersion>/thumbnail/<category>/<name>.webp`. Thumbnail uploads set
+   only `image/webp`; object storage and CDN cache defaults apply.
+10. Overwrite `arkwaifu.sqlite3` once with `Cache-Control: no-cache`. The
    database PUT is always last.
 
 There is no separate manifest-validation call, post-write integrity scan, or
@@ -90,7 +103,9 @@ publication.
 If work for a new `resVersion` fails before the database overwrite, readers
 retain the previous database. A partially successful PNG batch leaves objects
 under an as-yet-unreferenced version prefix, but does not change the keys used
-by that database. The first version of a complete build is full. A later
+by that database. Thumbnail paths are intentionally mutable, so a failed batch
+can replace some thumbnails already reachable through the previous database.
+The first version of a complete build is full. A later
 version processes selected changed bundles, and the cumulative merge keeps the
 newest record for each logical identity. The final manifest uploads only those
 winners, each under the version which contributed it; superseded intermediate
@@ -113,6 +128,10 @@ PNG keys are treated as create-only. Before uploading, the S3 adapter uses
 immutable cache policy already match. A mismatch fails the run instead of
 replacing that object. There is deliberately no content hash, so this is an
 object-metadata check rather than byte-for-byte content verification.
+
+Thumbnail keys are mutable because their bytes are derived rather than
+upstream records. The adapter replaces them on each requested art run and does
+not override the object store or CDN's cache defaults.
 
 The selected object variant is `composition` for final consumer-facing art and
 `source` for a retained pre-composition character layer. Character
@@ -172,8 +191,9 @@ source and composition objects then intentionally contain the same PNG.
 
 This selected-object model retains one object for each logical row; it does not
 distinguish Windows and Android copies. Fallback art is used only when the
-official Windows history cannot provide that identity. Thumbnail and
-Real-ESRGAN variants remain unimplemented.
+official Windows history cannot provide that identity. Thumbnails are derived
+from final compositions and therefore have no database rows or source-layer
+counterparts. Real-ESRGAN remains unimplemented.
 
 ## Art execution model
 
@@ -202,10 +222,12 @@ UnityPy, Pillow, and native-library state do not accumulate during a full art
 build. Each outer worker calls the resource extractor with `workers=1`, avoiding
 a nested process pool. PNG bytes stay in rendered cache files; the parent keeps
 only paths and metadata rather than the complete multi-gigabyte art set. After
-the SQLite commit, a bounded batch uploads those files before the database PUT.
+the SQLite commit, bounded workers generate final WebP thumbnails, then upload
+the PNGs and thumbnails before the database PUT.
 
 Art work emits structured JSON action records for `list`, `version`, `fetch`,
-`unzip`, `extract`, `compose`, `apply`, `upload`, and `publish`. Each record
+`unzip`, `extract`, `compose`, `apply`, `thumbnail`, `upload`, and `publish`.
+Each record
 carries its `res_version`, status, elapsed milliseconds when measurable, and a
 stable `current`/`total` ordinal for complete-mode versions or concurrent
 resource work. A successful action emits one terminal record with
@@ -292,11 +314,52 @@ The parser retains the tolerant current-CG behavior introduced by Go v1.9.4.
 ZIP members are checked for absolute paths and parent traversal before selected
 locale files are extracted.
 
-When `story_review_table.json` references text absent from the current branch,
-the builder searches that locale directory's GitHub history newest-first and
-uses the latest exact-path copy it can find. This lookup is best-effort and
-bounded; a missing or failed historical lookup keeps the story metadata,
-emits the usual incomplete-upstream warning, and continues without directives.
+Locale stories use seven parallel categories. `story_review_table.json`
+provides main stories, major events, vignettes, and Operator Records; its
+`NONE` entries are Operator Records because the same group IDs are owned by
+`handbook_info_table.json`'s operator-record catalog.
+
+`integrated_strategies` contains official Integrated Strategies endings, with
+one group per topic. Legacy `rogue_1` endings come from
+`story_review_meta_table.json`'s `actArchiveResData.avgs` entries whose
+`contentPath` matches `level_rogue1_ending_*`. Later endings come from
+`roguelike_topic_table.json`'s
+`details.<topic>.archiveComp.endbook.endbook` catalogs. Topics use their `sort`
+order and endings use `sortId`. This catalog-driven scan includes future topics
+without a parser change.
+Monthly-squad `chatStoryId` paths are claimed but not published because their
+scripts contain no indexed AVG art. The containing `obt/roguelike/ro*` theme
+directories are reserved for the official endings, so their opening, tutorial,
+and preload helpers are not republished under `others`.
+
+Reclamation Algorithm topics come from `sandbox_perm_table.json`. Their
+narrative scripts are scanned below the topic's `story/obt/sandboxperm/`
+directory, but only stories with parsed art references are published. Training,
+UI, and challenge-guide scripts stay outside that category.
+
+After those explicit sources claim their scripts, every other remaining
+non-`[uc]` `story/**/*.txt` file is exposed under `others`, grouped by its
+source directory. This is deliberately a literal fallback: tutorials, control
+scripts, preload helpers, and similar technical scripts may appear there.
+`[uc]` files are companion descriptions and are never published as separate
+stories. A script can belong to only the first matching category, in the order
+story review, official Integrated Strategies ending catalogs, Reclamation
+Algorithm, then `others`. Monthly-squad paths are reserved and excluded from
+that fallback.
+
+When the story-review, official Integrated Strategies ending, or Reclamation
+Algorithm catalog references text absent from the current branch, the builder
+searches partial Git clones of the available histories, newest first. The
+priority is ArknightsAssets then Kengxxiao for CN; ArknightsAssets,
+YoStar, then Kengxxiao for EN, JP, and KR; and ArknightsAssets then aelurum for
+TW. The newest revision that contains the exact file wins. These repositories
+contain periodic snapshots rather than every official `resVersion`, so a file
+introduced and removed between snapshots may remain unavailable. A file
+confirmed absent from every source keeps the story metadata, emits the
+usual incomplete-upstream warning, and continues without directives. Git clone,
+history, and blob-read failures abort the locale build so a lower-priority or
+incomplete result cannot be published. Git must be available on `PATH`; the
+updater image installs it.
 Recovered text is cached with the extracted locale data. Repository and commit
 identifiers are never written to the database. Because that cache is keyed by
 the game `resVersion`, a repository-only backfill at the same version is picked
@@ -311,10 +374,18 @@ Windows.
 
 ## Environment
 
+The CLI automatically loads an optional `.env` from its current working
+directory. Existing process environment variables take precedence, and `.env`
+is excluded from version control. From `apps/updateloop`, a local file therefore
+allows the short form:
+
+```console
+uv run updateloop run
+```
+
 `../../infra/dev.env.example` contains the local MinIO endpoint and development
-credentials used by `infra/compose.yaml`. It is an opt-in example and is not
-loaded automatically. From `apps/updateloop`, pass it explicitly when running
-against that MinIO instance:
+credentials used by `infra/compose.yaml`. To use that file without copying it to
+`.env`, pass it explicitly:
 
 ```console
 uv run --env-file ../../infra/dev.env.example updateloop run
@@ -339,8 +410,8 @@ Optional:
   extraction/composition processes. When unset, Python chooses the process-pool
   size from available CPUs. Size this for both CPU and peak memory.
 - `ARKWAIFU_GITHUB_API_URL` — defaults to `https://api.github.com`.
-- `ARKWAIFU_GITHUB_TOKEN` — recommended in production to avoid anonymous API
-  rate limits.
+- `ARKWAIFU_GITHUB_TOKEN` — avoids anonymous limits for GitHub REST calls such
+  as art-version history. Public story-history clones do not use this token.
 
 ## Database guarantees and costs
 
@@ -354,9 +425,12 @@ Optional:
   no runtime integrity scan follows the writes.
 - PNGs batch-upload only after the local transaction commits, and all required
   create-or-verify operations finish before the final database PUT.
+- Final-art thumbnails are generated and replace-uploaded after that commit;
+  source layers do not receive thumbnails.
 - Original character layers and composition images are both addressable.
-- Historical, immutable art prefixes are retained. S3 bucket versioning retains
-  overwritten database generations and supplies the database rollback path.
+- Historical, immutable composition/source prefixes are retained. S3 bucket
+  versioning retains overwritten database generations and supplies the
+  database rollback path.
 - The fixed-key writer is single-writer by deployment convention; it has no
   lock or compare-and-swap token.
 

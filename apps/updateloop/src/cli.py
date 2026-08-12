@@ -13,6 +13,8 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import cast
 
+from dotenv import load_dotenv
+
 from .config import Settings
 from .domain import ArtManifest, LocaleManifest, LocaleUnit
 from .object_store import S3ObjectStore
@@ -284,6 +286,7 @@ def main(argv: list[str] | None = None) -> None:
     parser = _parser()
     args = parser.parse_args(argv)
     _validate_arguments(parser, args)
+    load_dotenv(Path.cwd() / ".env", override=False)
     _configure_logging(
         suppress_incomplete_upstream_warnings=args.suppress_incomplete_upstream_warnings
     )

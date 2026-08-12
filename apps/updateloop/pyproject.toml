@@ -9,6 +9,7 @@ dependencies = [
   "httpx>=0.28,<1",
   "lz4>=4.4,<5",
   "pillow>=11.3,<13",
+  "python-dotenv>=1.2.2,<2",
   "unitypy>=1.23,<2",
 ]
 

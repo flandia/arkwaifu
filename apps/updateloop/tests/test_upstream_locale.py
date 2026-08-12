@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import asyncio
 import json
+import subprocess
 from io import BytesIO
+from pathlib import Path, PurePosixPath
 from zipfile import ZIP_DEFLATED, ZipFile
 
 import httpx
@@ -10,7 +12,103 @@ import pytest
 
 from arkwaifu_updateloop.domain import LocaleManifest
 from arkwaifu_updateloop.upstream import UpstreamCache
+from arkwaifu_updateloop.upstream import locale as locale_upstream
 from arkwaifu_updateloop.upstream.locale import LiveLocaleBuilder
+
+_MISSING_STORY_PATH = "gamedata/story/activities/retired/opening.txt"
+
+
+def _git(*arguments: str) -> bytes:
+    return subprocess.run(
+        ("git", *arguments),
+        check=True,
+        capture_output=True,
+    ).stdout
+
+
+def _commit_story_history(
+    repository: Path,
+    root: str,
+    revisions: tuple[str, ...],
+) -> None:
+    story = repository / root / Path(_MISSING_STORY_PATH)
+    relative_story = story.relative_to(repository).as_posix()
+    for number, content in enumerate(revisions, start=1):
+        story.parent.mkdir(parents=True, exist_ok=True)
+        story.write_text(content, encoding="utf-8", newline="")
+        _git("-C", str(repository), "add", "--force", "--", relative_story)
+        _git(
+            "-C",
+            str(repository),
+            "commit",
+            "--quiet",
+            "--message",
+            f"story revision {number}",
+        )
+    if revisions:
+        story.unlink()
+        _git("-C", str(repository), "add", "--update", "--", relative_story)
+        _git("-C", str(repository), "commit", "--quiet", "--message", "remove story")
+
+
+def _history_repository(
+    parent: Path,
+    name: str,
+    *,
+    branch: str,
+    root: str,
+    revisions: tuple[str, ...],
+) -> tuple[str, Path]:
+    """Create a local history source whose optional story is deleted at HEAD."""
+
+    repository = parent / name
+    _git("init", "--quiet", "--initial-branch", branch, str(repository))
+    for key, value in (
+        ("user.name", "Arkwaifu tests"),
+        ("user.email", "tests@example.invalid"),
+        ("commit.gpgSign", "false"),
+        ("core.autocrlf", "false"),
+        ("core.hooksPath", ".git/no-hooks"),
+        ("uploadpack.allowFilter", "true"),
+    ):
+        _git("-C", str(repository), "config", key, value)
+
+    readme = repository / "README"
+    readme.write_text("fixture\n", encoding="utf-8")
+    _git("-C", str(repository), "add", "--force", "--", "README")
+    _git("-C", str(repository), "commit", "--quiet", "--message", "initial")
+
+    _commit_story_history(repository, root, revisions)
+    return repository.resolve().as_uri(), repository
+
+
+def test_story_history_sources_follow_the_locale_recovery_priority() -> None:
+    sources = tuple(
+        (
+            unit,
+            url.removeprefix("https://github.com/").removesuffix(".git"),
+            branch,
+            root,
+        )
+        for unit, unit_sources in locale_upstream._STORY_HISTORY_SOURCES.items()
+        for url, branch, root in unit_sources
+    )
+
+    assert sources == (
+        ("CN", "ArknightsAssets/ArknightsGamedata", "master", "cn"),
+        ("CN", "Kengxxiao/ArknightsGameData", "master", "zh_CN"),
+        ("EN", "ArknightsAssets/ArknightsGamedata", "master", "en"),
+        ("EN", "Kengxxiao/ArknightsGameData_YoStar", "main", "en_US"),
+        ("EN", "Kengxxiao/ArknightsGameData", "master", "en_US"),
+        ("JP", "ArknightsAssets/ArknightsGamedata", "master", "jp"),
+        ("JP", "Kengxxiao/ArknightsGameData_YoStar", "main", "ja_JP"),
+        ("JP", "Kengxxiao/ArknightsGameData", "master", "ja_JP"),
+        ("KR", "ArknightsAssets/ArknightsGamedata", "master", "kr"),
+        ("KR", "Kengxxiao/ArknightsGameData_YoStar", "main", "ko_KR"),
+        ("KR", "Kengxxiao/ArknightsGameData", "master", "ko_KR"),
+        ("TW", "ArknightsAssets/ArknightsGamedata", "master", "tw"),
+        ("TW", "aelurum/ArknightsGameData", "master_v2", "zh_TW"),
+    )
 
 
 def _archive(locales: dict[str, tuple[str, dict[str, object | str]]]) -> bytes:
@@ -42,8 +140,132 @@ def _empty_locale_files() -> dict[str, object | str]:
         "gamedata/excel/replicate_table.json": {},
         "gamedata/excel/retro_table.json": {"retroActList": {}},
         "gamedata/excel/roguelike_topic_table.json": {"topics": {}},
+        "gamedata/excel/sandbox_perm_table.json": {"basicInfo": {}, "detail": {}},
         "gamedata/excel/stage_table.json": {},
     }
+
+
+def _missing_story_files() -> dict[str, object | str]:
+    files = _empty_locale_files()
+    files.update(
+        {
+            "gamedata/excel/story_review_table.json": {
+                "retired": {
+                    "id": "retired",
+                    "name": "Retired event",
+                    "actType": "ACTIVITY_STORY",
+                    "infoUnlockDatas": [
+                        {
+                            "storyId": "retired_opening",
+                            "storyTxt": "activities/retired/opening",
+                            "avgTag": "Before Operation",
+                        }
+                    ],
+                }
+            },
+            "gamedata/excel/story_review_meta_table.json": {
+                "actArchiveResData": {
+                    "pics": {
+                        "opening": {
+                            "id": "opening",
+                            "assetPath": "opening_art",
+                            "desc": "Opening",
+                        }
+                    }
+                },
+                "actArchiveData": {"components": {}},
+            },
+        }
+    )
+    return files
+
+
+def test_missing_story_paths_include_official_endings_and_reclamation_stories(
+    tmp_path: Path,
+):
+    excel = tmp_path / "assets/torappu/dynamicassets/gamedata/excel"
+    excel.mkdir(parents=True)
+    (excel / "story_review_table.json").write_text(
+        json.dumps(
+            {
+                "group": {
+                    "infoUnlockDatas": [
+                        {"storyTxt": "activities/missing"},
+                        {"storyTxt": "activities/present"},
+                    ]
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    (excel / "roguelike_topic_table.json").write_text(
+        json.dumps(
+            {
+                "details": {
+                    "rogue": {
+                        "archiveComp": {
+                            "chat": {
+                                "chat": {
+                                    "monthly": {
+                                        "chatItemList": [
+                                            {"chatStoryId": "Obt/Rogue/monthly_missing"}
+                                        ]
+                                    }
+                                }
+                            },
+                            "endbook": {
+                                "endbook": {"ending": {"avgId": "Obt/Roguelike/RO2/ending_missing"}}
+                            },
+                        }
+                    }
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    (excel / "story_review_meta_table.json").write_text(
+        json.dumps(
+            {
+                "actArchiveResData": {
+                    "avgs": {
+                        "opening": {"contentPath": "Obt/Roguelike/RO1/level_rogue1_entry"},
+                        "ending": {"contentPath": ("Obt/Roguelike/RO1/level_rogue1_ending_1")},
+                    }
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    (excel / "sandbox_perm_table.json").write_text(
+        json.dumps(
+            {
+                "detail": {
+                    "SANDBOX": {
+                        "sandbox": {
+                            "archiveQuestData": {
+                                "quest": {
+                                    "avgDataList": [
+                                        {"avgId": ("Obt/SandboxPerm/sandbox/ending_missing")}
+                                    ]
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    present = tmp_path / "assets/torappu/dynamicassets/gamedata/story/activities/present.txt"
+    present.parent.mkdir(parents=True)
+    present.write_text("present", encoding="utf-8")
+
+    assert locale_upstream._missing_story_paths(tmp_path) == (
+        PurePosixPath("gamedata/story/activities/missing.txt"),
+        PurePosixPath("gamedata/story/obt/roguelike/ro2/ending_missing.txt"),
+        PurePosixPath("gamedata/story/obt/sandboxperm/sandbox/ending_missing.txt"),
+        PurePosixPath("gamedata/story/obt/roguelike/ro1/level_rogue1_ending_1.txt"),
+    )
 
 
 @pytest.mark.asyncio
@@ -179,127 +401,182 @@ async def test_one_run_scoped_locale_builder_caches_one_all_server_archive(tmp_p
 
 
 @pytest.mark.asyncio
-async def test_locale_builder_recovers_missing_story_directory_from_history(tmp_path):
-    files = _empty_locale_files()
-    files.update(
-        {
-            "gamedata/excel/story_review_table.json": {
-                "retired": {
-                    "id": "retired",
-                    "name": "Retired event",
-                    "actType": "ACTIVITY_STORY",
-                    "infoUnlockDatas": [
-                        {
-                            "storyId": "retired_opening",
-                            "storyTxt": "activities/retired/opening",
-                            "avgTag": "Before Operation",
-                        },
-                        {
-                            "storyId": "retired_ending",
-                            "storyTxt": "activities/retired/ending",
-                            "avgTag": "After Operation",
-                        },
-                    ],
-                }
-            },
-            "gamedata/excel/story_review_meta_table.json": {
-                "actArchiveResData": {
-                    "pics": {
-                        "opening": {
-                            "id": "opening",
-                            "assetPath": "opening_art",
-                            "desc": "Opening",
-                        },
-                        "ending": {
-                            "id": "ending",
-                            "assetPath": "ending_art",
-                            "desc": "Ending",
-                        },
-                    }
-                },
-                "actArchiveData": {"components": {}},
-            },
-        }
+async def test_locale_builder_recovers_latest_existing_story_and_caches_it(
+    tmp_path,
+    monkeypatch,
+):
+    repository_url, repository = _history_repository(
+        tmp_path,
+        "primary-history",
+        branch="main",
+        root="en",
+        revisions=(
+            '[image(image="STALE_ART")]',
+            '[image(image="OPENING_ART")]',
+        ),
     )
-    archive = _archive({"en": ("data-version", files)})
-    history_api_requests: list[str] = []
-    raw_downloads: list[str] = []
+    monkeypatch.setattr(
+        "arkwaifu_updateloop.upstream.locale._STORY_HISTORY_SOURCES",
+        {"EN": ((repository_url, "main", "en"),)},
+    )
+    archive = _archive({"en": ("data-version", _missing_story_files())})
+    archive_downloads = 0
 
     async def respond(request: httpx.Request) -> httpx.Response:
-        path = request.url.path
-        if path.endswith("/contents/en/hot_update_list.json"):
-            return httpx.Response(200, json={"versionId": "data-version"})
-        if path.endswith("/zipball/master"):
+        nonlocal archive_downloads
+        if request.url.path.endswith("/zipball/master"):
+            archive_downloads += 1
             return httpx.Response(200, content=archive)
-        if path.endswith("/commits"):
-            history_api_requests.append(str(request.url))
-            assert request.url.params["sha"] == "master"
-            assert request.url.params["path"] == "en/gamedata/story/activities/retired"
-            assert request.url.params["per_page"] == "100"
-            return httpx.Response(
-                200,
-                json=[
-                    {
-                        "sha": "delete-commit",
-                        "parents": [{"sha": "before-delete"}],
-                    }
-                ],
-            )
-        if path.endswith("/contents/en/gamedata/story/activities/retired"):
-            history_api_requests.append(str(request.url))
-            assert request.url.params["ref"] == "before-delete"
-            return httpx.Response(
-                200,
-                json=[
-                    {"name": "opening.txt", "type": "file"},
-                    {"name": "ending.txt", "type": "file"},
-                ],
-            )
-        if request.url.host == "raw.githubusercontent.com":
-            assert "authorization" not in request.headers
-            raw_downloads.append(path)
-            if path.endswith("/opening.txt"):
-                return httpx.Response(200, text='[image(image="OPENING_ART")]')
-            if path.endswith("/ending.txt"):
-                return httpx.Response(200, text='[image(image="ENDING_ART")]')
-        return httpx.Response(404)
+        raise AssertionError(f"unexpected request: {request.url}")
 
+    cache = UpstreamCache(tmp_path / ".cache")
     builder = LiveLocaleBuilder(
-        github_token="private-token",
         transport=httpx.MockTransport(respond),
-        cache=UpstreamCache(tmp_path / ".cache"),
+        cache=cache,
     )
-    version = await builder.detect_version("EN")
+    manifest = await builder.build("EN", "data-version", None, False)
+    history_directory = Path(builder._history_directory.name)
 
-    manifest = await builder.build("EN", version, None, False)
-    cached_manifest = await builder.build("EN", version, None, True)
-
-    references = [
+    assert [
         reference.art_id
         for story in manifest.story_groups[0].stories
         for reference in story.art_references
-    ]
-    assert references == ["opening_art", "ending_art"]
-    assert cached_manifest == manifest
-    assert len(history_api_requests) == 2
-    assert len(raw_downloads) == 2
-    assert (
-        tmp_path
-        / ".cache"
-        / version
-        / "game-data"
-        / "EN"
-        / "extracted"
-        / "assets"
-        / "torappu"
-        / "dynamicassets"
-        / "gamedata"
-        / "story"
-        / "activities"
-        / "retired"
-        / "opening.txt"
-    ).is_file()
+    ] == ["opening_art"]
+    assert history_directory.is_dir()
     await builder.aclose()
+    assert not history_directory.exists()
+
+    repository.rename(tmp_path / "history-now-unavailable")
+    cached_builder = LiveLocaleBuilder(
+        transport=httpx.MockTransport(respond),
+        cache=cache,
+    )
+    cached_manifest = await cached_builder.build("EN", "data-version", None, False)
+
+    assert cached_manifest == manifest
+    assert archive_downloads == 1
+    assert cached_builder._history_directory is None
+    await cached_builder.aclose()
+
+
+@pytest.mark.asyncio
+async def test_locale_builder_uses_the_first_history_source_containing_the_story(
+    tmp_path,
+    monkeypatch,
+):
+    primary_url, _ = _history_repository(
+        tmp_path,
+        "primary-history",
+        branch="master",
+        root="en",
+        revisions=(),
+    )
+    fallback_url, _ = _history_repository(
+        tmp_path,
+        "yostar-history",
+        branch="main",
+        root="en_US",
+        revisions=('[image(image="YOSTAR_ART")]',),
+    )
+    later_url, _ = _history_repository(
+        tmp_path,
+        "older-history",
+        branch="master",
+        root="en_US",
+        revisions=('[image(image="OLDER_ART")]',),
+    )
+    monkeypatch.setattr(
+        "arkwaifu_updateloop.upstream.locale._STORY_HISTORY_SOURCES",
+        {
+            "EN": (
+                (primary_url, "master", "en"),
+                (fallback_url, "main", "en_US"),
+                (later_url, "master", "en_US"),
+            )
+        },
+    )
+    archive = _archive({"en": ("data-version", _missing_story_files())})
+
+    async def respond(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/zipball/master"):
+            return httpx.Response(200, content=archive)
+        raise AssertionError(f"unexpected request: {request.url}")
+
+    builder = LiveLocaleBuilder(transport=httpx.MockTransport(respond))
+    manifest = await builder.build("EN", "data-version", None, False)
+
+    assert [
+        reference.art_id
+        for story in manifest.story_groups[0].stories
+        for reference in story.art_references
+    ] == ["yostar_art"]
+    assert len(builder._history_clone_tasks) == 2
+    assert (later_url, "master") not in builder._history_clone_tasks
+    await builder.aclose()
+
+
+@pytest.mark.asyncio
+async def test_concurrent_locales_share_one_history_clone(tmp_path, monkeypatch):
+    repository_url, repository = _history_repository(
+        tmp_path,
+        "shared-history",
+        branch="main",
+        root="en",
+        revisions=('[image(image="EN_ART")]',),
+    )
+    _commit_story_history(
+        repository,
+        "ja_JP",
+        ('[image(image="JP_ART")]',),
+    )
+    monkeypatch.setattr(
+        locale_upstream,
+        "_STORY_HISTORY_SOURCES",
+        {
+            "EN": ((repository_url, "main", "en"),),
+            "JP": ((repository_url, "main", "ja_JP"),),
+        },
+    )
+    clone_calls = 0
+    clone_repository = LiveLocaleBuilder._clone_history_repository
+
+    async def counted_clone(self, repository_url, branch, destination):
+        nonlocal clone_calls
+        clone_calls += 1
+        return await clone_repository(self, repository_url, branch, destination)
+
+    monkeypatch.setattr(LiveLocaleBuilder, "_clone_history_repository", counted_clone)
+    archive = _archive(
+        {
+            "en": ("en-version", _missing_story_files()),
+            "jp": ("jp-version", _missing_story_files()),
+        }
+    )
+
+    async def respond(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/zipball/master"):
+            return httpx.Response(200, content=archive)
+        raise AssertionError(f"unexpected request: {request.url}")
+
+    builder = LiveLocaleBuilder(transport=httpx.MockTransport(respond))
+    try:
+        en, jp = await asyncio.gather(
+            builder.build("EN", "en-version", None, False),
+            builder.build("JP", "jp-version", None, False),
+        )
+
+        def art_ids(manifest: LocaleManifest) -> list[str]:
+            return [
+                reference.art_id
+                for story in manifest.story_groups[0].stories
+                for reference in story.art_references
+            ]
+
+        assert (art_ids(en), art_ids(jp)) == (["en_art"], ["jp_art"])
+        assert clone_calls == 1
+        assert len(builder._history_clone_tasks) == 1
+    finally:
+        await builder.aclose()
 
 
 @pytest.mark.asyncio
