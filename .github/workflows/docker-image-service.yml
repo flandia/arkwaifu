@@ -39,7 +39,6 @@ jobs:
           push: false
 
   build:
-    needs: test
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -61,5 +60,5 @@ jobs:
           push: true
           tags: |
             ghcr.io/flandia/arkwaifu/service:${{ github.sha }}
-            ${{ github.ref_type == 'tag' && 'ghcr.io/flandia/arkwaifu/service:latest' || '' }}
+            ${{ github.ref == 'refs/heads/master' && 'ghcr.io/flandia/arkwaifu/service:latest' || '' }}
             ${{ github.ref_type == 'tag' && format('ghcr.io/flandia/arkwaifu/service:{0}', github.ref_name) || '' }}

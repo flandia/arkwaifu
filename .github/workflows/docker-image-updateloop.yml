@@ -40,7 +40,6 @@ jobs:
       - run: uv run --no-sync pytest
 
   build:
-    needs: test
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -62,5 +61,5 @@ jobs:
           push: true
           tags: |
             ghcr.io/flandia/arkwaifu/updateloop:${{ github.sha }}
-            ${{ github.ref_type == 'tag' && 'ghcr.io/flandia/arkwaifu/updateloop:latest' || '' }}
+            ${{ github.ref == 'refs/heads/master' && 'ghcr.io/flandia/arkwaifu/updateloop:latest' || '' }}
             ${{ github.ref_type == 'tag' && format('ghcr.io/flandia/arkwaifu/updateloop:{0}', github.ref_name) || '' }}
