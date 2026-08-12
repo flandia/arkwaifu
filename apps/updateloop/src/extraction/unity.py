@@ -17,6 +17,7 @@ import UnityPy
 from PIL import Image
 from UnityPy.classes import GameObject, MonoBehaviour, Object, Sprite, Texture2D
 
+from ..local_path import resolve_local_path
 from .lz4ak import patch_unitypy
 
 EXTRACTOR_TASKS_PER_WORKER = 1
@@ -69,11 +70,7 @@ def mono_behaviour_name(obj: MonoBehaviour, type_tree=None) -> str:
 def _safe_destination(root: Path, relative: PurePosixPath) -> Path:
     """Resolve one container path while keeping it below the extraction root."""
 
-    if relative.is_absolute() or ".." in relative.parts:
-        raise ValueError(f"unsafe Unity container path: {relative}")
-    destination = root.joinpath(*relative.parts).resolve()
-    destination.relative_to(root.resolve())
-    return destination
+    return resolve_local_path(root, relative, context="Unity container path")
 
 
 def _export(

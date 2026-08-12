@@ -129,6 +129,26 @@ async def test_directory_cache_rebuilds_when_completed_content_is_corrupt(tmp_pa
 
 
 @pytest.mark.asyncio
+async def test_directory_cache_replaces_a_file_at_the_cache_path(tmp_path: Path):
+    cache = UpstreamCache(tmp_path / ".cache")
+    destination = cache.root / "version-1/art/processed"
+    destination.parent.mkdir(parents=True)
+    destination.write_text("corrupt", encoding="utf-8")
+
+    async def produce(path: Path) -> None:
+        (path / "value.txt").write_text("valid", encoding="utf-8")
+
+    rebuilt = await cache.directory(
+        "version-1",
+        PurePosixPath("art", "processed"),
+        "fingerprint",
+        produce,
+    )
+
+    assert (rebuilt.path / "value.txt").read_text(encoding="utf-8") == "valid"
+
+
+@pytest.mark.asyncio
 async def test_directory_validator_observes_the_promoted_stable_path(tmp_path: Path):
     cache = UpstreamCache(tmp_path / ".cache")
 

@@ -11,6 +11,7 @@ from arkwaifu_updateloop.locale import (
     parse_directives,
     parse_story_groups,
 )
+from arkwaifu_updateloop.locale import story as story_module
 
 
 def _write_json(root: Path, relative: str, value: object) -> None:
@@ -145,6 +146,56 @@ def test_story_parser_preserves_order_metadata_and_character_names(tmp_path: Pat
     assert story.art_references[1].title == "Title"
     assert story.art_references[1].subtitle == "Subtitle"
     assert story.art_references[3].names == ("Amiya", "Doctor", "Kal'tsit", "Closure")
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("storyTxt", "../outside"),
+        ("storyTxt", "/outside"),
+        ("storyTxt", "C:/outside"),
+        ("storyTxt", "folder\\outside"),
+        ("storyInfo", "safe/../../../outside"),
+        ("storyInfo", "C:/outside"),
+        ("storyInfo", "safe\\..\\..\\outside"),
+    ],
+)
+def test_story_parser_rejects_unsafe_local_paths(tmp_path: Path, field: str, value: str):
+    _write_empty_story_catalogs(tmp_path)
+    story = {
+        "storyId": "story",
+        "storyTxt": "opening",
+        "avgTag": "Before Operation",
+        field: value,
+    }
+    _write_json(
+        tmp_path,
+        "excel/story_review_table.json",
+        {
+            "group": {
+                "id": "group",
+                "name": "Main",
+                "actType": "MAIN_STORY",
+                "infoUnlockDatas": [story],
+            }
+        },
+    )
+    _write_json(tmp_path, "excel/story_review_meta_table.json", {})
+
+    with pytest.raises(ValueError, match=r"unsafe (story|game-data) path"):
+        parse_story_groups(tmp_path)
+
+
+@pytest.mark.parametrize(
+    "relative",
+    ["../outside.txt", "/outside.txt", "C:/outside.txt", "folder\\outside.txt"],
+)
+def test_game_data_path_rejects_platform_specific_escape_forms(
+    tmp_path: Path,
+    relative: str,
+):
+    with pytest.raises(ValueError, match="unsafe game-data path"):
+        story_module._game_data_path(tmp_path, relative)
 
 
 def test_story_parser_resolves_character_variables(tmp_path: Path):

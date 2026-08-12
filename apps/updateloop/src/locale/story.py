@@ -11,6 +11,7 @@ from pathlib import Path, PurePosixPath
 from typing import Any
 
 from ..domain import StoryArtReference, StoryGroupRecord, StoryRecord, StoryTag
+from ..local_path import resolve_local_path, safe_relative_path
 
 _DATA_ROOT = Path("assets/torappu/dynamicassets/gamedata")
 _INCOMPLETE_UPSTREAM_LOGGER = logging.getLogger("arkwaifu_updateloop.incomplete_upstream")
@@ -172,7 +173,11 @@ def _integrated_strategies_groups(
         # helpers. They support the official ending AVGs but are not separate
         # stories, so reserve the whole directory from the literal fallback.
         for directory in {PurePosixPath(item[0]).parent for item in endings}:
-            source_directory = story_root.joinpath(*directory.parts)
+            source_directory = resolve_local_path(
+                story_root,
+                directory,
+                context="story path",
+            )
             if source_directory.is_dir():
                 claimed_paths.update(
                     _story_key(path.relative_to(story_root).as_posix())
@@ -255,7 +260,11 @@ def _reclamation_groups(
     )
     for raw_topic_id, raw_topic in ordered_topics:
         topic_id = (_text(_at(raw_topic, "topicId")) or raw_topic_id).lower()
-        directory = story_root / "obt" / "sandboxperm" / topic_id
+        directory = resolve_local_path(
+            story_root,
+            f"obt/sandboxperm/{topic_id}",
+            context="story path",
+        )
         if not directory.is_dir():
             continue
         template = _text(_at(raw_topic, "topicTemplate"))
@@ -408,9 +417,7 @@ def _story_record(
 
 
 def _story_key(value: str) -> str:
-    path = PurePosixPath(value.replace("\\", "/"))
-    if path.is_absolute() or ".." in path.parts:
-        raise ValueError(f"unsafe story path: {value}")
+    path = safe_relative_path(value, context="story path")
     if path.suffix.lower() == ".txt":
         path = path.with_suffix("")
     return path.as_posix().lower()
@@ -641,10 +648,7 @@ def _split_tokens(raw: str) -> tuple[str, ...]:
 
 
 def _game_data_path(root: Path, relative: str) -> Path:
-    posix = PurePosixPath(relative)
-    if posix.is_absolute() or ".." in posix.parts:
-        raise ValueError(f"unsafe game-data path: {relative}")
-    return root / _DATA_ROOT.joinpath(*posix.parts)
+    return resolve_local_path(root / _DATA_ROOT, relative, context="game-data path")
 
 
 def _read_json(path: Path) -> Any:

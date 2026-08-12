@@ -112,12 +112,15 @@ async def _release_file_lock_safely(handle: BinaryIO) -> None:
     await await_owned(asyncio.to_thread(_release_file_lock, handle))
 
 
-def _remove_tree(path: Path) -> None:
-    """Remove a cache tree, retrying transient Windows sharing violations."""
+def _remove_cache_entry(path: Path) -> None:
+    """Remove a cache entry, retrying transient Windows sharing violations."""
 
     for attempt in range(20):
         try:
-            shutil.rmtree(path)
+            if path.is_symlink() or not path.is_dir():
+                path.unlink()
+            else:
+                shutil.rmtree(path)
             return
         except FileNotFoundError:
             return
@@ -253,16 +256,16 @@ class UpstreamCache:
                         value = await await_owned(asyncio.to_thread(validator, destination))
                 except BaseException:
                     if destination.exists():
-                        await await_owned(asyncio.to_thread(_remove_tree, destination))
+                        await await_owned(asyncio.to_thread(_remove_cache_entry, destination))
                     if backup.exists():
                         await self._replace(backup, destination)
                     raise
                 if backup.exists():
-                    await await_owned(asyncio.to_thread(_remove_tree, backup))
+                    await await_owned(asyncio.to_thread(_remove_cache_entry, backup))
                 return CachedDirectory(destination, value)
             finally:
                 if temporary.exists():
-                    await await_owned(asyncio.to_thread(_remove_tree, temporary))
+                    await await_owned(asyncio.to_thread(_remove_cache_entry, temporary))
 
     def _path(self, version: str, relative: PurePath) -> Path:
         """Resolve an entry while confining it below ``root/version``."""

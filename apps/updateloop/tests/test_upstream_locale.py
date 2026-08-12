@@ -5,7 +5,7 @@ import json
 import subprocess
 from io import BytesIO
 from pathlib import Path, PurePosixPath
-from zipfile import ZIP_DEFLATED, ZipFile
+from zipfile import ZIP_DEFLATED, ZipFile, ZipInfo
 
 import httpx
 import pytest
@@ -348,6 +348,39 @@ async def test_locale_builder_uses_master_version_id_and_reuses_cached_archive(
 
 
 @pytest.mark.asyncio
+async def test_locale_builder_reextracts_a_corrupt_cached_locale(tmp_path: Path):
+    archive = _archive({"en": ("data-version", _empty_locale_files())})
+    archive_downloads = 0
+
+    async def respond(request: httpx.Request) -> httpx.Response:
+        nonlocal archive_downloads
+        if request.url.path.endswith("/zipball/master"):
+            archive_downloads += 1
+            return httpx.Response(200, content=archive)
+        raise AssertionError(f"unexpected request: {request.url}")
+
+    cache = UpstreamCache(tmp_path / ".cache")
+    builder = LiveLocaleBuilder(
+        transport=httpx.MockTransport(respond),
+        cache=cache,
+    )
+    first = await builder.build("EN", "data-version", None, False)
+    cached_table = (
+        cache.root
+        / "data-version/game-data/EN/extracted"
+        / "assets/torappu/dynamicassets/gamedata/excel/story_review_table.json"
+    )
+    cached_table.write_text("{", encoding="utf-8")
+
+    rebuilt = await builder.build("EN", "data-version", None, False)
+
+    assert rebuilt == first
+    assert json.loads(cached_table.read_text(encoding="utf-8")) == {}
+    assert archive_downloads == 1
+    await builder.aclose()
+
+
+@pytest.mark.asyncio
 async def test_one_run_scoped_locale_builder_caches_one_all_server_archive(tmp_path):
     archive = _archive(
         {
@@ -652,10 +685,37 @@ async def test_build_rejects_master_snapshot_that_raced_detected_version():
     await builder.aclose()
 
 
-def test_extract_rejects_parent_traversal(tmp_path):
+@pytest.mark.parametrize(
+    "member",
+    [
+        "../outside.json",
+        "snapshot/en/gamedata/story/../outside.txt",
+        "snapshot/en/gamedata/story/C:/outside.txt",
+        "snapshot/en/gamedata/story/\\outside.txt",
+    ],
+)
+def test_extract_rejects_unsafe_local_paths(tmp_path: Path, member: str):
     archive_path = tmp_path / "unsafe.zip"
     with ZipFile(archive_path, "w", ZIP_DEFLATED) as archive:
-        archive.writestr("../outside.json", "{}")
+        info = ZipInfo()
+        info.filename = member
+        info.orig_filename = member
+        info.compress_type = ZIP_DEFLATED
+        archive.writestr(info, "outside")
 
     with pytest.raises(ValueError, match="unsafe game-data archive member"):
         LiveLocaleBuilder._extract(archive_path, tmp_path / "output", "en")
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        PurePosixPath("../outside.txt"),
+        PurePosixPath("/outside.txt"),
+        PurePosixPath("C:/outside.txt"),
+        PurePosixPath("gamedata/story/\\outside.txt"),
+    ],
+)
+def test_historical_recovery_rejects_unsafe_local_paths(tmp_path: Path, path: PurePosixPath):
+    with pytest.raises(ValueError, match="unsafe historical story path"):
+        locale_upstream._write_story_text(tmp_path, path, b"outside")

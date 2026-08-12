@@ -21,6 +21,7 @@ import httpx
 
 from ..asyncio_tools import await_owned
 from ..domain import LocaleManifest, LocaleUnit
+from ..local_path import resolve_local_path, safe_relative_path
 from ..locale import parse_galleries, parse_story_groups
 from .cache import UpstreamCache
 
@@ -158,14 +159,16 @@ def _missing_story_paths(data_root: Path) -> tuple[PurePosixPath, ...]:
     for story_name in story_names:
         if not isinstance(story_name, str) or not story_name:
             continue
-        relative = PurePosixPath(story_name.replace("\\", "/"))
+        relative = safe_relative_path(story_name, context="historical story path")
         if relative.suffix.lower() == ".txt":
             relative = relative.with_suffix("")
         path = PurePosixPath(f"gamedata/story/{relative.as_posix()}.txt")
         path = PurePosixPath(path.as_posix().lower())
-        if relative.is_absolute() or ".." in relative.parts:
-            raise ValueError(f"unsafe historical story path: {path}")
-        local_path = data_root / _ASSET_PREFIX.joinpath(*path.parts)
+        local_path = resolve_local_path(
+            data_root / _ASSET_PREFIX,
+            path,
+            context="historical story path",
+        )
         if not local_path.is_file():
             missing[path] = None
     return tuple(missing)
@@ -180,7 +183,11 @@ def _json_values(value: object) -> tuple[object, ...]:
 
 
 def _write_story_text(data_root: Path, path: PurePosixPath, content: bytes) -> None:
-    output = data_root / _ASSET_PREFIX.joinpath(*path.parts)
+    output = resolve_local_path(
+        data_root / _ASSET_PREFIX,
+        path,
+        context="historical story path",
+    )
     output.parent.mkdir(parents=True, exist_ok=True)
     output.write_bytes(content)
 
@@ -288,20 +295,18 @@ class LiveLocaleBuilder:
                     )
                     await self._recover_missing_story_texts(unit, destination)
 
-                cached_data = await self._cache.directory(
+                cached_locale = await self._cache.directory(
                     upstream_version,
                     PurePosixPath("game-data", unit, "extracted"),
                     fingerprint,
                     materialize,
+                    lambda path: _parse_manifest(unit, upstream_version, path),
                 )
-                data_root = cached_data.path
+                if not isinstance(cached_locale.value, LocaleManifest):
+                    raise TypeError(f"cached {unit} locale has no manifest: {cached_locale.path}")
+                return cached_locale.value
             return await await_owned(
-                asyncio.to_thread(
-                    _parse_manifest,
-                    unit,
-                    upstream_version,
-                    data_root,
-                )
+                asyncio.to_thread(_parse_manifest, unit, upstream_version, data_root)
             )
 
     async def _recover_missing_story_texts(
@@ -653,9 +658,10 @@ class LiveLocaleBuilder:
             for member in archive.infolist():
                 if member.is_dir():
                     continue
-                path = PurePosixPath(member.filename)
-                if path.is_absolute() or ".." in path.parts:
-                    raise ValueError(f"unsafe game-data archive member: {member.filename}")
+                path = safe_relative_path(
+                    member.orig_filename,
+                    context="game-data archive member",
+                )
                 if len(path.parts) < 3:
                     continue
                 if path.parts[1] != server_directory:
@@ -667,7 +673,11 @@ class LiveLocaleBuilder:
                 )
                 if not selected:
                     continue
-                output = destination / prefix.joinpath(*relative.parts)
+                output = resolve_local_path(
+                    destination / prefix,
+                    relative,
+                    context="game-data archive member",
+                )
                 output.parent.mkdir(parents=True, exist_ok=True)
                 with archive.open(member) as source, output.open("wb") as target:
                     while chunk := source.read(1024 * 1024):
