@@ -54,12 +54,14 @@ Every story-group payload exposes one of the schema-defined `type` values:
 - `others`
 
 These are parallel categories. In particular, `integrated_strategies` contains
-Integrated Strategies monthly-squad stories, `reclamation_algorithm` contains
-Reclamation Algorithm stories, and `others` contains every remaining non-`[uc]`
-story script grouped by source directory. That direct scan intentionally also
-exposes tutorial and control scripts; `[uc]` companion files remain story
-descriptions rather than separate stories. The singular `other` value is not
-part of the schema.
+official Integrated Strategies ending stories grouped by topic.
+`reclamation_algorithm` contains only Reclamation Algorithm stories with at
+least one art reference. `others` contains the remaining eligible non-`[uc]`
+story scripts grouped by source directory. That direct scan intentionally also
+exposes tutorial and control scripts. Integrated Strategies monthly-squad
+scripts are excluded because they contain no indexed AVG art, and `[uc]`
+companion files remain story descriptions rather than separate stories. The
+singular `other` value is not part of the schema.
 
 Story-group and story-summary card backgrounds use this shape:
 

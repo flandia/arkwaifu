@@ -59,7 +59,9 @@ type story = {
 (** A summary of one ordered story group. [group_type] is one of
     [main_story], [major_event], [minor_event], [operator_record],
     [integrated_strategies], [reclamation_algorithm], or [others], as enforced
-    by the updater-owned SQLite schema. *)
+    by the updater-owned SQLite schema. [integrated_strategies] denotes official
+    ending stories grouped by topic. [reclamation_algorithm] groups only
+    stories with art references. *)
 type story_group = {
   id : string;
   name : string;
