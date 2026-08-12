@@ -1,0 +1,67 @@
+@utility checkerboard {
+  background-color: #f2f2f2;
+  background-image:
+    linear-gradient(45deg, #d8d8d8 25%, transparent 25%),
+    linear-gradient(-45deg, #d8d8d8 25%, transparent 25%),
+    linear-gradient(45deg, transparent 75%, #d8d8d8 75%),
+    linear-gradient(-45deg, transparent 75%, #d8d8d8 75%);
+  background-position:
+    0 0,
+    0 0.65rem,
+    0.65rem -0.65rem,
+    -0.65rem 0;
+  background-size: 1.3rem 1.3rem;
+}
+
+@keyframes card-preview-cycle-two {
+  0%,
+  45%,
+  100% {
+    opacity: 1;
+  }
+
+  50%,
+  95% {
+    opacity: 0;
+  }
+}
+
+@keyframes card-preview-cycle-three {
+  0%,
+  30%,
+  100% {
+    opacity: 1;
+  }
+
+  33.333%,
+  96.667% {
+    opacity: 0;
+  }
+}
+
+.card-preview-frame[data-preview-count="2"][data-preview-ready="true"] {
+  animation-name: card-preview-cycle-two;
+  animation-duration: var(--preview-duration);
+  animation-timing-function: linear;
+  animation-iteration-count: infinite;
+  animation-delay: var(--preview-delay);
+}
+
+.card-preview-frame[data-preview-count="3"][data-preview-ready="true"] {
+  animation-name: card-preview-cycle-three;
+  animation-duration: var(--preview-duration);
+  animation-timing-function: linear;
+  animation-iteration-count: infinite;
+  animation-delay: var(--preview-delay);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .card-preview-frame {
+    animation: none !important;
+    opacity: 0;
+  }
+
+  .card-preview-frame:first-child {
+    opacity: 1;
+  }
+}

@@ -7,12 +7,11 @@ application packages:
 
 - `apps/updateloop/` is the Python 3.14 writer and art/locale pipeline.
 - `apps/service/` is the OCaml 5.5 Dream read service.
-- `apps/web/` reserves space for a later JavaScript frontend rewrite.
+- `apps/web/` is the React 19 and React Router read-only frontend.
 
-Search, frontend implementation, and the Go v1 API are outside the current
-scope. Use v1.9.4 as a behavioral reference when a rewrite detail is unclear,
-but do not carry its API or database format into the rewrite without a current
-requirement.
+The Go v1 API and global server-side search are outside the current scope. Use
+v1.9.4 as a behavioral reference when a frontend detail is unclear, but do not
+carry its API or database format into the rewrite without a current requirement.
 
 Other important paths are:
 
@@ -34,24 +33,33 @@ Keep this publication order:
 2. Pull or initialize `arkwaifu.sqlite3` and compare its unit versions.
 3. Prepare every changed requested unit concurrently.
 4. Apply the requested changes in one local SQLite transaction.
-5. Batch-upload all required PNGs with bounded concurrency.
+5. Batch-upload required PNGs and generate/upload final-art thumbnails with
+   bounded concurrency.
 6. Upload `arkwaifu.sqlite3` last.
 
-The final database PUT publishes the database metadata. PNG uploads happen
+The final database PUT publishes the database metadata. Image uploads happen
 after the local transaction under the contributing art `resVersion` and before
-the database PUT. Treat PNG keys as create-only: accept an existing object only
-when its size, content type, and immutable cache policy match, and fail on a
-conflict. A failed PNG batch can therefore leave unreachable objects, but it
-does not change the keys referenced by the currently published database.
+the database PUT. Treat composition/source PNG keys as create-only: accept an
+existing object only when its size, content type, and immutable cache policy
+match, and fail on a conflict. Thumbnails are derived, replaceable WebP objects
+that use the object store and CDN's default cache behavior. A failed image batch can
+leave unreachable PNGs or partially replace thumbnails already reachable from
+the current database, but it does not publish new database metadata.
 SQLite statement and commit constraints validate writes; runtime code checks
 `user_version` but does not run a separate `quick_check`, `integrity_check`, or
 post-write `foreign_key_check`. The updater creates schema version 2 and rejects
-databases with any other declared schema version; recreate development databases
-made with an earlier schema.
+databases with any other declared schema version. Beta schema changes deliberately
+have no table migration or compatibility layer; recreate any development
+database whose shape or constraints differ, even if it also declares version 2.
+The sole in-place exception is the additive
+`story_art_references_by_art (locale, art_id)` read index: the updater restores
+and republishes it once when a supported production database lacks it.
 
-Art object keys are
-`ART/<resVersion>/<variant>/<category>/<name>.png`. The implemented variants
-are `composition` for final art and `source` for retained character layers.
+Composition and source keys are
+`ART/<resVersion>/<variant>/<category>/<name>.png`; their variants are
+`composition` for final art and `source` for retained character layers. Each
+final art also has the derived key
+`ART/<resVersion>/thumbnail/<category>/<name>.webp`.
 The platform from which a compensating asset was obtained is not part of its
 variant or object key. Names are logical identifiers, not content hashes. Final
 art identity is `(category, art_id)`, and every story or gallery reference
@@ -103,8 +111,22 @@ exactly one `.cache/game-data/archive.zip`, admitted against all requested
 locale `versionId` values, while locale-specific extracted files remain below
 `.cache/<resVersion>/game-data/<unit>/extracted/`.
 
+Story groups use exactly `main_story`, `major_event`, `minor_event`,
+`operator_record`, `integrated_strategies`, `reclamation_algorithm`, and
+`others`. Keep story-path ownership inside `locale/story.py`: story review has
+first priority, followed by official Integrated Strategies ending catalogs,
+Reclamation Algorithm, and the literal remaining-file scan. Publish only
+Reclamation Algorithm stories with art references. Claim and exclude Integrated
+Strategies monthly-squad scripts because they contain no indexed AVG art. The
+Integrated Strategies theme directories are reserved for their official ending
+AVGs, so their opening, tutorial, and preload helpers do not fall through to
+`others`. The final scan publishes every other remaining non-`[uc]` story text
+grouped by directory, including tutorial and control scripts. `[uc]` files are
+descriptions, not standalone stories. Do not add a generic source-adapter layer
+or duplicate ownership logic in callers.
+
 `--no-cache` uses the same layout under a run-scoped temporary directory that
-must remain alive through PNG and database upload. Keep rendered PNGs
+must remain alive through image and database upload. Keep rendered PNGs
 file-backed; do not retain the full art set in parent-process memory.
 
 Downloads and extraction processes are independently bounded. Each process
@@ -138,6 +160,17 @@ docker compose -f infra/compose.yaml up -d minio minio-init
 # OCaml service without a host OCaml installation
 docker build --target build -t arkwaifu-service-build:dev apps/service
 docker compose -f infra/compose.yaml --profile service up -d --build
+
+# React frontend
+Push-Location apps/web
+bun ci
+bun run lint
+bun run format:check
+bun test
+bun run build
+Pop-Location
+
+# The production frontend is an App Platform Static Site; see apps/web/README.md.
 ```
 
 Ordinary tests must remain deterministic and offline. Live CDN/game-data smoke

@@ -1,0 +1,33 @@
+@import "tailwindcss";
+@import "./styles/base.css";
+@import "./styles/utilities.css";
+@import "./styles/transitions.css";
+
+@theme {
+  --color-brand: #39498a;
+  --color-brand-soft: #e8ebf7;
+  --color-brand-ink: #ffffff;
+  --color-ink: #111111;
+  --color-paper: #f4f2ed;
+  --color-surface: #ffffff;
+  --color-muted: #66645f;
+  --color-line: #c9c6bd;
+  --color-signal: #ffd800;
+
+  --font-sans:
+    "Atkinson Hyperlegible Next Variable", "Noto Sans SC", "Microsoft YaHei", Arial, Helvetica,
+    sans-serif;
+  --font-display: Impact, "Arial Black", "Noto Sans SC", "Microsoft YaHei", sans-serif;
+  --font-mono:
+    "Cascadia Mono", "SFMono-Regular", Consolas, "Noto Sans Mono CJK SC", "Sarasa Mono SC",
+    "Noto Sans CJK SC", "Microsoft YaHei UI", "Microsoft YaHei", "PingFang SC", monospace;
+
+  --shadow-hard: 0.35rem 0.35rem 0 #111111;
+  --shadow-hard-sm: 0.17rem 0.17rem 0 #111111;
+
+  --spacing-sidebar: 19rem;
+  --spacing-content: 90rem;
+  --duration-exit: 150ms;
+  --duration-enter: 210ms;
+  --duration-move: 400ms;
+}

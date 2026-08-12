@@ -1,0 +1,99 @@
+@layer base {
+  :root {
+    color-scheme: light;
+    font-synthesis: none;
+    text-rendering: optimizeLegibility;
+  }
+
+  html {
+    background: var(--color-ink);
+    -webkit-tap-highlight-color: rgb(57 73 138 / 24%);
+  }
+
+  body {
+    min-width: 20rem;
+    min-height: 100vh;
+    overflow-x: hidden;
+    background: var(--color-paper);
+    color: var(--color-ink);
+    font-family: var(--font-sans);
+  }
+
+  button,
+  input,
+  select {
+    font: inherit;
+  }
+
+  button,
+  a,
+  select,
+  input {
+    touch-action: manipulation;
+  }
+
+  button,
+  select {
+    cursor: pointer;
+  }
+
+  code {
+    overflow-wrap: anywhere;
+    font-family: var(--font-mono);
+    font-size: 0.78rem;
+    font-variant-numeric: tabular-nums;
+  }
+
+  h1,
+  h2,
+  h3 {
+    text-wrap: balance;
+  }
+
+  p {
+    text-wrap: pretty;
+  }
+
+  :is(a, button, input, select, textarea, [tabindex]):focus-visible {
+    outline: 3px solid var(--color-ink);
+    outline-offset: 3px;
+    box-shadow: 0 0 0 6px var(--color-signal);
+  }
+
+  ::selection {
+    background: var(--color-signal);
+    color: var(--color-ink);
+  }
+}
+
+html[data-navigation-pending="true"]::after {
+  position: fixed;
+  z-index: 500;
+  top: 0;
+  right: 0;
+  left: 0;
+  height: 0.25rem;
+  transform-origin: left;
+  animation: pending-navigation 1s ease-in-out infinite alternate;
+  background: var(--color-brand);
+  content: "";
+  pointer-events: none;
+}
+
+dialog::backdrop {
+  background: rgb(17 17 17 / 72%);
+}
+
+html:has(dialog[open]),
+body:has(dialog[open]) {
+  overflow: hidden;
+}
+
+@keyframes pending-navigation {
+  from {
+    transform: scaleX(0.22);
+  }
+  to {
+    transform: scaleX(0.82);
+  }
+}

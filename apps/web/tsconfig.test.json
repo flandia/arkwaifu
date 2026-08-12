@@ -1,0 +1,9 @@
+{
+  "extends": "./tsconfig.app.json",
+  "compilerOptions": {
+    "tsBuildInfoFile": "./node_modules/.tmp/tsconfig.test.tsbuildinfo",
+    "types": ["bun", "vite/client", "react/canary", "react-dom/canary"]
+  },
+  "include": ["src/**/*.test.ts"],
+  "exclude": []
+}

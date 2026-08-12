@@ -3,11 +3,12 @@
 
 # Arkwaifu (arkwaifu)
 
-![](https://img.shields.io/github/license/FlandiaYingman/arkwaifu?style=flat-square)
-![](https://img.shields.io/github/v/release/FlandiaYingman/arkwaifu?style=flat-square)
+![](https://img.shields.io/github/license/flandia/arkwaifu?style=flat-square)
+![](https://img.shields.io/github/v/release/flandia/arkwaifu?style=flat-square)
 
-![](https://img.shields.io/github/actions/workflow/status/FlandiaYingman/arkwaifu/docker-image-service.yml?style=flat-square&label=build%3A%20service)
-![](https://img.shields.io/github/actions/workflow/status/FlandiaYingman/arkwaifu/docker-image-updateloop.yml?style=flat-square&label=build%3A%20updateloop)
+![](https://img.shields.io/github/actions/workflow/status/flandia/arkwaifu/docker-image-service.yml?style=flat-square&label=build%3A%20service)
+![](https://img.shields.io/github/actions/workflow/status/flandia/arkwaifu/docker-image-updateloop.yml?style=flat-square&label=build%3A%20updateloop)
+![](https://img.shields.io/github/actions/workflow/status/flandia/arkwaifu/web.yml?style=flat-square&label=build%3A%20web)
 ![](https://img.shields.io/website?style=flat-square&url=https%3A%2F%2Farkwaifu.cc%2F)
 
 Arkwaifu is a website which arranges and provides artwork and localized story
@@ -15,18 +16,23 @@ metadata extracted from Arknights.
 
 This branch is a breaking rewrite. A Python 3.14 updateloop publishes native
 PNG artwork and one SQLite database to S3-compatible storage, and an OCaml 5.5
-Dream service provides the HTTP API. Search is deferred. The JavaScript
-frontend will be rewritten later; until then, its source remains in the
-[frontend repo](https://github.com/FlandiaYingman/arkwaifu-frontend).
+Dream service provides the HTTP API. A React 19 and React Router frontend
+presents the archive and provides client-side story and gallery filtering.
+Global server-side search remains deferred. The previous frontend is retained
+in its [historical repository](https://github.com/flandia/arkwaifu-frontend).
 
-🎉 Arkwaifu v1 has released! Check it at [arkwaifu.cc](https://arkwaifu.cc/)!
+🎉 Arkwaifu v2 has released! Check it at [arkwaifu.cc](https://arkwaifu.cc/)!
 
 ## Features
 
 - Art and all supported locales can be updated automatically.
 - Final PNG compositions and original character body, face, and whole-body
   layers are retained.
+- Cards use updater-generated WebP thumbnails while detail views retain the
+  full PNG compositions.
 - Story and gallery metadata is available in CN, EN, JP, KR, and TW.
+- The responsive React frontend supports localized archive browsing and
+  client-side index filtering.
 
 ## Available Arts
 
@@ -61,14 +67,14 @@ source layers.
 ## Roadmap
 
 - [x] Switchable language.
-- [ ] Rewrite the frontend.
-- [ ] Support searching.
+- [x] Switchable archive locale.
+- [x] A new frontend.
+- [ ] Add global server-side search.
 
 ## Development
 
-See the [updateloop documentation](apps/updateloop/README.md) and [service
-documentation](apps/service/README.md).
-The `apps/web/` directory is reserved for the later frontend rewrite.
+See the [updateloop documentation](apps/updateloop/README.md), [service
+documentation](apps/service/README.md), and [web documentation](apps/web/README.md).
 
 ## Acknowledgements
 
