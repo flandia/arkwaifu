@@ -6,7 +6,7 @@ import {
   formatBytes,
   getArtContext,
   getArtData,
-  type Art,
+  type ArtDetail,
   type ArtCategory,
 } from "../../api";
 import { useUi, useUiLanguage } from "../../i18n";
@@ -21,7 +21,7 @@ function isArtCategory(value: string | undefined): value is ArtCategory {
   return value === "image" || value === "background" || value === "item" || value === "character";
 }
 
-function ArtworkHero({ art, title }: { art: Art; title: string }) {
+function ArtworkHero({ art, title }: { art: ArtDetail; title: string }) {
   return (
     <ViewTransition default="none" name={artTransitionName(art.category, art.id)} share="morph">
       <figure

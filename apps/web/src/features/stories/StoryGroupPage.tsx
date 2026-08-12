@@ -1,6 +1,6 @@
 import { use } from "react";
 import { useLocation, useParams } from "react-router";
-import { ApiError, getGroupData } from "../../api";
+import { ApiError, getStoryGroupData } from "../../api";
 import { useUi, useUiLanguage } from "../../i18n";
 import {
   localeLanguageTag,
@@ -21,7 +21,7 @@ export function StoryGroupPage() {
   const locale = requiredLocale(params.locale);
   const section = requiredSection(params.section);
   const groupID = params.groupID ?? "";
-  const [group, stories] = use(getGroupData(locale, groupID));
+  const [group, stories] = use(getStoryGroupData(locale, groupID));
   if (sectionForType(group.type) !== section)
     throw new ApiError(t("errors.wrongStorySection"), 404);
   const recordLanguage = localeLanguageTag(locale);

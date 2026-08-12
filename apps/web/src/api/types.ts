@@ -24,10 +24,10 @@ export interface ImageMetadata {
   contentUrl: string;
 }
 
-export interface Art {
+export interface ArtDetail {
   id: string;
   category: ArtCategory;
-  thumbnailContentUrl?: string;
+  thumbnailContentUrl: string;
   image: ImageMetadata;
   sourceArtIDs: string[];
 }
@@ -75,10 +75,10 @@ export interface ArtReference {
   title: string | null;
   subtitle: string | null;
   names: string[];
-  thumbnailContentUrl?: string | null;
+  thumbnailContentUrl: string | null;
 }
 
-export interface Story {
+interface StoryMetadata {
   id: string;
   groupID: string;
   tag: "before" | "after" | "interlude";
@@ -86,20 +86,27 @@ export interface Story {
   code: string;
   name: string;
   info: string;
-  artReferences: ArtReference[];
-  previewArtReferences?: ArtReference[];
-  representativeArtReference?: ArtReference | null;
 }
 
-export interface StoryGroup {
-  id: string;
-  name: string;
-  type: StoryGroupType;
-  previewArtReferences?: ArtReference[];
+export interface StoryDetail extends StoryMetadata {
+  artReferences: ArtReference[];
+}
+
+export interface StorySummary extends StoryMetadata {
+  artReferences: [];
+  previewArtReferences: ArtReference[];
   representativeArtReference: ArtReference | null;
 }
 
-export interface StoryGroupDetail extends StoryGroup {
+export interface StoryGroupSummary {
+  id: string;
+  name: string;
+  type: StoryGroupType;
+  previewArtReferences: ArtReference[];
+  representativeArtReference: ArtReference | null;
+}
+
+export interface StoryGroupDetail extends StoryGroupSummary {
   artReferences: ArtReference[];
 }
 
@@ -120,9 +127,9 @@ export interface GalleryEntry {
   description: string;
   artID: string;
   category: ArtCategory;
-  thumbnailContentUrl?: string | null;
+  thumbnailContentUrl: string | null;
 }
 
-export interface Gallery extends GalleryMetadata {
+export interface GalleryDetail extends GalleryMetadata {
   entries: GalleryEntry[];
 }

@@ -6,12 +6,24 @@ import {
   formatBytes,
   getArt,
   getArtContext,
-  getGroupData,
+  getStoriesByGroup,
+  getStory,
   getStoryGroup,
+  getStoryGroupData,
   getUnclassifiedArts,
   uniqueArtReferences,
   type ArtReference,
+  type StoryDetail,
+  type StoryGroupDetail,
+  type StorySummary,
 } from "./api";
+import { resolveApiBaseUrl } from "./api/client";
+
+const configuredApiBaseUrl = resolveApiBaseUrl(import.meta.env.VITE_API_BASE_URL);
+
+function apiUrl(path: string): string {
+  return `${configuredApiBaseUrl}${path}`;
+}
 
 const reference: ArtReference = {
   artID: "char_220_grani#5$1",
@@ -51,6 +63,13 @@ afterEach(() => {
 });
 
 describe("archive helpers", () => {
+  it("defaults API requests to production and normalizes configured overrides", () => {
+    expect(resolveApiBaseUrl(undefined)).toBe("https://api.arkwaifu.cc");
+    expect(resolveApiBaseUrl(" https://preview.example.test/root/// ")).toBe(
+      "https://preview.example.test/root",
+    );
+  });
+
   it("deduplicates qualified art identities while preserving first occurrence", () => {
     const sameIDOtherCategory = { ...reference, category: "image" as const };
     expect(uniqueArtReferences([reference, reference, sameIDOtherCategory])).toEqual([
@@ -86,9 +105,7 @@ describe("archive API client", () => {
     expect(first).toBe(second);
     expect(await first).toEqual(artResponse);
     expect(fetch).toHaveBeenCalledTimes(1);
-    expect(fetch.mock.calls[0]?.[0]).toBe(
-      "https://api.arkwaifu.cc/api/arts/character/char_220_grani%235%241",
-    );
+    expect(fetch.mock.calls[0]?.[0]).toBe(apiUrl("/api/arts/character/char_220_grani%235%241"));
     expect(fetch.mock.calls[0]?.[1]).toMatchObject({ headers: { Accept: "application/json" } });
   });
 
@@ -124,7 +141,7 @@ describe("archive API client", () => {
   });
 
   it("loads aggregate story-group artwork through the detail route", async () => {
-    const group = {
+    const group: StoryGroupDetail = {
       id: "main_17",
       name: "相变临界",
       type: "main_story" as const,
@@ -135,7 +152,42 @@ describe("archive API client", () => {
     const fetch = spyOn(globalThis, "fetch").mockResolvedValue(jsonResponse(group));
 
     expect(await getStoryGroup("CN", group.id)).toEqual(group);
-    expect(fetch.mock.calls[0]?.[0]).toBe("https://api.arkwaifu.cc/api/CN/story-groups/main_17");
+    expect(fetch.mock.calls[0]?.[0]).toBe(apiUrl("/api/CN/story-groups/main_17"));
+  });
+
+  it("keeps story summary and detail endpoint shapes distinct", async () => {
+    const detail: StoryDetail = {
+      id: "main_17-1",
+      groupID: "main_17",
+      tag: "before",
+      tagText: "Before Operation",
+      code: "17-1",
+      name: "Seeds",
+      info: "A story detail.",
+      artReferences: [reference],
+    };
+    const summary: StorySummary = {
+      id: detail.id,
+      groupID: detail.groupID,
+      tag: detail.tag,
+      tagText: detail.tagText,
+      code: detail.code,
+      name: detail.name,
+      info: detail.info,
+      artReferences: [],
+      previewArtReferences: [reference],
+      representativeArtReference: reference,
+    };
+    const fetch = spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(jsonResponse([summary]))
+      .mockResolvedValueOnce(jsonResponse(detail));
+
+    expect(await getStoriesByGroup("EN", detail.groupID)).toEqual([summary]);
+    expect(await getStory("EN", detail.id)).toEqual(detail);
+    expect(fetch.mock.calls.map(([url]) => url)).toEqual([
+      apiUrl("/api/EN/story-groups/main_17/stories"),
+      apiUrl("/api/EN/stories/main_17-1"),
+    ]);
   });
 
   it("loads and caches localized artwork context", async () => {
@@ -169,7 +221,7 @@ describe("archive API client", () => {
     expect(await first).toEqual(context);
     expect(fetch).toHaveBeenCalledTimes(1);
     expect(fetch.mock.calls[0]?.[0]).toBe(
-      "https://api.arkwaifu.cc/api/CN/arts/character/char_220_grani%235%241/context",
+      apiUrl("/api/CN/arts/character/char_220_grani%235%241/context"),
     );
   });
 
@@ -189,7 +241,7 @@ describe("archive API client", () => {
     expect(first).toBe(second);
     expect(await first).toEqual(summaries);
     expect(fetch).toHaveBeenCalledTimes(1);
-    expect(fetch.mock.calls[0]?.[0]).toBe("https://api.arkwaifu.cc/api/unclassified-arts");
+    expect(fetch.mock.calls[0]?.[0]).toBe(apiUrl("/api/unclassified-arts"));
   });
 
   it("retains a missing group-page request instead of retrying during Suspense renders", async () => {
@@ -197,12 +249,12 @@ describe("archive API client", () => {
       jsonResponse({ error: "not_found" }, 404),
     );
 
-    const first = getGroupData("CN", "missing");
-    const second = getGroupData("CN", "missing");
+    const first = getStoryGroupData("CN", "missing");
+    const second = getStoryGroupData("CN", "missing");
     expect(first).toBe(second);
     const error = await first.catch((reason: unknown) => reason);
     expect(error).toEqual(expect.objectContaining({ name: "ApiError", status: 404 }));
     expect(fetch).toHaveBeenCalledTimes(2);
-    expect(getGroupData("CN", "missing")).toBe(first);
+    expect(getStoryGroupData("CN", "missing")).toBe(first);
   });
 });

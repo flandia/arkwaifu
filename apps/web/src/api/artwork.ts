@@ -1,7 +1,7 @@
 import { ApiError, cachedRequest, fetchJson, pathSegment } from "./client";
-import type { Art, ArtCategory, ArtContext, Locale, SourceArt } from "./types";
+import type { ArtCategory, ArtContext, ArtDetail, Locale, SourceArt } from "./types";
 
-export function getArt(category: ArtCategory, artID: string): Promise<Art> {
+export function getArt(category: ArtCategory, artID: string): Promise<ArtDetail> {
   return cachedRequest(`art:${category}:${artID}`, () =>
     fetchJson(`/api/arts/${category}/${pathSegment(artID)}`),
   );
@@ -41,7 +41,10 @@ export function getLegacyArtCategories(artID: string): Promise<ArtCategory[]> {
   });
 }
 
-export function getArtData(category: ArtCategory, artID: string): Promise<[Art, SourceArt[]]> {
+export function getArtData(
+  category: ArtCategory,
+  artID: string,
+): Promise<[ArtDetail, SourceArt[]]> {
   return cachedRequest(`art-page:${category}:${artID}`, async () => {
     const art = await getArt(category, artID);
     const sources = await Promise.all(art.sourceArtIDs.map(getSourceArt));

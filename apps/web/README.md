@@ -11,12 +11,19 @@ bun ci
 bun run dev
 ```
 
-The Vite development server listens on `http://127.0.0.1:5173`. All builds call
-the public API at `https://api.arkwaifu.cc` directly. Image elements use the
-object-storage URLs returned in API metadata: cards use `thumbnailContentUrl`,
-while detail views and source layers use `image.contentUrl`. Missing thumbnails
-show the normal unavailable state; the frontend does not call a service redirect
-as a fallback.
+The Vite development server listens on `http://127.0.0.1:5173`. Builds use the
+public API at `https://api.arkwaifu.cc` by default. To use a local or preview
+service, create `.env.local` before starting or building the app:
+
+```dotenv
+VITE_API_BASE_URL=http://127.0.0.1:58080
+```
+
+Vite embeds this value at build time; it is not runtime configuration. Image
+elements use the object-storage URLs returned in API metadata: cards use
+`thumbnailContentUrl`, while detail views and source layers use
+`image.contentUrl`. Missing thumbnails show the normal unavailable state; the
+frontend does not call a service redirect as a fallback.
 
 Run all local checks with:
 
@@ -32,13 +39,15 @@ bun run build
 Deploy the frontend as a **Static Site** component with these settings:
 
 - Source directory: `apps/web`
-- Build command: `bun run build` (the Bun buildpack default)
+- Dockerfile path: `Dockerfile`
 - Output directory: `dist`
 - Catch-all document: `index.html`
 
-The committed `bun.lock` selects App Platform's native Bun buildpack, and
-`.bun-version` pins its runtime. App Platform installs the locked dependencies
-with Bun before running the build. The catch-all setting is required so direct
+App Platform builds the committed Dockerfile and extracts the static files from
+its final `dist` directory. The Dockerfile pins Bun and installs the committed
+lockfile before running the Vite build. Set `VITE_API_BASE_URL` as a build-time
+variable when deploying against a non-production service; the Dockerfile exposes
+it to Vite through a build argument. The catch-all setting is required so direct
 visits to React Router routes load the application instead of returning a
 platform 404.
 

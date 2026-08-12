@@ -3,9 +3,9 @@ export { ApiError, clearApiCache } from "./client";
 export { getGalleries, getGallery, getGalleryData } from "./galleries";
 export { getHomeData } from "./home";
 export {
-  getGroupData,
   getStoryGroup,
-  getStories,
+  getStoryGroupData,
+  getStoriesByGroup,
   getStory,
   getStoryData,
   getStoryGroups,
@@ -14,22 +14,23 @@ export {
 export { getUnclassifiedArts } from "./unclassified";
 export {
   localeNames,
-  type Art,
   type ArtCategory,
-  type ArtSummary,
   type ArtContext,
+  type ArtDetail,
   type ArtOccurrence,
   type ArtReference,
   type ArtSibling,
-  type Gallery,
+  type ArtSummary,
+  type GalleryDetail,
   type GalleryEntry,
   type GallerySummary,
   type ImageMetadata,
   type Locale,
   type SourceArt,
-  type Story,
-  type StoryGroup,
+  type StoryDetail,
   type StoryGroupDetail,
+  type StoryGroupSummary,
   type StoryGroupType,
+  type StorySummary,
 } from "./types";
 export { artTransitionName, formatBytes, uniqueArtReferences } from "./utils";

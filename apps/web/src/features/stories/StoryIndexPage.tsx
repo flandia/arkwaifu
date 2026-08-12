@@ -1,6 +1,6 @@
 import { use } from "react";
 import { useParams } from "react-router";
-import { getStoryIndexData, type StoryGroup } from "../../api";
+import { getStoryIndexData, type StoryGroupSummary } from "../../api";
 import { useUi } from "../../i18n";
 import { requiredLocale, requiredSection, useStorySections } from "../../navigation";
 import {
@@ -11,7 +11,7 @@ import {
 import { ArchivePage, EmptyState, PageHeader } from "../../shared/Page";
 import { StoryGroupCard } from "./StoryCards";
 
-function groupSearchValues(group: StoryGroup): string[] {
+function groupSearchValues(group: StoryGroupSummary): string[] {
   return [group.name, group.id];
 }
 

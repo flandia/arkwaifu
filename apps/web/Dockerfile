@@ -9,6 +9,7 @@ COPY index.html vite.config.ts tsconfig*.json ./
 COPY public ./public
 COPY src ./src
 
+ARG VITE_API_BASE_URL
 RUN bun run build
 
 FROM scratch AS artifact

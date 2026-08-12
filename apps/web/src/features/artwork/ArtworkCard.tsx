@@ -1,5 +1,5 @@
 import { useState, ViewTransition } from "react";
-import { artTransitionName, type Art, type ArtCategory, type Locale } from "../../api";
+import { artTransitionName, type ArtCategory, type ArtDetail, type Locale } from "../../api";
 import { useUi } from "../../i18n";
 import { TransitionLink, useCategoryLabel } from "../../navigation";
 import { Eyebrow, cn } from "../../shared/ui";
@@ -57,7 +57,7 @@ export function ArtworkImage({
   alt,
   priority = false,
 }: {
-  art: Art;
+  art: ArtDetail;
   alt: string;
   priority?: boolean;
 }) {
@@ -81,7 +81,7 @@ export interface ArtworkCardProps {
   from: string;
   shared?: boolean;
   language?: string;
-  thumbnailUrl?: string | null;
+  thumbnailUrl: string | null;
 }
 
 export function ArtworkCard({

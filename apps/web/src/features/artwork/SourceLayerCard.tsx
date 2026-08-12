@@ -1,8 +1,14 @@
-import { formatBytes, type Art, type SourceArt } from "../../api";
+import { formatBytes, type ArtDetail, type SourceArt } from "../../api";
 import { useUi, useUiLanguage } from "../../i18n";
 import { Eyebrow } from "../../shared/ui";
 
-export function SourceLayerCard({ source, composition }: { source: SourceArt; composition: Art }) {
+export function SourceLayerCard({
+  source,
+  composition,
+}: {
+  source: SourceArt;
+  composition: ArtDetail;
+}) {
   const { t } = useUi();
   const { language } = useUiLanguage();
   const role = t(`art.${source.role === "whole_body" ? "wholeBody" : source.role}`);

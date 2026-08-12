@@ -52,7 +52,7 @@ export function GalleriesPage() {
                   transition="forward"
                 >
                   <CardBackdrop
-                    scrim={gallery.previewThumbnailContentUrls?.length ? "dark" : "brand"}
+                    scrim={gallery.previewThumbnailContentUrls.length ? "dark" : "brand"}
                     sources={gallery.previewThumbnailContentUrls}
                   />
                   <span

@@ -1,6 +1,12 @@
 import { LRUCache } from "lru-cache";
 
-const apiBase = "https://api.arkwaifu.cc";
+const productionApiBaseUrl = "https://api.arkwaifu.cc";
+
+export function resolveApiBaseUrl(configuredApiBaseUrl: string | undefined): string {
+  return (configuredApiBaseUrl?.trim() || productionApiBaseUrl).replace(/\/+$/, "");
+}
+
+const apiBaseUrl = resolveApiBaseUrl(import.meta.env.VITE_API_BASE_URL);
 const requestTimeoutMs = 15_000;
 
 const requests = new LRUCache<string, Promise<unknown>>({
@@ -25,7 +31,7 @@ export function pathSegment(value: string): string {
 export async function fetchJson<T>(path: string): Promise<T> {
   let response: Response;
   try {
-    response = await fetch(`${apiBase}${path}`, {
+    response = await fetch(`${apiBaseUrl}${path}`, {
       headers: { Accept: "application/json" },
       signal: AbortSignal.timeout(requestTimeoutMs),
     });

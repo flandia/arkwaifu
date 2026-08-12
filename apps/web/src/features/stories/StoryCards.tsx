@@ -1,10 +1,10 @@
-import type { Locale, Story, StoryGroup } from "../../api";
+import type { Locale, StoryGroupSummary, StorySummary } from "../../api";
 import { useUi } from "../../i18n";
 import { localeLanguageTag, TransitionLink, type StorySection } from "../../navigation";
 import { CardBackdrop, Eyebrow } from "../../shared/ui";
 
-function previewUrls(record: StoryGroup | Story): string[] {
-  const references = record.previewArtReferences?.length
+function previewUrls(record: StoryGroupSummary | StorySummary): string[] {
+  const references = record.previewArtReferences.length
     ? record.previewArtReferences
     : record.representativeArtReference
       ? [record.representativeArtReference]
@@ -14,7 +14,7 @@ function previewUrls(record: StoryGroup | Story): string[] {
     ...new Set(
       references
         .map(({ thumbnailContentUrl }) => thumbnailContentUrl)
-        .filter((url): url is string => Boolean(url)),
+        .filter((url): url is string => url !== null),
     ),
   ].slice(0, 3);
 }
@@ -24,7 +24,7 @@ export function StoryGroupCard({
   locale,
   section,
 }: {
-  group: StoryGroup;
+  group: StoryGroupSummary;
   locale: Locale;
   section: StorySection;
 }) {
@@ -72,7 +72,7 @@ export function StageCard({
   index: number;
   locale: Locale;
   section: StorySection;
-  story: Story;
+  story: StorySummary;
 }) {
   const { t } = useUi();
   const backgrounds = previewUrls(story);

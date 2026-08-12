@@ -14,7 +14,7 @@ export interface ArtworkCollectionItem {
   title?: string | null;
   subtitle?: string | null;
   names?: string[];
-  thumbnailContentUrl?: string | null;
+  thumbnailContentUrl: string | null;
 }
 
 function artworkTitle(artwork: ArtworkCollectionItem, category: string): string {

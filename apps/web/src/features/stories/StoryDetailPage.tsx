@@ -20,7 +20,7 @@ export function StoryDetailPage() {
   const storyID = params.storyID ?? "";
   const storyRequest = getStoryData(locale, storyID);
   const groupsRequest = getStoryGroups(locale);
-  const [story, artwork] = use(storyRequest);
+  const [story, artReferences] = use(storyRequest);
   const group = use(groupsRequest).find((value) => value.id === groupID);
   if (story.groupID !== groupID || !group || sectionForType(group.type) !== section) {
     throw new ApiError(t("errors.wrongStoryGroup"), 404);
@@ -41,14 +41,14 @@ export function StoryDetailPage() {
           <>
             <code translate="no">{story.code || story.id}</code>
             <span>{story.tagText || story.tag}</span>
-            <span>{t("story.uniqueArtCount", { count: artwork.length })}</span>
+            <span>{t("story.uniqueArtCount", { count: artReferences.length })}</span>
           </>
         }
         title={story.name || story.code || t("story.untitledStage")}
         titleLanguage={language}
       />
       <ArtworkCollection
-        artworks={artwork}
+        artworks={artReferences}
         from={`${location.pathname}${location.search}`}
         language={language}
         locale={locale}
