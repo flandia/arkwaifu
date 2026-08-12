@@ -116,23 +116,33 @@ PngImage = PngArtifact | FilePngArtifact
 
 @dataclass(frozen=True, slots=True)
 class SourceArtRecord:
-    """Represent one retained body, face, or whole-body image of a character."""
+    """Represent one retained character layer and its versioned object.
+
+    ``res_version`` is the version which contributed this record. ``None``
+    means the enclosing manifest's version; complete-history merges set it
+    explicitly so a historical winner keeps its original object prefix.
+    """
 
     id: str
     character_id: str
     role: SourceRole
     variant: str
     image: PngImage
+    res_version: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
 class ArtRecord:
-    """Represent one final picture or character composition served to users."""
+    """Represent one category-qualified art and its versioned composition object.
+
+    ``res_version`` follows the same origin rule as on ``SourceArtRecord``.
+    """
 
     id: str
     category: ArtCategory
     image: PngImage
     source_art_ids: tuple[str, ...] = ()
+    res_version: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -193,6 +203,7 @@ class GalleryEntry:
     name: str
     description: str
     art_id: str
+    category: ArtCategory = "image"
 
 
 @dataclass(frozen=True, slots=True)

@@ -12,8 +12,8 @@ An art resource passes through four cacheable stages:
 ``rendered``
     Merge alpha channels and character variations into PNG manifests.
 
-Resources run concurrently. Downloads are bounded separately from the process
-pool used by extraction and rendering.
+Resource pipelines, downloads, and extraction processes each have their own
+concurrency bound.
 """
 
 from __future__ import annotations
@@ -26,9 +26,10 @@ import json
 import logging
 import os
 import re
+import time
 import zipfile
 from concurrent.futures import ProcessPoolExecutor
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path, PurePosixPath
 from urllib.parse import quote
 
@@ -49,16 +50,20 @@ _ART_PATTERNS = (
     "avg/imgs/**",
     "avg/images/**",
     "avg/bg/**",
+    "avg/backgrounds/**",
     "avg/items/**",
     "avg/characters/**",
 )
+# A resource may hold one lock for each cache stage while it is materialized.
+# Bound the complete pipeline so a cold all-resource run cannot exhaust file handles.
+_ART_RESOURCE_WORKERS = 32
 # Bump a stage when its persisted layout or recipe changes. Each fingerprint
 # includes earlier formats, so changing one stage also invalidates its dependents.
 _ART_STAGE_FORMATS = {
     "fetched": "1",
     "unwrapped": "1",
     "extracted": "1",
-    "rendered": "1",
+    "rendered": "3",
 }
 _LOGGER = logging.getLogger(__name__)
 
@@ -69,6 +74,51 @@ class _Resource:
 
     name: str
     md5: str
+
+
+@dataclass(frozen=True, slots=True)
+class _ProcessingTimings:
+    """Measure the two operations performed by one disposable child process."""
+
+    extract_seconds: float
+    compose_seconds: float
+
+
+class _ProcessingStageError(RuntimeError):
+    """Carry the failing child-process stage across the process boundary."""
+
+    def __init__(self, stage: str, detail: str, elapsed_seconds: float) -> None:
+        self.stage = stage
+        self.elapsed_seconds = elapsed_seconds
+        super().__init__(stage, detail, elapsed_seconds)
+
+
+def _log_art_action(
+    action: str,
+    *,
+    version: str,
+    status: str,
+    resource: str | None = None,
+    current: int | None = None,
+    total: int | None = None,
+    elapsed_seconds: float | None = None,
+) -> None:
+    """Emit one structured, resource-stable art pipeline event."""
+
+    extra: dict[str, object] = {
+        "action": action,
+        "res_version": version,
+        "status": status,
+    }
+    if resource is not None:
+        extra["resource"] = resource
+    if current is not None:
+        extra["current"] = current
+    if total is not None:
+        extra["total"] = total
+    if elapsed_seconds is not None:
+        extra["elapsed_ms"] = round(elapsed_seconds * 1000, 3)
+    _LOGGER.info("art action", extra=extra)
 
 
 def _bundle_md5(wrapper: bytes, resource_name: str) -> str:
@@ -125,10 +175,31 @@ def _extract_and_render_art_resource(
     extracted: Path,
     rendered: Path,
     upstream_version: str,
-) -> None:
+) -> _ProcessingTimings:
     """Populate both expensive stages in one disposable child on a cold miss."""
-    extract_assets([bundle], extracted, workers=1)
-    _render_art_resource(extracted, rendered, upstream_version)
+    started = time.perf_counter()
+    try:
+        extract_assets([bundle], extracted, workers=1)
+    except Exception as error:
+        raise _ProcessingStageError(
+            "extract",
+            str(error),
+            time.perf_counter() - started,
+        ) from error
+    extracted_at = time.perf_counter()
+    try:
+        _render_art_resource(extracted, rendered, upstream_version)
+    except Exception as error:
+        raise _ProcessingStageError(
+            "compose",
+            str(error),
+            time.perf_counter() - extracted_at,
+        ) from error
+    completed_at = time.perf_counter()
+    return _ProcessingTimings(
+        extract_seconds=extracted_at - started,
+        compose_seconds=completed_at - extracted_at,
+    )
 
 
 def _resource_member_path(resource_name: str) -> PurePosixPath:
@@ -246,21 +317,118 @@ class LiveArtBuilder:
             )
         return merge_art_manifests(manifests, upstream_version)
 
+    async def build_history(self, versions: tuple[str, ...]) -> ArtManifest:
+        """Build every recorded version as one additive, latest-wins manifest.
+
+        The earliest version is a full build. Each later version compares only
+        with its immediate predecessor, so bundles temporarily published and
+        later removed remain in the cumulative result. Repeated art identities
+        are replaced by the newest version that contains them.
+        """
+
+        if not versions:
+            raise ValueError("art version history cannot be empty")
+        if any(not isinstance(version, str) or not version for version in versions):
+            raise ValueError("art version history contains an invalid resVersion")
+        if len(set(versions)) != len(versions):
+            raise ValueError("art version history contains a duplicate resVersion")
+
+        arts = {}
+        sources = {}
+        previous: str | None = None
+        total = len(versions)
+        for current, version in enumerate(versions, start=1):
+            started = time.perf_counter()
+            try:
+                manifest = await self.build(version, previous, False)
+            except Exception:
+                _log_art_action(
+                    "version",
+                    version=version,
+                    status="failed",
+                    current=current,
+                    total=total,
+                    elapsed_seconds=time.perf_counter() - started,
+                )
+                raise
+            arts.update(
+                {
+                    (art.category, art.id): replace(
+                        art,
+                        res_version=art.res_version or manifest.upstream_version,
+                    )
+                    for art in manifest.arts
+                }
+            )
+            sources.update(
+                {
+                    source.id: replace(
+                        source,
+                        res_version=source.res_version or manifest.upstream_version,
+                    )
+                    for source in manifest.source_arts
+                }
+            )
+            _log_art_action(
+                "version",
+                version=version,
+                status="done",
+                current=current,
+                total=total,
+                elapsed_seconds=time.perf_counter() - started,
+            )
+            previous = version
+        return ArtManifest(
+            upstream_version=versions[-1],
+            arts=tuple(sorted(arts.values(), key=lambda art: (art.category, art.id))),
+            source_arts=tuple(sorted(sources.values(), key=lambda source: source.id)),
+        )
+
     async def _resources(self, client: httpx.AsyncClient, version: str) -> list[_Resource]:
         """Get the cached hot-update list for one resource version."""
 
         url = f"{self._asset_base_url}/{quote(version, safe='')}/hot_update_list.json"
 
         async def fetch(destination: Path) -> None:
-            response = await client.get(url)
-            response.raise_for_status()
-            destination.write_bytes(response.content)
+            started = time.perf_counter()
+            try:
+                response = await client.get(url)
+                response.raise_for_status()
+                destination.write_bytes(response.content)
+            except Exception:
+                _log_art_action(
+                    "list",
+                    version=version,
+                    resource="hot_update_list.json",
+                    current=1,
+                    total=1,
+                    status="failed",
+                    elapsed_seconds=time.perf_counter() - started,
+                )
+                raise
+            _log_art_action(
+                "list",
+                version=version,
+                resource="hot_update_list.json",
+                current=1,
+                total=1,
+                status="done",
+                elapsed_seconds=time.perf_counter() - started,
+            )
 
         path = await self._cache.file(
             version,
             PurePosixPath("art", "hot_update_list.json"),
             fetch,
             self._validate_resource_list,
+            on_hit=lambda: _log_art_action(
+                "list",
+                version=version,
+                resource="hot_update_list.json",
+                current=1,
+                total=1,
+                status="cached",
+            ),
         )
         payload = json.loads(path.read_text(encoding="utf-8"))
         return self._parse_resources(payload, version)
@@ -298,17 +466,35 @@ class LiveArtBuilder:
         version: str,
         resources: list[_Resource],
     ) -> list[ArtManifest]:
-        """Run the cache stages concurrently for every selected resource."""
+        """Run selected resources concurrently without unbounded cache locks."""
 
-        semaphore = asyncio.Semaphore(self._download_workers)
+        resource_semaphore = asyncio.Semaphore(_ART_RESOURCE_WORKERS)
+        download_semaphore = asyncio.Semaphore(self._download_workers)
         loop = asyncio.get_running_loop()
         executor = ProcessPoolExecutor(
             max_workers=self._extraction_workers,
             max_tasks_per_child=1,
         )
 
-        async def process(resource: _Resource) -> ArtManifest:
+        total = len(resources)
+
+        async def process_one(resource: _Resource, current: int) -> ArtManifest:
             resource_root = _resource_cache_path(resource)
+
+            def log(
+                action: str,
+                status: str,
+                elapsed_seconds: float | None = None,
+            ) -> None:
+                _log_art_action(
+                    action,
+                    version=version,
+                    resource=resource.name,
+                    current=current,
+                    total=total,
+                    status=status,
+                    elapsed_seconds=elapsed_seconds,
+                )
 
             def validate_rendered(destination: Path) -> ArtManifest:
                 manifest = read_art_manifest(destination)
@@ -327,13 +513,19 @@ class LiveArtBuilder:
 
                     async def materialize_unwrapped(unwrapped: Path) -> None:
                         async def materialize_fetched(fetched: Path) -> None:
-                            async with semaphore:
-                                await self._download_resource(
-                                    client,
-                                    version,
-                                    resource,
-                                    fetched / "wrapper.dat",
-                                )
+                            async with download_semaphore:
+                                started = time.perf_counter()
+                                try:
+                                    await self._download_resource(
+                                        client,
+                                        version,
+                                        resource,
+                                        fetched / "wrapper.dat",
+                                    )
+                                except Exception:
+                                    log("fetch", "failed", time.perf_counter() - started)
+                                    raise
+                            log("fetch", "done", time.perf_counter() - started)
 
                         fetched = await self._cache.directory(
                             version,
@@ -341,15 +533,22 @@ class LiveArtBuilder:
                             _stage_fingerprint("fetched", resource),
                             materialize_fetched,
                             lambda path: self._validate_fetched(path, resource),
+                            on_hit=lambda: log("fetch", "cached"),
                         )
-                        await await_owned(
-                            asyncio.to_thread(
-                                _unzip_resource,
-                                fetched.path / "wrapper.dat",
-                                resource.name,
-                                unwrapped,
+                        started = time.perf_counter()
+                        try:
+                            await await_owned(
+                                asyncio.to_thread(
+                                    _unzip_resource,
+                                    fetched.path / "wrapper.dat",
+                                    resource.name,
+                                    unwrapped,
+                                )
                             )
-                        )
+                        except Exception:
+                            log("unzip", "failed", time.perf_counter() - started)
+                            raise
+                        log("unzip", "done", time.perf_counter() - started)
 
                     unwrapped = await self._cache.directory(
                         version,
@@ -357,18 +556,30 @@ class LiveArtBuilder:
                         _stage_fingerprint("unwrapped", resource),
                         materialize_unwrapped,
                         lambda path: self._validate_unwrapped(path, resource),
+                        on_hit=lambda: log("unzip", "cached"),
                     )
                     bundle = unwrapped.path.joinpath(*_resource_member_path(resource.name).parts)
-                    await await_owned(
-                        loop.run_in_executor(
-                            executor,
-                            _extract_and_render_art_resource,
-                            bundle,
-                            extracted,
-                            rendered,
-                            version,
+                    try:
+                        timings = await await_owned(
+                            loop.run_in_executor(
+                                executor,
+                                _extract_and_render_art_resource,
+                                bundle,
+                                extracted,
+                                rendered,
+                                version,
+                            )
                         )
-                    )
+                    except _ProcessingStageError as error:
+                        log(error.stage, "failed", error.elapsed_seconds)
+                        raise
+                    if isinstance(timings, _ProcessingTimings):
+                        log("extract", "done", timings.extract_seconds)
+                        log("compose", "done", timings.compose_seconds)
+                    else:
+                        # Test doubles and third-party executors may not return timings.
+                        log("extract", "done")
+                        log("compose", "done")
                     rendered_by_extractor = True
 
                 extracted = await self._cache.directory(
@@ -377,17 +588,24 @@ class LiveArtBuilder:
                     _stage_fingerprint("extracted", resource),
                     materialize_extracted,
                     self._validate_extracted,
+                    on_hit=lambda: log("extract", "cached"),
                 )
                 if not rendered_by_extractor:
-                    await await_owned(
-                        loop.run_in_executor(
-                            executor,
-                            _render_art_resource,
-                            extracted.path,
-                            rendered,
-                            version,
+                    started = time.perf_counter()
+                    try:
+                        await await_owned(
+                            loop.run_in_executor(
+                                executor,
+                                _render_art_resource,
+                                extracted.path,
+                                rendered,
+                                version,
+                            )
                         )
-                    )
+                    except Exception:
+                        log("compose", "failed", time.perf_counter() - started)
+                        raise
+                    log("compose", "done", time.perf_counter() - started)
 
             rendered = await self._cache.directory(
                 version,
@@ -395,12 +613,20 @@ class LiveArtBuilder:
                 _stage_fingerprint("rendered", resource),
                 materialize_rendered,
                 validate_rendered,
+                on_hit=lambda: log("compose", "cached"),
             )
             if not isinstance(rendered.value, ArtManifest):
                 raise TypeError(f"rendered art resource has no manifest: {rendered.path}")
             return rendered.value
 
-        tasks = [asyncio.create_task(process(resource)) for resource in resources]
+        async def process(resource: _Resource, current: int) -> ArtManifest:
+            async with resource_semaphore:
+                return await process_one(resource, current)
+
+        tasks = [
+            asyncio.create_task(process(resource, current))
+            for current, resource in enumerate(resources, start=1)
+        ]
         try:
             manifests = await asyncio.gather(*tasks)
         except BaseException:
@@ -412,8 +638,9 @@ class LiveArtBuilder:
             await await_owned(asyncio.to_thread(executor.shutdown, wait=True, cancel_futures=True))
 
         _LOGGER.info(
-            "art pipeline completed resources=%s download_workers=%s extraction_workers=%s",
+            "art pipeline completed resources=%s resource_workers=%s download_workers=%s extraction_workers=%s",
             len(resources),
+            _ART_RESOURCE_WORKERS,
             self._download_workers,
             self._extraction_workers or "default",
         )

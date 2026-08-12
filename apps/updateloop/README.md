@@ -1,9 +1,10 @@
 # Arkwaifu updateloop
 
 The Python 3.14 writer downloads upstream game data, extracts Unity assets in a
-bounded process pool, and publishes one monolithic SQLite database plus
-version-scoped PNGs to S3-compatible storage. It does not connect to PostgreSQL and
-does not create staged, validated, active, or release-scoped database records.
+bounded process pool, and publishes one monolithic SQLite database plus PNGs
+under art-version prefixes in S3-compatible storage. It does not connect to
+PostgreSQL and does not create staged, validated, active, or release-scoped
+database records.
 
 ## Command
 
@@ -11,6 +12,7 @@ does not create staged, validated, active, or release-scoped database records.
 
 ```console
 uv run updateloop run art
+uv run updateloop run art --complete
 uv run updateloop run CN EN
 uv run updateloop run
 uv run updateloop run CN --force
@@ -29,12 +31,23 @@ then applied in one local SQLite transaction and published by one overwrite of
 the fixed `arkwaifu.sqlite3` object. The set is all-or-nothing at the database
 publication boundary: unlike the former release model, locales do not publish
 independently. Any build or SQLite failure prevents all requested changes from
-becoming visible and makes the command exit nonzero. `--force` rebuilds the
-locales at their current version and requests a full art build when the detected
-art version differs from the published one. Forcing art at the
-already-published `resVersion` is rejected because its stable PNG keys are
-already live. S3 object versioning, not a release table, retains the prior
-database generation.
+becoming visible and makes the command exit nonzero. `--force` rebuilds selected
+locales at their current versions. It is rejected when the request includes art,
+because a forced full build would copy unchanged art into a new version prefix.
+S3 object versioning, not a release table, retains the prior database generation.
+
+`run art --complete` is an explicit historical backfill. It obtains the
+recorded Windows `resVersion` sequence from oldest through the currently
+detected version, builds the first version in full, and then builds only each
+adjacent version's changed bundles. Every resulting record retains the version
+which contributed it. Records accumulate across that sequence; the newest
+occurrence of `(category, art_id)` or `source_art_id` wins, while art that
+disappeared from later manifests remains available through its older object
+key. The cumulative manifest records the current `resVersion` and enters the
+ordinary transaction, PNG batch, and single final database PUT once. A listed
+CDN version that cannot be read fails the run. `--complete` requires `art` to be
+the sole unit and cannot be combined with `--force`. Unlike force, it is allowed
+to backfill a database already recording the current art version.
 
 Game data commonly gets ahead of its story text and art files. Missing story
 text publishes the story without directive-derived art references. References
@@ -48,19 +61,24 @@ warnings; other updater warnings remain visible.
 
 1. Detect every requested unit's current upstream `resVersion` concurrently.
 2. Pull `arkwaifu.sqlite3` to a temporary directory. If it does not exist,
-   initialize schema version 1.
+   initialize schema version 2. An existing database must already declare
+   version 2; recreate development databases made with an earlier schema.
 3. Check the schema version, then read the database's unit `resVersion` values.
-   No runtime `quick_check`, `integrity_check`, or `foreign_key_check` scan runs.
+   Publication runs no `quick_check`, `integrity_check`, or post-write
+   `foreign_key_check`.
 4. Build every changed requested manifest concurrently and retain rendered PNGs
    as files.
 5. Assign PNGs the full location
-   `s3://arkwaifu/ART/<resVersion>/<variant>/<category>/<name>.png`. The bucket
-   is `arkwaifu`; the object key begins with `ART/`.
+   `s3://arkwaifu/ART/<resVersion>/<variant>/<category>/<name>.png`.
+   The bucket is `arkwaifu`; the object key begins with `ART/`. Each record uses
+   the art version which produced that PNG, which can be older than the current
+   art unit version after a cumulative build.
 6. In one local `BEGIN IMMEDIATE` transaction, apply art first and replace each
    changed locale. SQLite enforces `STRICT`, `CHECK`, primary-key, unique, and
    foreign-key constraints on statements and commit.
 7. After that transaction commits successfully, batch-upload every changed PNG
-   with bounded concurrency and five-minute public caching.
+   with bounded concurrency and
+   `Cache-Control: public, max-age=31536000, immutable`.
 8. Overwrite `arkwaifu.sqlite3` once with `Cache-Control: no-cache`. The
    database PUT is always last.
 
@@ -70,24 +88,92 @@ constraints are the local candidate gate; overwriting the object is
 publication.
 
 If work for a new `resVersion` fails before the database overwrite, readers
-retain the previous database. A partially successful PNG batch can leave
-unreachable new-version objects, but no published database points to them.
-Same-version art forcing is rejected because overwriting keys referenced by the
-current database would violate this boundary. S3 clients may not be able to
-distinguish a rejected overwrite from a response lost after the server accepted
-it; bucket versioning provides inspection and recovery. Run only one logical
-writer per bucket because the fixed-key adapter currently has no compare-and-swap
-protection.
+retain the previous database. A partially successful PNG batch leaves objects
+under an as-yet-unreferenced version prefix, but does not change the keys used
+by that database. The first version of a complete build is full. A later
+version processes selected changed bundles, and the cumulative merge keeps the
+newest record for each logical identity. The final manifest uploads only those
+winners, each under the version which contributed it; superseded intermediate
+revisions are not uploaded. Rows supplied only by unchanged bundles retain
+their earlier object keys instead of being copied into the new prefix.
+Same-version art forcing remains rejected because one version namespace has one
+meaning. Bucket versioning provides inspection and recovery for the fixed
+database object. Run only one logical writer per bucket because the database
+adapter currently has no compare-and-swap protection.
 
-`variant` is `composition` for the final consumer-facing art and `source` for a
-retained pre-composition character layer. Character `composition` objects
-assemble body and face; for `image`, `background`, and `item`, the value means
-the validated final PNG rather than a literal multi-layer composition.
+Version prefixes are retained permanently by updater code, including prefixes
+or individual PNGs left unreachable by a failed or superseded update. They form
+a durable record of the art versions which contributed PNGs; a version with no
+selected art output needs no empty marker. The updater does not list those
+prefixes to discover history: complete mode still obtains its candidate version
+sequence upstream and validates every selected bundle against the official CDN.
+
+PNG keys are treated as create-only. Before uploading, the S3 adapter uses
+`HEAD` to accept an object whose byte size, `image/png` content type, and
+immutable cache policy already match. A mismatch fails the run instead of
+replacing that object. There is deliberately no content hash, so this is an
+object-metadata check rather than byte-for-byte content verification.
+
+The selected object variant is `composition` for final consumer-facing art and
+`source` for a retained pre-composition character layer. Character
+`composition` objects assemble body and face; for `image`, `background`, and
+`item`, the value means the validated final PNG rather than a literal
+multi-layer composition.
 `category` is one of `image`, `background`, `item`, and `character`. Source
 objects currently use `character` and retain the `body`, `face`, and
 `whole_body` roles. They are normalized PNG layers and may already include a
 companion alpha merge; they are not the raw encoded Unity texture bytes. `name`
-is the logical art identifier escaped as one path segment, not a hash.
+is the logical art identifier escaped as one path segment, not a hash. Final
+art is identified by both `category` and `name`; equal names in different
+categories are independent rows and objects. The leading `resVersion` belongs
+to the individual record, so a database whose art unit is at version B may
+legitimately refer to an unchanged object introduced under version A.
+
+### Manual fallback art
+
+Uploading a fallback PNG by itself does not make it visible: the service reads
+the selected object key from SQLite. Upload the PNG to
+`ART/<contributing-resVersion>/composition/<category>/<escaped-id>.png`, pull
+`arkwaifu.sqlite3`, and insert or update the matching `arts` row identified by
+`(category, art_id)`. Record the uploaded key, byte size, width, and height.
+
+```sql
+BEGIN IMMEDIATE;
+INSERT INTO arts
+    (category, art_id, object_key, byte_size, width, height)
+VALUES
+    (:category, :art_id, :object_key, :byte_size, :width, :height)
+ON CONFLICT (category, art_id) DO UPDATE SET
+    object_key = excluded.object_key,
+    byte_size = excluded.byte_size,
+    width = excluded.width,
+    height = excluded.height;
+COMMIT;
+```
+
+Optional retained fallback layers go to
+`ART/<contributing-resVersion>/source/character/<escaped-source-id>.png`. Insert
+or update each `source_arts` row with its character role and sprite variant,
+object metadata, and stable source ID. For a character composition, replace
+that art's `art_source_refs` rows using
+`category = 'character'`, the composition `art_id`, zero-based `position`, and
+the source IDs in composition order. A final composition remains usable with
+no source rows if the original layers are unavailable. Make all SQLite edits
+in one transaction, then upload the modified `arkwaifu.sqlite3` last. Do not
+change the art unit's current `resVersion` merely for this manual compensation;
+the object prefix identifies the upstream version which contributed the file.
+
+ArknightsAssets2 publishes complete Android portraits, not the sprite-hub JSON
+and separate body/face layers consumed by the Windows compositor. For that
+fallback source, store the portrait itself as one `whole_body` source, use
+`<base>:whole_body:<body>:<face>` as its source ID and `<body>:<face>` as its
+sprite variant, and point the composition at that one source. The fallback
+source and composition objects then intentionally contain the same PNG.
+
+This selected-object model retains one object for each logical row; it does not
+distinguish Windows and Android copies. Fallback art is used only when the
+official Windows history cannot provide that identity. Thumbnail and
+Real-ESRGAN variants remain unimplemented.
 
 ## Art execution model
 
@@ -117,6 +203,15 @@ build. Each outer worker calls the resource extractor with `workers=1`, avoiding
 a nested process pool. PNG bytes stay in rendered cache files; the parent keeps
 only paths and metadata rather than the complete multi-gigabyte art set. After
 the SQLite commit, a bounded batch uploads those files before the database PUT.
+
+Art work emits structured JSON action records for `list`, `version`, `fetch`,
+`unzip`, `extract`, `compose`, `apply`, `upload`, and `publish`. Each record
+carries its `res_version`, status, elapsed milliseconds when measurable, and a
+stable `current`/`total` ordinal for complete-mode versions or concurrent
+resource work. A successful action emits one terminal record with
+`status = "done"`; cache reuse emits `status = "cached"`, and failures emit
+`status = "failed"`. The combined extraction/composition child reports exact
+terminal stages without adding another worker or cross-process progress channel.
 
 The database records PNG object keys, byte sizes, dimensions, categories, and
 source relationships. PNG objects and public API models intentionally have no
@@ -197,19 +292,22 @@ The parser retains the tolerant current-CG behavior introduced by Go v1.9.4.
 ZIP members are checked for absolute paths and parent traversal before selected
 locale files are extracted.
 
-The art CDN locations remain configurable. Set `ARKWAIFU_ART_VERSION_URL` and
-`ARKWAIFU_ART_ASSET_BASE_URL` together to select another official client
-platform or a compatible mirror. After changing to a platform with a different
-`resVersion`, run:
+When `story_review_table.json` references text absent from the current branch,
+the builder searches that locale directory's GitHub history newest-first and
+uses the latest exact-path copy it can find. This lookup is best-effort and
+bounded; a missing or failed historical lookup keeps the story metadata,
+emits the usual incomplete-upstream warning, and continues without directives.
+Recovered text is cached with the extracted locale data. Repository and commit
+identifiers are never written to the database. Because that cache is keyed by
+the game `resVersion`, a repository-only backfill at the same version is picked
+up on a `--no-cache` run (or after removing that locale's extracted cache), not
+by `--force` alone.
 
-```console
-uv run updateloop run art --force --no-cache
-```
-
-The uncached forced run avoids reusing platform-agnostic cache identities and
-builds every resource for the new version. If both platforms report the same
-`resVersion`, use a separate bucket: the chosen stable key scheme has no platform
-or generation component and therefore cannot switch that content atomically.
+The Windows CDN locations remain configurable. Set
+`ARKWAIFU_ART_VERSION_URL` and `ARKWAIFU_ART_ASSET_BASE_URL` together for a
+compatible Windows mirror. Android extraction is not part of the automatic
+pipeline; use the manual fallback procedure above for assets absent from
+Windows.
 
 ## Environment
 
@@ -246,17 +344,19 @@ Optional:
 
 ## Database guarantees and costs
 
-- Art deltas overlay the existing art rows, retaining assets absent from later
-  hot-update lists. Each changed locale is a complete replacement.
+- Art deltas contain every output of selected changed bundles and overlay
+  existing rows by `(category, art_id)`. Unchanged rows retain their older
+  versioned keys, including assets absent from later hot-update lists. Each
+  changed locale is a complete replacement.
 - All requested changed units enter one SQLite transaction and one database
   overwrite.
 - SQLite enforces schema and foreign-key constraints on statements and commit;
   no runtime integrity scan follows the writes.
 - PNGs batch-upload only after the local transaction commits, and all required
-  uploads finish before the final database PUT.
+  create-or-verify operations finish before the final database PUT.
 - Original character layers and composition images are both addressable.
-- S3 bucket versioning retains overwritten database generations and supplies the
-  rollback path.
+- Historical, immutable art prefixes are retained. S3 bucket versioning retains
+  overwritten database generations and supplies the database rollback path.
 - The fixed-key writer is single-writer by deployment convention; it has no
   lock or compare-and-swap token.
 
@@ -291,5 +391,5 @@ still requires a live end-to-end smoke run before its first deployment.
 
 A first full art update is storage-intensive. Historical cache measurements
 were about 10–12 GiB; reserve at least 15 GiB for the project cache. Plan object
-storage independently for version-scoped PNG objects and retained S3 database
+storage independently for retained art-version prefixes and database object
 versions.

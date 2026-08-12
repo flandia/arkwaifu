@@ -179,6 +179,130 @@ async def test_one_run_scoped_locale_builder_caches_one_all_server_archive(tmp_p
 
 
 @pytest.mark.asyncio
+async def test_locale_builder_recovers_missing_story_directory_from_history(tmp_path):
+    files = _empty_locale_files()
+    files.update(
+        {
+            "gamedata/excel/story_review_table.json": {
+                "retired": {
+                    "id": "retired",
+                    "name": "Retired event",
+                    "actType": "ACTIVITY_STORY",
+                    "infoUnlockDatas": [
+                        {
+                            "storyId": "retired_opening",
+                            "storyTxt": "activities/retired/opening",
+                            "avgTag": "Before Operation",
+                        },
+                        {
+                            "storyId": "retired_ending",
+                            "storyTxt": "activities/retired/ending",
+                            "avgTag": "After Operation",
+                        },
+                    ],
+                }
+            },
+            "gamedata/excel/story_review_meta_table.json": {
+                "actArchiveResData": {
+                    "pics": {
+                        "opening": {
+                            "id": "opening",
+                            "assetPath": "opening_art",
+                            "desc": "Opening",
+                        },
+                        "ending": {
+                            "id": "ending",
+                            "assetPath": "ending_art",
+                            "desc": "Ending",
+                        },
+                    }
+                },
+                "actArchiveData": {"components": {}},
+            },
+        }
+    )
+    archive = _archive({"en": ("data-version", files)})
+    history_api_requests: list[str] = []
+    raw_downloads: list[str] = []
+
+    async def respond(request: httpx.Request) -> httpx.Response:
+        path = request.url.path
+        if path.endswith("/contents/en/hot_update_list.json"):
+            return httpx.Response(200, json={"versionId": "data-version"})
+        if path.endswith("/zipball/master"):
+            return httpx.Response(200, content=archive)
+        if path.endswith("/commits"):
+            history_api_requests.append(str(request.url))
+            assert request.url.params["sha"] == "master"
+            assert request.url.params["path"] == "en/gamedata/story/activities/retired"
+            assert request.url.params["per_page"] == "100"
+            return httpx.Response(
+                200,
+                json=[
+                    {
+                        "sha": "delete-commit",
+                        "parents": [{"sha": "before-delete"}],
+                    }
+                ],
+            )
+        if path.endswith("/contents/en/gamedata/story/activities/retired"):
+            history_api_requests.append(str(request.url))
+            assert request.url.params["ref"] == "before-delete"
+            return httpx.Response(
+                200,
+                json=[
+                    {"name": "opening.txt", "type": "file"},
+                    {"name": "ending.txt", "type": "file"},
+                ],
+            )
+        if request.url.host == "raw.githubusercontent.com":
+            assert "authorization" not in request.headers
+            raw_downloads.append(path)
+            if path.endswith("/opening.txt"):
+                return httpx.Response(200, text='[image(image="OPENING_ART")]')
+            if path.endswith("/ending.txt"):
+                return httpx.Response(200, text='[image(image="ENDING_ART")]')
+        return httpx.Response(404)
+
+    builder = LiveLocaleBuilder(
+        github_token="private-token",
+        transport=httpx.MockTransport(respond),
+        cache=UpstreamCache(tmp_path / ".cache"),
+    )
+    version = await builder.detect_version("EN")
+
+    manifest = await builder.build("EN", version, None, False)
+    cached_manifest = await builder.build("EN", version, None, True)
+
+    references = [
+        reference.art_id
+        for story in manifest.story_groups[0].stories
+        for reference in story.art_references
+    ]
+    assert references == ["opening_art", "ending_art"]
+    assert cached_manifest == manifest
+    assert len(history_api_requests) == 2
+    assert len(raw_downloads) == 2
+    assert (
+        tmp_path
+        / ".cache"
+        / version
+        / "game-data"
+        / "EN"
+        / "extracted"
+        / "assets"
+        / "torappu"
+        / "dynamicassets"
+        / "gamedata"
+        / "story"
+        / "activities"
+        / "retired"
+        / "opening.txt"
+    ).is_file()
+    await builder.aclose()
+
+
+@pytest.mark.asyncio
 async def test_uncached_builder_releases_its_run_scoped_archive():
     archive = _archive({"en": ("en-version", _empty_locale_files())})
 

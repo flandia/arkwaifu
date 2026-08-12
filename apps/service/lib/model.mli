@@ -8,7 +8,7 @@ type object_metadata = {
   height : int;
 }
 
-(** One final picture or character composition. *)
+(** One final art and its composition object. *)
 type art = {
   id : string;
   category : string;
@@ -16,7 +16,7 @@ type art = {
   source_art_ids : string list;
 }
 
-(** One retained body, face, or whole-body image of a character. *)
+(** One retained character layer and its source object. *)
 type source_art = {
   id : string;
   character_id : string;
@@ -54,13 +54,14 @@ type story_group = {
   group_type : string;
 }
 
-(** One ordered art entry in a gallery. *)
+(** One ordered category-qualified art entry in a gallery. *)
 type gallery_entry = {
   id : string;
   position : int;
   name : string;
   description : string;
   art_id : string;
+  category : string;
 }
 
 (** One localized gallery. Summaries contain an empty [entries] list. *)

@@ -34,6 +34,7 @@ FileProducer = Callable[[Path], Awaitable[None]]
 FileValidator = Callable[[Path], object]
 DirectoryProducer = Callable[[Path], Awaitable[object | None] | object | None]
 DirectoryValidator = Callable[[Path], object]
+CacheHitObserver = Callable[[], None]
 _CACHE_ERRORS = (OSError, ValueError, TypeError, KeyError, EOFError, zipfile.BadZipFile)
 
 
@@ -154,12 +155,15 @@ class UpstreamCache:
         relative: PurePath,
         producer: FileProducer,
         validator: FileValidator,
+        *,
+        on_hit: CacheHitObserver | None = None,
     ) -> Path:
         """Get or produce one validated file.
 
         A corrupt hit is removed. Newly produced content gets one more attempt
         when validation fails, then replaces the destination only after it is
-        known to be usable.
+        known to be usable. ``on_hit`` observes only a validated reuse, allowing
+        callers to report caching without guessing from path existence.
         """
 
         destination = self._path(version, relative)
@@ -167,6 +171,8 @@ class UpstreamCache:
             if destination.is_file():
                 try:
                     await await_owned(asyncio.to_thread(validator, destination))
+                    if on_hit is not None:
+                        on_hit()
                     return destination
                 except _CACHE_ERRORS:
                     destination.unlink(missing_ok=True)
@@ -195,12 +201,15 @@ class UpstreamCache:
         fingerprint: str,
         producer: DirectoryProducer,
         validator: DirectoryValidator | None = None,
+        *,
+        on_hit: CacheHitObserver | None = None,
     ) -> CachedDirectory:
         """Get or produce one completed directory.
 
         ``fingerprint`` identifies the producer's on-disk format and inputs.
         Replacement keeps the previous completed tree as a temporary backup so
-        failed validation cannot destroy a usable cache entry.
+        failed validation cannot destroy a usable cache entry. ``on_hit`` runs
+        only after the marker and optional validator both accept an existing tree.
         """
 
         destination = self._path(version, relative)
@@ -213,6 +222,8 @@ class UpstreamCache:
                         if validator is not None
                         else None
                     )
+                    if on_hit is not None:
+                        on_hit()
                     return CachedDirectory(destination, value)
                 except _CACHE_ERRORS:
                     pass

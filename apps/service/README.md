@@ -11,8 +11,8 @@ images, or needs updater/S3 credentials.
 | Method and path | Result |
 | --- | --- |
 | `GET /health` | Current local SQLite connectivity |
-| `GET /api/arts/:id` | Composition art metadata and version-scoped content URL |
-| `GET /api/arts/:id/content` | `303` redirect to the composition PNG |
+| `GET /api/arts/:category/:id` | Selected composition metadata and version-scoped content URL |
+| `GET /api/arts/:category/:id/content` | `303` redirect to the selected composition PNG |
 | `GET /api/source-arts/:id` | Original body, face, or whole-body layer metadata |
 | `GET /api/source-arts/:id/content` | `303` redirect to the original PNG |
 | `GET /api/:locale/story-groups` | Ordered story groups |
@@ -26,9 +26,14 @@ small `503` response without exposing local paths or connection details.
 
 Content endpoints redirect instead of proxying PNG bytes. This keeps the
 service out of the image data path. Configure the bucket or CDN for public
-reads; PNG objects are published as `image/png` under version-scoped keys with
-short-lived caching (`Cache-Control: public, max-age=300`). Public art metadata
-includes object location, byte size, and dimensions, but no PNG SHA.
+reads; PNG objects are published as `image/png` under
+`ART/<resVersion>/<variant>/<category>/<name>.png`, with
+`Cache-Control: public, max-age=31536000, immutable`. The version is the
+snapshot which contributed that create-only object. One current database can
+therefore redirect to several historical version prefixes. Public art metadata
+includes object location, byte size, and dimensions, but no redundant object
+variant or PNG SHA. The path uses `composition` for final art and `source` for
+retained character layers; the route already determines which kind is returned.
 
 ## Database refresh lifecycle
 
@@ -38,14 +43,14 @@ Startup is fail-closed:
    `ARKWAIFU_DATABASE_CACHE_DIR` using a unique `.part` file.
 2. Rename the completed download locally.
 3. Open SQLite with `write=false` and `create=false`.
-4. Require schema version 1.
+4. Require schema version 2.
 5. Start Dream only after that generation is healthy.
 
 The service then polls at `ARKWAIFU_DATABASE_POLL_SECONDS`, sending the last ETag
 as `If-None-Match`. HTTP `304` keeps the existing generation. A changed file is
 downloaded and schema-checked before it replaces the current local
 generation; the previous pool is drained and its file removed afterward. A
-download, HTTP, open, or schema failure is logged and the last compatible
+download, HTTP, open, or schema failure is logged and the last valid
 generation continues serving. A failure on the initial download
 prevents startup because there is no known-good in-memory generation yet.
 The complete request and body stream are bounded by
@@ -126,6 +131,3 @@ JSON/redirect responses.
 There are no release tables, staged rows, active pointers, or PostgreSQL
 settings. `unit_versions` contains only each unit's `resVersion`; HTTP reads use
 the rows in the one current database generation.
-
-This is a breaking interface. The old Go v1 routes are a behavioral reference,
-not a compatibility requirement.

@@ -32,6 +32,24 @@ def test_directive_parameters_keep_quoted_commas():
     assert directive.params == {"image": "event", "label": "one,two"}
 
 
+def test_directive_allows_space_before_closing_bracket():
+    (directive,) = parse_directives('[charslot(slot="r",name="char")  ]')
+
+    assert directive.name == "charslot"
+    assert directive.params == {"slot": "r", "name": "char"}
+
+
+@pytest.mark.parametrize(
+    "raw",
+    ['[name="Closure",delay=0.1]', "[name='Closure',delay=0.1]"],
+)
+def test_speaker_directive_keeps_optional_parameters(raw: str):
+    (directive,) = parse_directives(raw)
+
+    assert directive.name == ""
+    assert directive.params == {"name": "Closure", "delay": "0.1"}
+
+
 @pytest.mark.parametrize(
     ("raw", "expected"),
     [
@@ -39,6 +57,11 @@ def test_directive_parameters_keep_quoted_commas():
         ("char#2", "char#2$1"),
         ("char$3", "char#1$3"),
         (" char#2$3 ", "char#2$3"),
+        ("char#01$1", "char#1$1"),
+        ("char#1$01", "char#1$1"),
+        ("char#3 $1", "char#3$1"),
+        ("$ill_amiya_normal", ""),
+        ("char_empty", ""),
     ],
 )
 def test_character_identifier_defaults(raw: str, expected: str):
@@ -90,6 +113,12 @@ def test_story_parser_preserves_order_metadata_and_character_names(tmp_path: Pat
         '[image(image="EVENT")] \n'
         '[character(name="CHAR_TEST#2",focus="1")] \n'
         '[name="Amiya"] \n'
+        '[charslot(slot="1",posfrom="0,0",posto="100,0")] \n'
+        '[name="Doctor"] \n'
+        '[charslot(name="left",posfrom="0,0",posto="-200,0")] \n'
+        '[name="Kal\'tsit"] \n'
+        '[charslot(slot="1",name="char_empty")] \n'
+        '[name="Nobody"] \n'
         '[showitem(image="ITEM_ONE")] ',
     )
 
@@ -107,7 +136,45 @@ def test_story_parser_preserves_order_metadata_and_character_names(tmp_path: Pat
     ]
     assert story.art_references[1].title == "Title"
     assert story.art_references[1].subtitle == "Subtitle"
-    assert story.art_references[3].names == ("Amiya",)
+    assert story.art_references[3].names == ("Amiya", "Doctor", "Kal'tsit")
+
+
+def test_story_parser_resolves_character_variables(tmp_path: Path):
+    _write_json(
+        tmp_path,
+        "excel/story_review_table.json",
+        {
+            "group": {
+                "id": "group",
+                "name": "Tutorial",
+                "actType": "MAIN_STORY",
+                "infoUnlockDatas": [
+                    {
+                        "storyId": "story",
+                        "storyTxt": "tutorial",
+                        "avgTag": "Before Operation",
+                    }
+                ],
+            }
+        },
+    )
+    _write_json(tmp_path, "excel/story_review_meta_table.json", {})
+    _write_json(
+        tmp_path,
+        "story/story_variables.json",
+        {"ill_amiya_normal": "char_002_amiya_1"},
+    )
+    _write_story(
+        tmp_path,
+        "tutorial.txt",
+        '[character(name="$ill_amiya_normal")]\n[name="Amiya"]',
+    )
+
+    (group,) = parse_story_groups(tmp_path)
+
+    (reference,) = group.stories[0].art_references
+    assert reference.art_id == "char_002_amiya_1#1$1"
+    assert reference.names == ("Amiya",)
 
 
 def test_missing_optional_info_is_empty(tmp_path: Path):

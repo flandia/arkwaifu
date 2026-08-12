@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import logging
 import re
+from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 from typing import Any
@@ -13,7 +14,12 @@ from ..domain import StoryArtReference, StoryGroupRecord, StoryRecord
 
 _DATA_ROOT = Path("assets/torappu/dynamicassets/gamedata")
 _INCOMPLETE_UPSTREAM_LOGGER = logging.getLogger("arkwaifu_updateloop.incomplete_upstream")
-_DIRECTIVE = re.compile(r'\[(\w*)(?:\((.*)\))?]|\[name="(.*)"]')
+_DIRECTIVE = re.compile(
+    r"\[(?P<command>\w+)(?:\((?P<params>.*?)\)\s*)?]"
+    r"""|\[name\s*=\s*(?P<quote>["'])(?P<speaker>.*?)(?P=quote)"""
+    r"(?:\s*,\s*(?P<speaker_params>[^]\r\n]*))?]",
+    re.IGNORECASE,
+)
 _CHARACTER_ID = re.compile(r"^(.*?)(?:#(\d+))?(?:\$(\d+))?$")
 _GROUP_TYPES = {
     "MAIN_STORY": "main_story",
@@ -51,6 +57,7 @@ def parse_story_groups(root: Path) -> tuple[StoryGroupRecord, ...]:
     """Parse ordered story groups and all art references for one locale snapshot."""
     table = _read_json(root / _DATA_ROOT / "excel/story_review_table.json")
     metadata = _picture_metadata(root)
+    variables = _story_variables(root)
     groups = []
     for raw_group_id, raw_group in _mapping(table).items():
         group_id = _text(_at(raw_group, "id")) or raw_group_id
@@ -84,7 +91,10 @@ def parse_story_groups(root: Path) -> tuple[StoryGroupRecord, ...]:
                     f"gamedata/story/{text_name}.txt",
                 )
                 directives = ()
-            references = (*_pictures(directives, metadata), *_characters(directives))
+            references = (
+                *_pictures(directives, metadata),
+                *_characters(directives, variables),
+            )
             stories.append(
                 StoryRecord(
                     id=story_id,
@@ -113,12 +123,17 @@ def parse_directives(raw: str) -> tuple[Directive, ...]:
 
     directives = []
     for match in _DIRECTIVE.finditer(raw):
-        explicit_name = match.group(3)
+        explicit_name = match.group("speaker")
         if explicit_name is not None:
-            directives.append(Directive("", {"name": explicit_name}))
+            params = _parse_params(match.group("speaker_params") or "")
+            params["name"] = explicit_name
+            directives.append(Directive("", params))
         else:
             directives.append(
-                Directive(match.group(1).lower(), _parse_params(match.group(2) or ""))
+                Directive(
+                    match.group("command").lower(),
+                    _parse_params(match.group("params") or ""),
+                )
             )
     return tuple(directives)
 
@@ -126,14 +141,23 @@ def parse_directives(raw: str) -> tuple[Directive, ...]:
 def normalize_character_id(identifier: str) -> str:
     """Return a lower-case ``base#face$body`` identifier with default variants."""
 
-    identifier = identifier.strip()
-    if not identifier:
+    # Normalize harmless upstream spelling differences so every reference to
+    # one sprite has the same database key. GameData occasionally pads numeric
+    # variants or inserts whitespace beside their separators; neither selects
+    # a different face or body.
+    identifier = "".join(identifier.split())
+    # A leading ``$name`` is a story-variable reference, whereas only a
+    # trailing ``$<digits>`` selects a body. Variable references must first be
+    # resolved against the snapshot's story_variables.json by the caller.
+    if not identifier or identifier.startswith("$") or identifier.lower() == "char_empty":
         return ""
     match = _CHARACTER_ID.fullmatch(identifier)
     if match is None:
         return ""
     base, face, body = match.groups()
-    return f"{base}#{face or '1'}${body or '1'}".lower()
+    face = str(int(face)) if face is not None else "1"
+    body = str(int(body)) if body is not None else "1"
+    return f"{base}#{face}${body}".lower()
 
 
 def _pictures(
@@ -170,7 +194,10 @@ def _pictures(
     return tuple(pictures)
 
 
-def _characters(directives: tuple[Directive, ...]) -> tuple[StoryArtReference, ...]:
+def _characters(
+    directives: tuple[Directive, ...],
+    variables: Mapping[str, str],
+) -> tuple[StoryArtReference, ...]:
     """Reconstruct character appearances from slot, focus, and dialog state.
 
     References preserve first appearance order. Spoken names attach to the
@@ -202,18 +229,34 @@ def _characters(directives: tuple[Directive, ...]) -> tuple[StoryArtReference, .
             protagonist = characters.get(spotlight, "")
             names.setdefault(protagonist, []).append(directive.params.get("name", ""))
         elif directive.name == "character":
-            take("1", normalize_character_id(directive.params.get("name", "")))
-            take("2", normalize_character_id(directive.params.get("name2", "")))
+            take("1", _resolve_character_id(directive.params.get("name", ""), variables))
+            take("2", _resolve_character_id(directive.params.get("name2", ""), variables))
             spotlight = focus(directive.params.get("focus", ""))
         elif directive.name == "charslot":
-            identifier = normalize_character_id(directive.params.get("name", ""))
+            slot = directive.params.get("slot", "")
+            raw_identifier = directive.params.get("name", "")
+            clears_slot = raw_identifier.strip().lower() == "char_empty"
+            if not slot:
+                # Bare charslot directives clear the scene. A nonempty unknown
+                # name such as ``left`` is a position-control token, not art.
+                if not raw_identifier or clears_slot:
+                    spotlight = ""
+                    characters.clear()
+                continue
+            if clears_slot:
+                take(slot, "")
+                requested_focus = directive.params.get("focus", "")
+                if requested_focus:
+                    spotlight = focus(requested_focus)
+                elif spotlight == slot:
+                    spotlight = ""
+                continue
+            identifier = _resolve_character_id(raw_identifier, variables)
             if identifier:
-                slot = directive.params.get("slot", "")
                 take(slot, identifier)
                 spotlight = focus(directive.params.get("focus", ""))
-            else:
-                spotlight = ""
-                characters.clear()
+            elif directive.params.get("focus", ""):
+                spotlight = focus(directive.params["focus"])
         elif directive.name == "dialog":
             spotlight = ""
             characters.clear()
@@ -227,6 +270,28 @@ def _characters(directives: tuple[Directive, ...]) -> tuple[StoryArtReference, .
         )
         for identifier in history
     )
+
+
+def _resolve_character_id(identifier: str, variables: Mapping[str, str]) -> str:
+    """Resolve a story variable, if present, and return its concrete sprite ID."""
+
+    candidate = identifier.strip()
+    if candidate.startswith("$"):
+        candidate = variables.get(candidate[1:].lower(), "")
+    return normalize_character_id(candidate)
+
+
+def _story_variables(root: Path) -> dict[str, str]:
+    """Read string story variables used by character directives in this snapshot."""
+
+    path = root / _DATA_ROOT / "story/story_variables.json"
+    if not path.is_file():
+        return {}
+    return {
+        key.lower(): value
+        for key, value in _mapping(_read_json(path)).items()
+        if isinstance(key, str) and isinstance(value, str)
+    }
 
 
 def _picture_metadata(root: Path) -> dict[str, tuple[str, str]]:

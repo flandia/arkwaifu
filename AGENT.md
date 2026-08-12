@@ -9,9 +9,10 @@ application packages:
 - `apps/service/` is the OCaml 5.5 Dream read service.
 - `apps/web/` reserves space for a later JavaScript frontend rewrite.
 
-Search, frontend implementation, and compatibility with the Go v1 API are
-outside the current scope. Use v1.9.4 as a behavioral reference when a rewrite
-detail is unclear.
+Search, frontend implementation, and the Go v1 API are outside the current
+scope. Use v1.9.4 as a behavioral reference when a rewrite detail is unclear,
+but do not carry its API or database format into the rewrite without a current
+requirement.
 
 Other important paths are:
 
@@ -36,27 +37,52 @@ Keep this publication order:
 5. Batch-upload all required PNGs with bounded concurrency.
 6. Upload `arkwaifu.sqlite3` last.
 
-The final database PUT is the publication point. SQLite statement and commit
-constraints validate writes; runtime code checks `user_version` but does not
-run a separate `quick_check`, `integrity_check`, or
-`foreign_key_check`.
+The final database PUT publishes the database metadata. PNG uploads happen
+after the local transaction under the contributing art `resVersion` and before
+the database PUT. Treat PNG keys as create-only: accept an existing object only
+when its size, content type, and immutable cache policy match, and fail on a
+conflict. A failed PNG batch can therefore leave unreachable objects, but it
+does not change the keys referenced by the currently published database.
+SQLite statement and commit constraints validate writes; runtime code checks
+`user_version` but does not run a separate `quick_check`, `integrity_check`, or
+post-write `foreign_key_check`. The updater creates schema version 2 and rejects
+databases with any other declared schema version; recreate development databases
+made with an earlier schema.
 
 Art object keys are
-`ART/<resVersion>/<variant>/<category>/<name>.png`, where `variant` is
-`composition` or `source`. Names are logical identifiers, not content
-hashes. Persist only upstream `resVersion` values, not repository URLs or
-commit identifiers.
+`ART/<resVersion>/<variant>/<category>/<name>.png`. The implemented variants
+are `composition` for final art and `source` for retained character layers.
+The platform from which a compensating asset was obtained is not part of its
+variant or object key. Names are logical identifiers, not content hashes. Final
+art identity is `(category, art_id)`, and every story or gallery reference
+carries both fields.
+The version segment is the art version which contributed that particular PNG;
+one cumulative database may consequently point into several historical version
+prefixes. Persist upstream `resVersion` values, but do not persist repository
+URLs or commit identifiers.
 
-Retain history. Bucket versioning is the rollback mechanism for overwritten
-objects, and updater code must not garbage-collect old versions or unreachable
-PNGs. Do not run more than one logical writer against the same bucket.
+Retain history. The first version of a complete build is full; each later art
+version processes only bundles selected as changed. The cumulative manifest
+keeps the newest record for each logical identity and uploads each final winner
+under the version which contributed it. It does not copy records from unchanged
+bundles, so unchanged database rows keep their existing object keys. Updater
+code must not garbage-collect old version prefixes or unreachable PNG keys.
+Object storage therefore records the `resVersion` values which contributed
+published PNGs, but the updater does not enumerate it to discover version
+history. Bucket versioning remains the rollback mechanism for the overwritten
+database object. Do not run more than one logical writer against the same
+bucket.
 
 Incomplete upstream data is normal. Empty locale sections, missing story text,
 or missing art references should warn and continue.
 `--suppress-incomplete-upstream-warnings` suppresses only those expected
-warnings. `--force` can rebuild locales at their current version and can force a
-full art build for a new version. It cannot replace art at the already-published
-`resVersion`, because those PNG keys are live before the database changes.
+warnings. `--force` can rebuild locales at their current version, but is not
+supported for an update containing art: a full art rebuild would copy unchanged
+records into a new version prefix. The
+explicit `run art --complete` mode is a separate exception: it may cumulatively
+process all recorded Windows versions from oldest to current and backfill art
+even when the database already records the current `resVersion`; it cannot be
+combined with `--force` or other units.
 
 ## Upstreams, extraction, and cache
 
@@ -90,9 +116,9 @@ updating UnityPy.
 ## Read service
 
 The service downloads `arkwaifu.sqlite3` before accepting traffic, requires
-schema version 1, and opens it read-only. It polls with `If-None-Match`; a
+schema version 2, and opens it read-only. It polls with `If-None-Match`; a
 successful replacement becomes the new local generation, while refresh errors
-leave the last compatible generation serving. Each process owns a private
+leave the last valid generation serving. Each process owns a private
 writable database cache directory. See `apps/service/README.md` for routes and
 configuration.
 

@@ -1,9 +1,9 @@
-"""Coordinate remote preparation and atomic publication of Arkwaifu data.
+"""Coordinate remote preparation and publication of Arkwaifu data.
 
 The operation has three parts, following the previous Go update loop: pull and
 prepare the upstream data, convert it into the database and PNG forms consumed
 by the reader, and submit the resulting objects. Preparation may use cached
-intermediate files, but one database overwrite is the final visibility point.
+intermediate files, but one database overwrite is the metadata visibility point.
 """
 
 from __future__ import annotations
@@ -11,6 +11,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import tempfile
+import time
 from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -34,15 +35,22 @@ UpdateStatus = Literal["updated", "unchanged"]
 
 _UNITS = frozenset({"art", "CN", "EN", "JP", "KR", "TW"})
 _INCOMPLETE_UPSTREAM_LOGGER = logging.getLogger("arkwaifu_updateloop.incomplete_upstream")
+_LOGGER = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True, slots=True)
 class Update:
-    """Describe one requested dataset and the callback which prepares it."""
+    """Describe one requested dataset and the callback which prepares it.
+
+    ``complete`` is the art-only historical backfill policy. It makes an
+    already-current request build without pretending that the operator forced
+    an ordinary same-version update.
+    """
 
     unit: UpdateUnit
     res_version: str
     build: BuildManifest
+    complete: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -54,9 +62,41 @@ class UpdateResult:
     status: UpdateStatus
 
 
+def _log_art_action(
+    action: str,
+    *,
+    version: str,
+    status: str,
+    resource: str | None = None,
+    current: int | None = None,
+    total: int | None = None,
+    elapsed_seconds: float | None = None,
+) -> None:
+    """Emit one structured publication event for the art unit."""
+
+    extra: dict[str, object] = {
+        "action": action,
+        "res_version": version,
+        "status": status,
+    }
+    if resource is not None:
+        extra["resource"] = resource
+    if current is not None:
+        extra["current"] = current
+    if total is not None:
+        extra["total"] = total
+    if elapsed_seconds is not None:
+        extra["elapsed_ms"] = round(elapsed_seconds * 1000, 3)
+    _LOGGER.info("art action", extra=extra)
+
+
 def _prepare_art_publication(
     manifests: Sequence[Manifest],
-) -> tuple[dict[str, str], dict[str, str], tuple[tuple[str, PngImage], ...]]:
+) -> tuple[
+    dict[tuple[str, str], str],
+    dict[str, str],
+    tuple[tuple[str, PngImage], ...],
+]:
     """Derive object keys and candidate uploads from the requested art manifest."""
 
     manifest = next(
@@ -66,8 +106,8 @@ def _prepare_art_publication(
     if manifest is None:
         return {}, {}, ()
     art_keys = {
-        art.id: art_object_key(
-            res_version=manifest.upstream_version,
+        (art.category, art.id): art_object_key(
+            res_version=art.res_version or manifest.upstream_version,
             variant="composition",
             category=art.category,
             identifier=art.id,
@@ -76,7 +116,7 @@ def _prepare_art_publication(
     }
     source_keys = {
         source.id: art_object_key(
-            res_version=manifest.upstream_version,
+            res_version=source.res_version or manifest.upstream_version,
             variant="source",
             category="character",
             identifier=source.id,
@@ -84,7 +124,7 @@ def _prepare_art_publication(
         for source in manifest.source_arts
     }
     uploads = tuple(
-        [(art_keys[art.id], art.image) for art in manifest.arts]
+        [(art_keys[(art.category, art.id)], art.image) for art in manifest.arts]
         + [(source_keys[source.id], source.image) for source in manifest.source_arts]
     )
     return art_keys, source_keys, uploads
@@ -93,12 +133,14 @@ def _prepare_art_publication(
 def art_object_key(
     *,
     res_version: str,
-    variant: str,
+    variant: Literal["composition", "source"],
     category: str,
     identifier: str,
 ) -> str:
     """Return the escaped object key for one art composition or source image."""
 
+    if not isinstance(res_version, str) or not res_version:
+        raise ValueError("art resVersion cannot be empty")
     if variant not in {"composition", "source"}:
         raise ValueError(f"unknown art object variant: {variant}")
     if category not in {"image", "background", "item", "character"}:
@@ -127,13 +169,17 @@ class Updateloop:
         Builders run concurrently. Successful manifests enter one local SQLite
         transaction, final PNG winners upload with bounded concurrency, and the
         database uploads last. A failure before the final upload leaves the
-        previously published database current, although completed PNG uploads
-        can remain unreferenced.
+        previously published database current, although completed versioned PNG
+        creations can remain unreferenced.
         """
 
         self._validate_requests(requests)
         if not requests:
             return ()
+        if force and any(request.complete for request in requests):
+            raise ValueError("complete art builds cannot be combined with force")
+        if force and any(request.unit == "art" for request in requests):
+            raise ValueError("force is not supported for art updates")
 
         with tempfile.TemporaryDirectory(prefix="arkwaifu-database-") as temporary:
             database_path = Path(temporary) / "arkwaifu.sqlite3"
@@ -141,36 +187,57 @@ class Updateloop:
             await await_owned(asyncio.to_thread(initialize_or_validate, database_path))
             active_versions = await await_owned(asyncio.to_thread(read_versions, database_path))
 
-            if force and any(
-                request.unit == "art" and active_versions.get("art") == request.res_version
-                for request in requests
-            ):
-                raise ValueError(
-                    "cannot force art at the published resVersion: stable PNG keys "
-                    "would change before the database publication point"
-                )
-
             changed_requests = [
                 request
                 for request in requests
-                if force or active_versions.get(request.unit) != request.res_version
+                if force
+                or active_versions.get(request.unit) != request.res_version
+                or request.complete
             ]
             if not changed_requests:
                 return tuple(
                     UpdateResult(request.unit, request.res_version, "unchanged")
                     for request in requests
                 )
-            manifests = await self._build_manifests(changed_requests, active_versions, force)
-            art_keys, source_keys, candidate_uploads = _prepare_art_publication(manifests)
-            committed_object_keys = await await_owned(
-                asyncio.to_thread(
-                    apply_changes,
-                    database_path,
-                    manifests,
-                    art_keys=art_keys,
-                    source_keys=source_keys,
-                )
+            manifests = await self._build_manifests(
+                changed_requests,
+                active_versions,
+                force,
             )
+            art_manifest = next(
+                (manifest for manifest in manifests if isinstance(manifest, ArtManifest)),
+                None,
+            )
+            art_keys, source_keys, candidate_uploads = _prepare_art_publication(manifests)
+            apply_started = time.perf_counter()
+            try:
+                committed_object_keys = await await_owned(
+                    asyncio.to_thread(
+                        apply_changes,
+                        database_path,
+                        manifests,
+                        art_keys=art_keys,
+                        source_keys=source_keys,
+                    )
+                )
+            except Exception:
+                if art_manifest is not None:
+                    _log_art_action(
+                        "apply",
+                        version=art_manifest.upstream_version,
+                        resource="arkwaifu.sqlite3",
+                        status="failed",
+                        elapsed_seconds=time.perf_counter() - apply_started,
+                    )
+                raise
+            if art_manifest is not None:
+                _log_art_action(
+                    "apply",
+                    version=art_manifest.upstream_version,
+                    resource="arkwaifu.sqlite3",
+                    status="done",
+                    elapsed_seconds=time.perf_counter() - apply_started,
+                )
             referenced_uploads = tuple(
                 (key, artifact)
                 for key, artifact in candidate_uploads
@@ -185,8 +252,31 @@ class Updateloop:
                     len(missing),
                     list(missing[:10]),
                 )
-            await self._upload_artifacts(referenced_uploads)
-            await await_owned(self._remote.push_database(database_path))
+            await self._upload_artifacts(
+                referenced_uploads,
+                version=art_manifest.upstream_version if art_manifest is not None else None,
+            )
+            publish_started = time.perf_counter()
+            try:
+                await await_owned(self._remote.push_database(database_path))
+            except Exception:
+                if art_manifest is not None:
+                    _log_art_action(
+                        "publish",
+                        version=art_manifest.upstream_version,
+                        resource="arkwaifu.sqlite3",
+                        status="failed",
+                        elapsed_seconds=time.perf_counter() - publish_started,
+                    )
+                raise
+            if art_manifest is not None:
+                _log_art_action(
+                    "publish",
+                    version=art_manifest.upstream_version,
+                    resource="arkwaifu.sqlite3",
+                    status="done",
+                    elapsed_seconds=time.perf_counter() - publish_started,
+                )
 
             changed_units = {request.unit for request in changed_requests}
             return tuple(
@@ -200,12 +290,18 @@ class Updateloop:
 
     @staticmethod
     def _validate_requests(requests: Sequence[Update]) -> None:
+        if any(request.complete for request in requests) and (
+            len(requests) != 1 or requests[0].unit != "art"
+        ):
+            raise ValueError("complete art must be the sole requested update unit")
         seen: set[str] = set()
         for request in requests:
             if request.unit not in _UNITS:
                 raise ValueError(f"unknown database unit: {request.unit}")
             if not request.res_version:
                 raise ValueError(f"{request.unit} resVersion cannot be empty")
+            if request.complete and request.unit != "art":
+                raise ValueError("complete update policy is available only for art")
             if request.unit in seen:
                 raise ValueError(f"database unit requested more than once: {request.unit}")
             seen.add(request.unit)
@@ -263,11 +359,15 @@ class Updateloop:
     async def _upload_artifacts(
         self,
         uploads: Sequence[tuple[str, PngImage]],
+        *,
+        version: str | None,
     ) -> None:
         """Upload final manifest winners with bounded memory and concurrency."""
         if not uploads:
             return
-        iterator = iter(uploads)
+        numbered_uploads = tuple(enumerate(uploads, start=1))
+        iterator = iter(numbered_uploads)
+        total = len(numbered_uploads)
         stop = asyncio.Event()
         first_error: Exception | None = None
 
@@ -275,16 +375,37 @@ class Updateloop:
             nonlocal first_error
             while not stop.is_set():
                 try:
-                    key, artifact = next(iterator)
+                    current, (key, artifact) = next(iterator)
                 except StopIteration:
                     return
+                started = time.perf_counter()
                 try:
                     await self._remote.put_png(key, artifact)
                 except Exception as error:  # noqa: BLE001 - adapter errors are opaque
+                    if version is not None:
+                        _log_art_action(
+                            "upload",
+                            version=version,
+                            resource=key,
+                            current=current,
+                            total=total,
+                            status="failed",
+                            elapsed_seconds=time.perf_counter() - started,
+                        )
                     if first_error is None:
                         first_error = error
                     stop.set()
                     return
+                if version is not None:
+                    _log_art_action(
+                        "upload",
+                        version=version,
+                        resource=key,
+                        current=current,
+                        total=total,
+                        status="done",
+                        elapsed_seconds=time.perf_counter() - started,
+                    )
 
         tasks = [
             asyncio.create_task(worker(), name=f"batch-art-upload-{index}")

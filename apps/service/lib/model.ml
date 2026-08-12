@@ -52,6 +52,7 @@ type gallery_entry = {
   name : string;
   description : string;
   art_id : string;
+  category : string;
 }
 
 type gallery = {
@@ -145,6 +146,7 @@ let gallery_entry_json (entry : gallery_entry) =
       ("name", `String entry.name);
       ("description", `String entry.description);
       ("artID", `String entry.art_id);
+      ("category", `String entry.category);
     ]
 
 let gallery_fields (gallery : gallery) =

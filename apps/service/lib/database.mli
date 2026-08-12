@@ -41,8 +41,8 @@ val close : t -> unit Lwt.t
 (** Check whether the current reader is available. *)
 val health : t -> (unit, error) result Lwt.t
 
-(** Get one final art record by its logical identifier. *)
-val art : t -> string -> (Model.art, error) result Lwt.t
+(** Get one final art record by category and logical identifier. *)
+val art : t -> string -> string -> (Model.art, error) result Lwt.t
 
 (** Get one original source art record by its logical identifier. *)
 val source_art : t -> string -> (Model.source_art, error) result Lwt.t

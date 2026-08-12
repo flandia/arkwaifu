@@ -37,11 +37,11 @@ let with_locale request callback =
 
 let routes ~database ~object_base_url =
   let art request =
-    Database.art database (Dream.param request "id")
+    Database.art database (Dream.param request "category") (Dream.param request "id")
     >>= respond (Model.art_json ~object_base_url)
   in
   let art_content request =
-    Database.art database (Dream.param request "id")
+    Database.art database (Dream.param request "category") (Dream.param request "id")
     >>= redirect_to_content ~object_base_url request (fun (art : Model.art) ->
             art.image)
   in
@@ -59,8 +59,8 @@ let routes ~database ~object_base_url =
       Dream.get "/health" (fun _ ->
           Database.health database
           >>= respond (fun () -> `Assoc [ ("status", `String "ok") ]));
-      Dream.get "/api/arts/:id" art;
-      Dream.get "/api/arts/:id/content" art_content;
+      Dream.get "/api/arts/:category/:id" art;
+      Dream.get "/api/arts/:category/:id/content" art_content;
       Dream.get "/api/source-arts/:id" source_art;
       Dream.get "/api/source-arts/:id/content" source_art_content;
       Dream.get "/api/:locale/story-groups" (fun request ->

@@ -15,6 +15,7 @@ from arkwaifu_updateloop import (
     S3ObjectStore,
     Update,
     Updateloop,
+    UpdateResult,
 )
 from arkwaifu_updateloop import object_store as remote_module
 from arkwaifu_updateloop import updater as updater_module
@@ -146,13 +147,32 @@ def database_connection(remote: MemoryObjectStore, tmp_path: Path) -> sqlite3.Co
 
 def test_object_key_uses_requested_art_path_and_logical_identity_without_sha():
     key = art_object_key(
-        res_version="24-01/alpha",
+        res_version="v1",
         variant="composition",
         category="character",
         identifier="char#1$2",
     )
 
-    assert key == "ART/24-01%2Falpha/composition/character/char%231%242.png"
+    assert key == "ART/v1/composition/character/char%231%242.png"
+
+
+@pytest.mark.parametrize(
+    ("variant", "expected"),
+    [
+        ("source", "ART/v1/source/character/id.png"),
+        ("composition", "ART/v1/composition/character/id.png"),
+    ],
+)
+def test_object_key_supports_art_variants(variant, expected):
+    assert (
+        art_object_key(
+            res_version="v1",
+            variant=variant,
+            category="character",
+            identifier="id",
+        )
+        == expected
+    )
 
 
 def test_database_object_is_named_arkwaifu():
@@ -162,13 +182,17 @@ def test_database_object_is_named_arkwaifu():
 async def test_s3_remote_streams_a_file_backed_png(monkeypatch, tmp_path):
     class Client:
         def __init__(self) -> None:
-            self.uploads = []
             self.puts = []
 
-        def upload_file(self, *args, **kwargs):
-            self.uploads.append((args, kwargs))
+        def head_object(self, **_kwargs):
+            raise remote_module.ClientError(
+                {"Error": {"Code": "404"}},
+                "HeadObject",
+            )
 
         def put_object(self, **kwargs):
+            kwargs = dict(kwargs)
+            kwargs["Body"] = kwargs["Body"].read()
             self.puts.append(kwargs)
 
     client = Client()
@@ -185,15 +209,78 @@ async def test_s3_remote_streams_a_file_backed_png(monkeypatch, tmp_path):
 
     await remote.put_png("ART/v1/composition/image/art.png", artifact)
 
-    assert client.puts == []
-    assert len(client.uploads) == 1
-    args, kwargs = client.uploads[0]
-    assert args == (str(png_path.resolve()), "bucket", "ART/v1/composition/image/art.png")
-    assert kwargs["ExtraArgs"] == {
-        "ContentType": "image/png",
-        "CacheControl": "public, max-age=300",
-    }
-    assert kwargs["Config"].use_threads is False
+    assert client.puts == [
+        {
+            "Bucket": "bucket",
+            "Key": "ART/v1/composition/image/art.png",
+            "Body": png_path.read_bytes(),
+            "ContentLength": artifact.byte_size,
+            "ContentType": "image/png",
+            "CacheControl": "public, max-age=31536000, immutable",
+        }
+    ]
+
+
+async def test_s3_remote_accepts_matching_immutable_png_without_put(monkeypatch):
+    artifact = PngArtifact.from_image(Image.new("RGBA", (2, 3), (1, 2, 3, 255)))
+
+    class Client:
+        def head_object(self, **_kwargs):
+            return {
+                "ContentLength": artifact.byte_size,
+                "ContentType": "image/png",
+                "CacheControl": "public, max-age=31536000, immutable",
+            }
+
+        def put_object(self, **_kwargs):
+            raise AssertionError("matching immutable PNG must not be replaced")
+
+    monkeypatch.setattr(remote_module.boto3, "client", lambda *_args, **_kwargs: Client())
+    remote = S3ObjectStore(
+        bucket="bucket",
+        region="region",
+        access_key_id="access",
+        secret_access_key="secret",
+    )
+
+    await remote.put_png("ART/v1/composition/image/art.png", artifact)
+
+
+async def test_s3_remote_rejects_conflicting_immutable_png(monkeypatch):
+    artifact = PngArtifact.from_image(Image.new("RGBA", (2, 3), (1, 2, 3, 255)))
+
+    class Client:
+        def head_object(self, **_kwargs):
+            return {
+                "ContentLength": artifact.byte_size + 1,
+                "ContentType": "image/png",
+                "CacheControl": "public, max-age=31536000, immutable",
+            }
+
+    monkeypatch.setattr(remote_module.boto3, "client", lambda *_args, **_kwargs: Client())
+    remote = S3ObjectStore(
+        bucket="bucket",
+        region="region",
+        access_key_id="access",
+        secret_access_key="secret",
+    )
+
+    with pytest.raises(ValueError, match="immutable PNG object conflicts"):
+        await remote.put_png("ART/v1/composition/image/art.png", artifact)
+
+
+async def test_memory_remote_does_not_replace_versioned_png():
+    remote = MemoryObjectStore()
+    key = "ART/v1/composition/image/art.png"
+    first = PngArtifact.from_image(Image.new("RGBA", (1, 1), (1, 2, 3, 255)))
+    second = PngArtifact.from_image(Image.new("RGBA", (1, 1), (4, 5, 6, 255)))
+
+    await remote.put_png(key, first)
+    await remote.put_png(key, first)
+    with pytest.raises(ValueError, match="immutable PNG object conflicts"):
+        await remote.put_png(key, second)
+
+    assert remote.objects[key] == first.content
 
 
 async def test_partial_first_run_creates_one_valid_database(tmp_path, caplog):
@@ -214,6 +301,21 @@ async def test_partial_first_run_creates_one_valid_database(tmp_path, caplog):
         assert connection.execute("SELECT names_json FROM story_art_references").fetchone()[0] == (
             '["A","B"]'
         )
+
+
+async def test_art_reference_requires_matching_category_and_id(caplog):
+    remote = MemoryObjectStore()
+
+    with caplog.at_level("WARNING", logger="arkwaifu_updateloop.incomplete_upstream"):
+        await Updateloop(remote).run(
+            [
+                request(art_manifest("art-v1", "shared", category="background")),
+                request(locale_manifest("EN", "en-v1", art_id="shared")),
+            ]
+        )
+
+    assert "count=1" in caplog.text
+    assert "image/shared" in caplog.text
 
 
 @pytest.mark.parametrize(
@@ -281,7 +383,84 @@ async def test_equal_res_version_is_a_noop_without_calling_builder():
     assert remote.database == original
 
 
-async def test_art_delta_overlays_existing_rows_and_keeps_category_precedence(tmp_path):
+async def test_complete_art_builds_at_current_version_and_pushes_database_once(
+    tmp_path,
+    caplog,
+):
+    class CountingRemote(MemoryObjectStore):
+        def __init__(self) -> None:
+            super().__init__()
+            self.pushes = 0
+
+        async def push_database(self, source):
+            self.pushes += 1
+            await super().push_database(source)
+
+    remote = CountingRemote()
+    updater = Updateloop(remote)
+    await updater.run([request(art_manifest("v3", "current"))])
+    remote.pushes = 0
+    caplog.clear()
+    caplog.set_level("INFO", logger=updater_module.__name__)
+    calls = []
+    complete_manifest = ArtManifest(
+        "v3",
+        (
+            replace(
+                art_manifest("v1", "historical", category="background").arts[0],
+                res_version="v1",
+            ),
+            art_manifest("v3", "current").arts[0],
+        ),
+        (),
+    )
+
+    async def build(active, force):
+        calls.append((active, force))
+        return complete_manifest
+
+    result = await updater.run([Update("art", "v3", build, complete=True)])
+
+    assert result == (UpdateResult("art", "v3", "updated"),)
+    assert calls == [("v3", False)]
+    assert remote.pushes == 1
+    records = [record for record in caplog.records if hasattr(record, "action")]
+    assert (records[0].action, records[0].status) == ("apply", "done")
+    assert (records[-1].action, records[-1].status) == ("publish", "done")
+    assert [record.action for record in records].count("upload") == 2
+    assert [record.status for record in records if record.action in {"apply", "publish"}] == [
+        "done",
+        "done",
+    ]
+    uploads = [record for record in records if record.action == "upload"]
+    assert sorted((record.current, record.total) for record in uploads) == [(1, 2), (2, 2)]
+    assert all(record.res_version == "v3" for record in records)
+    with database_connection(remote, tmp_path) as connection:
+        assert {tuple(row) for row in connection.execute("SELECT category, art_id FROM arts")} == {
+            ("background", "historical"),
+            ("image", "current"),
+        }
+        assert dict(connection.execute("SELECT art_id, object_key FROM arts")) == {
+            "historical": "ART/v1/composition/background/historical.png",
+            "current": "ART/v3/composition/image/current.png",
+        }
+    assert set(remote.objects) >= {
+        "ART/v1/composition/background/historical.png",
+        "ART/v3/composition/image/current.png",
+    }
+
+
+async def test_complete_art_cannot_be_combined_with_other_units_or_force():
+    complete = Update("art", "v1", request(art_manifest("v1", "art")).build, complete=True)
+    locale = request(locale_manifest("EN", "en-v1"))
+
+    with pytest.raises(ValueError, match="sole requested"):
+        await Updateloop(MemoryObjectStore()).run([complete, locale])
+    with pytest.raises(ValueError, match="cannot be combined with force"):
+        await Updateloop(MemoryObjectStore()).run([complete], force=True)
+
+
+async def test_art_delta_overlays_only_the_same_category_qualified_identity(tmp_path):
     remote = MemoryObjectStore()
     updater = Updateloop(remote)
     await updater.run([request(art_manifest("v1", "shared", category="background"))])
@@ -303,16 +482,23 @@ async def test_art_delta_overlays_existing_rows_and_keeps_category_precedence(tm
     with database_connection(remote, tmp_path) as connection:
         rows = [
             tuple(row)
-            for row in connection.execute("SELECT art_id, category FROM arts ORDER BY art_id")
+            for row in connection.execute(
+                "SELECT art_id, category FROM arts ORDER BY art_id, category"
+            )
         ]
-        assert rows == [("new", "image"), ("shared", "background")]
+        assert rows == [
+            ("new", "image"),
+            ("shared", "background"),
+            ("shared", "image"),
+        ]
         assert (
             connection.execute(
                 "SELECT res_version FROM unit_versions WHERE unit = 'art'"
             ).fetchone()[0]
             == "v2"
         )
-    assert "ART/v2/composition/image/shared.png" not in remote.objects
+    assert "ART/v1/composition/background/shared.png" in remote.objects
+    assert "ART/v2/composition/image/shared.png" in remote.objects
     assert "ART/v2/composition/image/new.png" in remote.objects
 
 
@@ -333,6 +519,29 @@ async def test_character_sources_and_ordered_references_are_persisted(tmp_path):
                 "SELECT art_id, position, source_art_id FROM art_source_refs"
             ).fetchone()
         ) == ("amiya#1$1", 0, "amiya:body:1")
+
+
+async def test_art_delta_preserves_unmentioned_record_and_replaces_matching_identity(tmp_path):
+    remote = MemoryObjectStore()
+    await Updateloop(remote).run([request(art_manifest("v1", "fallback"))])
+
+    await Updateloop(remote).run([request(art_manifest("v2", "different"))])
+    with database_connection(remote, tmp_path) as connection:
+        assert (
+            connection.execute(
+                "SELECT object_key FROM arts WHERE category = 'image' AND art_id = 'fallback'"
+            ).fetchone()[0]
+            == "ART/v1/composition/image/fallback.png"
+        )
+
+    await Updateloop(remote).run([request(art_manifest("v3", "fallback", (4, 5, 6, 255)))])
+    with database_connection(remote, tmp_path) as connection:
+        assert (
+            connection.execute(
+                "SELECT object_key FROM arts WHERE category = 'image' AND art_id = 'fallback'"
+            ).fetchone()[0]
+            == "ART/v3/composition/image/fallback.png"
+        )
 
 
 async def test_replacing_one_locale_preserves_other_units(tmp_path):
@@ -632,18 +841,25 @@ async def test_cancellation_waits_for_database_push_before_removing_local_file()
     assert not remote.source.exists()
 
 
-async def test_force_same_version_art_is_rejected_before_overwriting_live_objects():
+async def test_force_art_at_a_new_version_is_rejected_before_building_or_copying_objects():
     remote = MemoryObjectStore()
     updater = Updateloop(remote)
     first = art_manifest("v1", "same", (1, 2, 3, 255))
-    second = art_manifest("v1", "same", (4, 5, 6, 255))
+    second = art_manifest("v2", "same", (4, 5, 6, 255))
     await updater.run([request(first)])
     original_database = remote.database
     original_objects = remote.objects.copy()
+    built = False
 
-    with pytest.raises(ValueError, match="cannot force art at the published resVersion"):
-        await updater.run([request(second)], force=True)
+    async def build(_active: str | None, _force: bool):
+        nonlocal built
+        built = True
+        return second
 
+    with pytest.raises(ValueError, match="force is not supported for art updates"):
+        await updater.run([Update("art", "v2", build)], force=True)
+
+    assert built is False
     assert remote.database == original_database
     assert remote.objects == original_objects
 

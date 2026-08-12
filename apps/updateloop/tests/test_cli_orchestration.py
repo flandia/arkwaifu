@@ -86,20 +86,19 @@ async def test_run_starts_all_version_preparations_concurrently(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_run_publishes_all_requested_units_in_one_atomic_call(monkeypatch):
+async def test_run_passes_force_to_a_locale_only_publication(monkeypatch):
     updater = _patch_runtime(monkeypatch)
-    monkeypatch.setattr(cli, "_prepare_art", lambda settings, cache: _ready(_update("art")))
     monkeypatch.setattr(
         cli,
         "_prepare_locale",
         lambda builder, unit: _ready(_update(unit)),
     )
 
-    assert await cli._run(["art", "EN", "JP"], force=True, use_cache=False) == 0
+    assert await cli._run(["EN", "JP"], force=True, use_cache=False) == 0
 
     assert len(updater.calls) == 1
     requests, force = updater.calls[0]
-    assert [request.unit for request in requests] == ["art", "EN", "JP"]
+    assert [request.unit for request in requests] == ["EN", "JP"]
     assert force is True
 
 
@@ -175,6 +174,50 @@ async def test_prepare_art_exposes_one_batch_build(monkeypatch, tmp_path: Path):
     manifest = await update.build(None, False)
 
     assert manifest is resource
+
+
+@pytest.mark.asyncio
+async def test_prepare_complete_art_uses_history_builder_once(monkeypatch, tmp_path: Path):
+    resource = ArtManifest("art-v3", (), ())
+    cache = UpstreamCache(tmp_path / ".cache")
+    calls = []
+
+    class Builder:
+        def __init__(self, **kwargs) -> None:
+            assert kwargs["cache"] is cache
+
+        async def detect_version(self):
+            return "art-v3"
+
+        async def build_history(self, versions):
+            calls.append(versions)
+            return resource
+
+    class History:
+        def __init__(self, **kwargs) -> None:
+            assert kwargs["cache"] is cache
+
+        async def versions(self, current):
+            assert current == "art-v3"
+            return ("art-v1", "art-v2", "art-v3")
+
+    monkeypatch.setattr(cli, "LiveArtBuilder", Builder)
+    monkeypatch.setattr(cli, "LiveWindowsVersionHistory", History)
+    settings = SimpleNamespace(
+        art_version_url="https://version.example",
+        art_asset_base_url="https://assets.example",
+        github_api_url="https://api.github.example",
+        github_token=None,
+        download_workers=2,
+        extraction_workers=1,
+    )
+
+    update = await cli._prepare_art(settings, cache, complete=True)
+    manifest = await update.build("art-v3", False)
+
+    assert update.complete is True
+    assert manifest is resource
+    assert calls == [("art-v1", "art-v2", "art-v3")]
 
 
 @pytest.mark.asyncio

@@ -10,8 +10,7 @@ from pathlib import Path
 
 from .domain import ArtManifest, LocaleManifest
 
-SCHEMA_VERSION = 1
-_ART_CATEGORY_PRECEDENCE = {"image": 0, "background": 1, "item": 2, "character": 3}
+SCHEMA_VERSION = 2
 
 
 def _connect(path: Path) -> sqlite3.Connection:
@@ -27,7 +26,7 @@ def _read_schema() -> str:
 
 
 def initialize_or_validate(path: Path) -> None:
-    """Create a missing database, or require the supported schema version."""
+    """Create a missing database or require the supported schema version."""
 
     path.parent.mkdir(parents=True, exist_ok=True)
     if not path.exists():
@@ -42,7 +41,7 @@ def initialize_or_validate(path: Path) -> None:
 def validate_schema_version(path: Path) -> None:
     """Require the database's declared schema version without scanning its contents."""
 
-    connection = _connect(path)
+    connection = sqlite3.connect(path)
     try:
         version = int(connection.execute("PRAGMA user_version").fetchone()[0])
         if version != SCHEMA_VERSION:
@@ -72,14 +71,14 @@ def apply_changes(
     path: Path,
     manifests: Sequence[ArtManifest | LocaleManifest],
     *,
-    art_keys: Mapping[str, str],
+    art_keys: Mapping[tuple[str, str], str],
     source_keys: Mapping[str, str],
 ) -> frozenset[str]:
     """Apply every manifest in one transaction and return referenced PNG keys.
 
-    Art manifests overlay the current art set according to the legacy category
-    precedence. Locale manifests replace the complete selected locale through
-    the cascading unit-version foreign key.
+    Art manifests overlay the current category-qualified art set. Locale
+    manifests replace the complete selected locale through the cascading
+    unit-version foreign key.
     """
 
     connection = _connect(path)
@@ -109,7 +108,7 @@ def apply_changes(
 def _apply_art(
     connection: sqlite3.Connection,
     manifest: ArtManifest,
-    art_keys: Mapping[str, str],
+    art_keys: Mapping[tuple[str, str], str],
     source_keys: Mapping[str, str],
 ) -> None:
     connection.execute(
@@ -136,26 +135,28 @@ def _apply_art(
     connection.execute(
         """
         CREATE TEMP TABLE candidate_arts (
-            art_id TEXT PRIMARY KEY,
+            art_id TEXT NOT NULL,
             category TEXT NOT NULL
                 CHECK (category IN ('image', 'background', 'item', 'character')),
-            precedence INTEGER NOT NULL CHECK (precedence BETWEEN 0 AND 3),
             object_key TEXT NOT NULL UNIQUE,
             byte_size INTEGER NOT NULL CHECK (byte_size > 0),
             width INTEGER NOT NULL CHECK (width > 0),
-            height INTEGER NOT NULL CHECK (height > 0)
+            height INTEGER NOT NULL CHECK (height > 0),
+            PRIMARY KEY (category, art_id)
         ) STRICT
         """
     )
     connection.execute(
         """
         CREATE TEMP TABLE candidate_art_source_refs (
+            category TEXT NOT NULL CHECK (category = 'character'),
             art_id TEXT NOT NULL,
             position INTEGER NOT NULL CHECK (position >= 0),
             source_art_id TEXT NOT NULL,
-            PRIMARY KEY (art_id, position),
-            UNIQUE (art_id, source_art_id),
-            FOREIGN KEY (art_id) REFERENCES candidate_arts (art_id) ON DELETE CASCADE
+            PRIMARY KEY (category, art_id, position),
+            UNIQUE (category, art_id, source_art_id),
+            FOREIGN KEY (category, art_id)
+                REFERENCES candidate_arts (category, art_id) ON DELETE CASCADE
         ) STRICT
         """
     )
@@ -183,15 +184,14 @@ def _apply_art(
     connection.executemany(
         """
         INSERT INTO candidate_arts
-            (art_id, category, precedence, object_key, byte_size, width, height)
-        VALUES (?, ?, ?, ?, ?, ?, ?)
+            (art_id, category, object_key, byte_size, width, height)
+        VALUES (?, ?, ?, ?, ?, ?)
         """,
         (
             (
                 art.id,
                 art.category,
-                _ART_CATEGORY_PRECEDENCE[art.category],
-                art_keys[art.id],
+                art_keys[(art.category, art.id)],
                 art.image.byte_size,
                 art.image.width,
                 art.image.height,
@@ -201,11 +201,12 @@ def _apply_art(
     )
     connection.executemany(
         """
-        INSERT INTO candidate_art_source_refs (art_id, position, source_art_id)
-        VALUES (?, ?, ?)
+        INSERT INTO candidate_art_source_refs
+            (category, art_id, position, source_art_id)
+        VALUES (?, ?, ?, ?)
         """,
         (
-            (art.id, position, source_id)
+            (art.category, art.id, position, source_id)
             for art in manifest.arts
             for position, source_id in enumerate(art.source_art_ids)
         ),
@@ -235,42 +236,32 @@ def _apply_art(
             (art_id, category, object_key, byte_size, width, height)
         SELECT art_id, category, object_key, byte_size, width, height
         FROM candidate_arts WHERE true
-        ON CONFLICT (art_id) DO UPDATE SET
-            category = excluded.category,
+        ON CONFLICT (category, art_id) DO UPDATE SET
             object_key = excluded.object_key,
             byte_size = excluded.byte_size,
             width = excluded.width,
             height = excluded.height
-        WHERE
-            CASE excluded.category
-                WHEN 'image' THEN 0 WHEN 'background' THEN 1
-                WHEN 'item' THEN 2 ELSE 3
-            END
-            >=
-            CASE arts.category
-                WHEN 'image' THEN 0 WHEN 'background' THEN 1
-                WHEN 'item' THEN 2 ELSE 3
-            END
         """
     )
     connection.execute(
         """
         DELETE FROM art_source_refs
-        WHERE art_id IN (
-            SELECT candidate.art_id
+        WHERE (category, art_id) IN (
+            SELECT candidate.category, candidate.art_id
             FROM candidate_arts AS candidate
-            JOIN arts USING (art_id)
+            JOIN arts USING (category, art_id)
             WHERE arts.object_key = candidate.object_key
         )
         """
     )
     connection.execute(
         """
-        INSERT INTO art_source_refs (art_id, position, source_art_id)
-        SELECT reference.art_id, reference.position, reference.source_art_id
+        INSERT INTO art_source_refs (category, art_id, position, source_art_id)
+        SELECT reference.category, reference.art_id,
+               reference.position, reference.source_art_id
         FROM candidate_art_source_refs AS reference
-        JOIN candidate_arts AS candidate USING (art_id)
-        JOIN arts USING (art_id)
+        JOIN candidate_arts AS candidate USING (category, art_id)
+        JOIN arts USING (category, art_id)
         WHERE arts.object_key = candidate.object_key
         """
     )
@@ -349,8 +340,8 @@ def _replace_locale(connection: sqlite3.Connection, manifest: LocaleManifest) ->
     connection.executemany(
         """
         INSERT INTO gallery_entries
-            (locale, gallery_id, position, entry_id, name, description, art_id)
-        VALUES (?, ?, ?, ?, ?, ?, ?)
+            (locale, gallery_id, position, entry_id, name, description, art_id, category)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             (
@@ -361,6 +352,7 @@ def _replace_locale(connection: sqlite3.Connection, manifest: LocaleManifest) ->
                 entry.name,
                 entry.description,
                 entry.art_id,
+                entry.category,
             )
             for gallery in manifest.galleries
             for entry in gallery.entries
@@ -378,13 +370,13 @@ def find_missing_art_references(path: Path) -> tuple[str, ...]:
             for row in connection.execute(
                 """
             WITH referenced AS (
-                SELECT art_id FROM story_art_references
+                SELECT category, art_id FROM story_art_references
                 UNION
-                SELECT art_id FROM gallery_entries
+                SELECT category, art_id FROM gallery_entries
             )
-            SELECT referenced.art_id
+            SELECT referenced.category || '/' || referenced.art_id
             FROM referenced
-            LEFT JOIN arts USING (art_id)
+            LEFT JOIN arts USING (category, art_id)
             WHERE arts.art_id IS NULL
             ORDER BY referenced.art_id
             """

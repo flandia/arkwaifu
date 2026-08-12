@@ -1,6 +1,6 @@
 -- Current reader schema for the one arkwaifu.sqlite3 object.
--- The updater creates new databases from this file; it does not migrate a
--- published database in place.
+-- The updater creates new databases from this file and requires existing
+-- databases to declare the same schema version.
 PRAGMA foreign_keys = ON;
 
 BEGIN;
@@ -12,17 +12,16 @@ CREATE TABLE unit_versions (
 ) STRICT;
 
 CREATE TABLE arts (
-    art_id TEXT PRIMARY KEY
+    art_id TEXT NOT NULL
         CHECK (length(art_id) > 0 AND art_id = lower(art_id)),
     category TEXT NOT NULL
         CHECK (category IN ('image', 'background', 'item', 'character')),
     object_key TEXT NOT NULL UNIQUE CHECK (length(object_key) > 0),
     byte_size INTEGER NOT NULL CHECK (byte_size > 0),
     width INTEGER NOT NULL CHECK (width > 0),
-    height INTEGER NOT NULL CHECK (height > 0)
+    height INTEGER NOT NULL CHECK (height > 0),
+    PRIMARY KEY (category, art_id)
 ) STRICT;
-
-CREATE INDEX arts_by_category ON arts (category, art_id);
 
 CREATE TABLE source_arts (
     source_art_id TEXT PRIMARY KEY
@@ -41,12 +40,14 @@ CREATE INDEX source_arts_by_character
     ON source_arts (character_id, role, variant, source_art_id);
 
 CREATE TABLE art_source_refs (
+    category TEXT NOT NULL CHECK (category = 'character'),
     art_id TEXT NOT NULL,
     position INTEGER NOT NULL CHECK (position >= 0),
     source_art_id TEXT NOT NULL,
-    PRIMARY KEY (art_id, position),
-    UNIQUE (art_id, source_art_id),
-    FOREIGN KEY (art_id) REFERENCES arts (art_id) ON DELETE CASCADE,
+    PRIMARY KEY (category, art_id, position),
+    UNIQUE (category, art_id, source_art_id),
+    FOREIGN KEY (category, art_id)
+        REFERENCES arts (category, art_id) ON DELETE CASCADE,
     FOREIGN KEY (source_art_id) REFERENCES source_arts (source_art_id)
 ) STRICT;
 
@@ -144,12 +145,14 @@ CREATE TABLE gallery_entries (
     description TEXT NOT NULL,
     art_id TEXT NOT NULL
         CHECK (length(art_id) > 0 AND art_id = lower(art_id)),
+    category TEXT NOT NULL
+        CHECK (category IN ('image', 'background', 'item', 'character')),
     PRIMARY KEY (locale, gallery_id, entry_id),
     UNIQUE (locale, gallery_id, position),
     FOREIGN KEY (locale, gallery_id)
         REFERENCES galleries (locale, gallery_id) ON DELETE CASCADE
 ) STRICT;
 
-PRAGMA user_version = 1;
+PRAGMA user_version = 2;
 
 COMMIT;

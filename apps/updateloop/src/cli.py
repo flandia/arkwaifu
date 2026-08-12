@@ -18,8 +18,18 @@ from .domain import ArtManifest, LocaleManifest, LocaleUnit
 from .object_store import S3ObjectStore
 from .updater import Update, Updateloop, UpdateUnit
 from .upstream import LiveArtBuilder, LiveLocaleBuilder, UpstreamCache
+from .upstream.art_history import LiveWindowsVersionHistory
 
 _ALL_UNITS: tuple[UpdateUnit, ...] = ("art", "CN", "EN", "JP", "KR", "TW")
+_STRUCTURED_LOG_FIELDS = (
+    "action",
+    "status",
+    "res_version",
+    "resource",
+    "current",
+    "total",
+    "elapsed_ms",
+)
 _LOGGER = logging.getLogger(__name__)
 
 
@@ -30,6 +40,11 @@ class _JsonFormatter(logging.Formatter):
             "level": record.levelname.lower(),
             "message": record.getMessage(),
         }
+        payload.update(
+            (field, getattr(record, field))
+            for field in _STRUCTURED_LOG_FIELDS
+            if hasattr(record, field)
+        )
         if record.exc_info:
             payload["exception"] = self.formatException(record.exc_info)
         return json.dumps(
@@ -65,6 +80,11 @@ def _parser() -> argparse.ArgumentParser:
     run.add_argument("units", nargs="*", type=_unit)
     run.add_argument("--force", action="store_true")
     run.add_argument(
+        "--complete",
+        action="store_true",
+        help="rebuild art additively across every recorded Windows resVersion",
+    )
+    run.add_argument(
         "--no-cache",
         action="store_true",
         help="use temporary storage without reading or writing ./.cache",
@@ -75,6 +95,18 @@ def _parser() -> argparse.ArgumentParser:
         help="do not warn about expected incomplete upstream data",
     )
     return parser
+
+
+def _validate_arguments(parser: argparse.ArgumentParser, args: argparse.Namespace) -> None:
+    """Enforce run-mode combinations which argparse cannot express declaratively."""
+
+    if args.command == "run" and args.complete:
+        if args.force:
+            parser.error("--complete cannot be combined with --force")
+        if args.units != ["art"]:
+            parser.error("--complete requires exactly one update unit: art")
+    if args.command == "run" and args.force and (not args.units or "art" in args.units):
+        parser.error("--force is available only for locale-only updates")
 
 
 def _updateloop(settings: Settings) -> Updateloop:
@@ -93,6 +125,8 @@ def _updateloop(settings: Settings) -> Updateloop:
 async def _prepare_art(
     settings: Settings,
     cache: UpstreamCache,
+    *,
+    complete: bool = False,
 ) -> Update:
     builder = LiveArtBuilder(
         version_url=settings.art_version_url,
@@ -102,6 +136,20 @@ async def _prepare_art(
         cache=cache,
     )
     res_version = await builder.detect_version()
+
+    if complete:
+        history = LiveWindowsVersionHistory(
+            github_api_url=settings.github_api_url,
+            github_raw_url="https://raw.githubusercontent.com",
+            github_token=settings.github_token,
+            cache=cache,
+        )
+        versions = await history.versions(res_version)
+
+        async def build_complete(_active: str | None, _force: bool) -> ArtManifest:
+            return await builder.build_history(versions)
+
+        return Update("art", res_version, build_complete, complete=True)
 
     async def build(active: str | None, force: bool) -> ArtManifest:
         return await builder.build(res_version, active, force)
@@ -136,17 +184,30 @@ async def _run(
     units: list[UpdateUnit],
     *,
     force: bool,
+    complete: bool = False,
     use_cache: bool = True,
 ) -> int:
     settings = Settings.from_environment()
     if use_cache:
         cache = UpstreamCache(Path.cwd() / ".cache")
         _LOGGER.info("cache=enabled path=%s", cache.root)
-        return await _run_with_cache(settings, units, force=force, cache=cache)
+        return await _run_with_cache(
+            settings,
+            units,
+            force=force,
+            complete=complete,
+            cache=cache,
+        )
     with tempfile.TemporaryDirectory(prefix="arkwaifu-run-") as temporary:
         cache = UpstreamCache(Path(temporary) / "upstream")
         _LOGGER.info("cache=ephemeral path=%s", cache.root)
-        return await _run_with_cache(settings, units, force=force, cache=cache)
+        return await _run_with_cache(
+            settings,
+            units,
+            force=force,
+            complete=complete,
+            cache=cache,
+        )
 
 
 async def _run_with_cache(
@@ -154,6 +215,7 @@ async def _run_with_cache(
     units: list[UpdateUnit],
     *,
     force: bool,
+    complete: bool,
     cache: UpstreamCache,
 ) -> int:
     """Prepare requested datasets concurrently and publish them as one database."""
@@ -167,7 +229,11 @@ async def _run_with_cache(
     try:
         for unit in requested_units:
             if unit == "art":
-                preparation = _prepare_art(settings, cache)
+                preparation = (
+                    _prepare_art(settings, cache, complete=True)
+                    if complete
+                    else _prepare_art(settings, cache)
+                )
             else:
                 if locale_builder is None:
                     raise AssertionError("locale builder was not created")
@@ -215,7 +281,9 @@ async def _run_with_cache(
 def main(argv: list[str] | None = None) -> None:
     """Run the command-line interface and exit with the update result."""
 
-    args = _parser().parse_args(argv)
+    parser = _parser()
+    args = parser.parse_args(argv)
+    _validate_arguments(parser, args)
     _configure_logging(
         suppress_incomplete_upstream_warnings=args.suppress_incomplete_upstream_warnings
     )
@@ -224,9 +292,21 @@ def main(argv: list[str] | None = None) -> None:
             loop_factory = lambda: asyncio.SelectorEventLoop(selectors.SelectSelector())
             with asyncio.Runner(loop_factory=loop_factory) as runner:
                 exit_code = runner.run(
-                    _run(args.units, force=args.force, use_cache=not args.no_cache)
+                    _run(
+                        args.units,
+                        force=args.force,
+                        complete=args.complete,
+                        use_cache=not args.no_cache,
+                    )
                 )
         else:
-            exit_code = asyncio.run(_run(args.units, force=args.force, use_cache=not args.no_cache))
+            exit_code = asyncio.run(
+                _run(
+                    args.units,
+                    force=args.force,
+                    complete=args.complete,
+                    use_cache=not args.no_cache,
+                )
+            )
         raise SystemExit(exit_code)
     raise AssertionError(f"unhandled command: {args.command}")

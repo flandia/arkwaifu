@@ -3,14 +3,31 @@ open Arkwaifu_service
 let image =
   Model.
     {
-      object_key = "ART/version/composition/image/event.png";
+      object_key =
+        "ART/26-08-07-10-51-39_26e0fc/composition/character/event.png";
       byte_size = 42L;
       width = 10;
       height = 20;
     }
 
 let art =
-  Model.{ id = "event"; category = "image"; image; source_art_ids = [ "source" ] }
+  Model.
+    {
+      id = "event";
+      category = "character";
+      image;
+      source_art_ids = [ "source" ];
+    }
+
+let source_image =
+  Model.
+    {
+      object_key =
+        "ART/26-08-07-10-51-39_26e0fc/source/character/source.png";
+      byte_size = 43L;
+      width = 11;
+      height = 21;
+    }
 
 let source_art =
   Model.
@@ -19,7 +36,7 @@ let source_art =
       character_id = "character";
       role = "body";
       variant = "1";
-      image;
+      image = source_image;
     }
 
 let test_art_json () =
@@ -28,12 +45,22 @@ let test_art_json () =
   Alcotest.(check string) "id" "event" (json |> member "id" |> to_string);
   Alcotest.(check string)
     "content URL"
-    "https://objects.example/bucket/ART/version/composition/image/event.png"
+    "https://objects.example/bucket/ART/26-08-07-10-51-39_26e0fc/composition/character/event.png"
     (json |> member "image" |> member "contentUrl" |> to_string);
   Alcotest.(check bool)
     "SHA-256 absent"
     true
     (json |> member "image" |> member "sha256" = `Null)
+
+let test_source_art_json () =
+  let json =
+    Model.source_art_json ~object_base_url:"https://objects.example/bucket/" source_art
+  in
+  let open Yojson.Safe.Util in
+  Alcotest.(check string)
+    "content URL"
+    "https://objects.example/bucket/ART/26-08-07-10-51-39_26e0fc/source/character/source.png"
+    (json |> member "image" |> member "contentUrl" |> to_string)
 
 let test_content_url_escapes_encoded_key () =
   Alcotest.(check string)
@@ -51,6 +78,7 @@ let test_memory_database () =
         name = "Entry";
         description = "Description";
         art_id = "event";
+        category = "image";
       }
   in
   let gallery =
@@ -70,15 +98,15 @@ let test_memory_database () =
     }
   in
   let database = Database.memory snapshot in
-  let found = Lwt_main.run (Database.art database "event") in
-  let missing = Lwt_main.run (Database.art database "missing") in
+  let found = Lwt_main.run (Database.art database "character" "event") in
+  let wrong_category = Lwt_main.run (Database.art database "image" "event") in
   let summaries = Lwt_main.run (Database.galleries database "CN") in
   let detailed = Lwt_main.run (Database.gallery database "CN" "gallery") in
   Alcotest.(check bool) "found" true (Result.is_ok found);
   Alcotest.(check bool)
     "missing"
     true
-    (match missing with Error `Not_found -> true | _ -> false);
+    (match wrong_category with Error `Not_found -> true | _ -> false);
   Alcotest.(check bool)
     "summary entries are empty"
     true
@@ -99,12 +127,13 @@ let reader_fixture_schema =
     );
 
     CREATE TABLE arts (
-      art_id TEXT PRIMARY KEY,
+      art_id TEXT NOT NULL,
       category TEXT NOT NULL,
       object_key TEXT NOT NULL,
       byte_size INTEGER NOT NULL,
       width INTEGER NOT NULL,
-      height INTEGER NOT NULL
+      height INTEGER NOT NULL,
+      PRIMARY KEY (category, art_id)
     );
 
     CREATE TABLE source_arts (
@@ -119,10 +148,12 @@ let reader_fixture_schema =
     );
 
     CREATE TABLE art_source_refs (
-      art_id TEXT NOT NULL REFERENCES arts (art_id),
+      category TEXT NOT NULL,
+      art_id TEXT NOT NULL,
       position INTEGER NOT NULL,
       source_art_id TEXT NOT NULL REFERENCES source_arts (source_art_id),
-      PRIMARY KEY (art_id, position)
+      PRIMARY KEY (category, art_id, position),
+      FOREIGN KEY (category, art_id) REFERENCES arts (category, art_id)
     );
 
     CREATE TABLE story_groups (
@@ -178,11 +209,12 @@ let reader_fixture_schema =
       name TEXT NOT NULL,
       description TEXT NOT NULL,
       art_id TEXT NOT NULL,
+      category TEXT NOT NULL,
       PRIMARY KEY (locale, gallery_id, entry_id),
       FOREIGN KEY (locale, gallery_id) REFERENCES galleries (locale, gallery_id)
     );
 
-    PRAGMA user_version = 1;
+    PRAGMA user_version = 2;
   |}
 
 let read_file path =
@@ -199,10 +231,13 @@ let sqlite_schema () =
 let sqlite_rows =
   {|
     INSERT INTO unit_versions VALUES ('art', 'art-v1'), ('CN', 'cn-v1');
-    INSERT INTO arts VALUES ('event', 'image', 'art/event.png', 42, 10, 20);
+    INSERT INTO arts
+      VALUES ('event', 'character',
+              'ART/art-v1/composition/character/event.png', 42, 10, 20);
     INSERT INTO source_arts
-      VALUES ('source', 'character', 'body', '1', 'art/source.png', 43, 11, 21);
-    INSERT INTO art_source_refs VALUES ('event', 0, 'source');
+      VALUES ('source', 'character', 'body', '1',
+              'ART/art-v1/source/character/source.png', 43, 11, 21);
+    INSERT INTO art_source_refs VALUES ('character', 'event', 0, 'source');
     INSERT INTO story_groups VALUES ('CN', 'group', 'Group', 'main_story', 0);
     INSERT INTO stories
       VALUES ('CN', 'story', 'group', 'before', 'Before', 'S1', 'Story', 'Info', 0);
@@ -211,7 +246,8 @@ let sqlite_rows =
               '["Alias"]');
     INSERT INTO galleries VALUES ('CN', 'gallery', 'Gallery', 'Description');
     INSERT INTO gallery_entries
-      VALUES ('CN', 'gallery', 0, 'entry', 'Entry', 'Entry description', 'event');
+      VALUES ('CN', 'gallery', 0, 'entry', 'Entry', 'Entry description',
+              'event', 'image');
   |}
 
 let with_sqlite_database callback =
@@ -240,8 +276,10 @@ let require_ok label = function
 let test_sqlite_database () =
   with_sqlite_database (fun database ->
       Lwt_main.run (Database.health database) |> require_ok "health";
-      let art = Lwt_main.run (Database.art database "event") |> require_ok "art" in
-      Alcotest.(check string) "art category" "image" art.category;
+      let art =
+        Lwt_main.run (Database.art database "character" "event") |> require_ok "art"
+      in
+      Alcotest.(check string) "art category" "character" art.category;
       Alcotest.(check (list string)) "source IDs" [ "source" ] art.source_art_ids;
       Alcotest.(check int64) "art bytes" 42L art.image.byte_size;
 
@@ -287,6 +325,7 @@ let () =
       ( "model",
         [
           Alcotest.test_case "art JSON" `Quick test_art_json;
+          Alcotest.test_case "source-art JSON" `Quick test_source_art_json;
           Alcotest.test_case "object-key escaping" `Quick
             test_content_url_escapes_encoded_key;
         ] );

@@ -37,3 +37,4 @@ async def test_real_bundle_extracts_processes_and_publishes(tmp_path: Path):
     assert result[0].status == "updated"
     assert remote.database is not None
     assert len(remote.objects) == len(manifest.arts) + len(manifest.source_arts)
+    assert all(key.startswith(f"ART/{version}/") for key in remote.objects)

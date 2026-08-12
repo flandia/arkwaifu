@@ -8,7 +8,7 @@ type t = {
   close : unit -> unit Lwt.t;
   check : unit -> (unit, error) result Lwt.t;
   health : unit -> (unit, error) result Lwt.t;
-  art : string -> (Model.art, error) result Lwt.t;
+  art : string -> string -> (Model.art, error) result Lwt.t;
   source_art : string -> (Model.source_art, error) result Lwt.t;
   story_groups : string -> (Model.story_group list, error) result Lwt.t;
   story : string -> string -> (Model.story, error) result Lwt.t;
@@ -41,8 +41,12 @@ let memory snapshot =
     check = (fun () -> Lwt.return (Ok ()));
     health = (fun () -> Lwt.return (Ok ()));
     art =
-      (fun id ->
-        Lwt.return (find_by_id id (fun (value : Model.art) -> value.id) snapshot.arts));
+      (fun category id ->
+        snapshot.arts
+        |> List.find_opt (fun (value : Model.art) ->
+               String.equal category value.category && String.equal id value.id)
+        |> (function Some value -> Ok value | None -> Error `Not_found)
+        |> Lwt.return);
     source_art =
       (fun id ->
         Lwt.return
@@ -85,13 +89,15 @@ module Query = struct
       t2 string
         (t2 string (t2 int64 (t2 int (t2 int (option string)))))
     in
-    (string ->* row)
+    (t2 string string ->* row)
       {|
-        SELECT art.category, art.object_key, art.byte_size,
-               art.width, art.height, reference.source_art_id
+        SELECT art.category, art.object_key, art.byte_size, art.width,
+               art.height, reference.source_art_id
         FROM arts AS art
-        LEFT JOIN art_source_refs AS reference ON reference.art_id = art.art_id
-        WHERE art.art_id = ?
+        LEFT JOIN art_source_refs AS reference
+          ON reference.category = art.category
+         AND reference.art_id = art.art_id
+        WHERE art.category = ? AND art.art_id = ?
         ORDER BY reference.position
       |}
 
@@ -163,14 +169,15 @@ module Query = struct
            (t2 string
               (t2 (option string)
                  (t2 (option int)
-                    (t2 (option string)
-                       (t2 (option string) (option string)))))))
+                       (t2 (option string)
+                          (t2 (option string)
+                             (t2 (option string) (option string))))))))
     in
     (t2 string string ->* row)
       {|
         SELECT gallery.gallery_id, gallery.name, gallery.description,
                entry.entry_id, entry.position, entry.name,
-               entry.description, entry.art_id
+               entry.description, entry.art_id, entry.category
         FROM galleries AS gallery
         LEFT JOIN gallery_entries AS entry
           ON entry.locale = gallery.locale
@@ -209,7 +216,7 @@ let sqlite path =
       let check () =
         use (fun (module Db) -> Db.find Query.schema_version ()) >|= function
         | Error error -> Error error
-        | Ok version when version <> 1 ->
+        | Ok version when version <> 2 ->
             Error
               (`Unavailable
                 (Printf.sprintf "unsupported SQLite schema version %d" version))
@@ -221,8 +228,8 @@ let sqlite path =
         | Ok _ -> Error (`Unavailable "unexpected SQLite health-check result")
         | Error error -> Error error
       in
-      let art id =
-        use (fun (module Db) -> Db.collect_list Query.art id) >|= function
+      let art category id =
+        use (fun (module Db) -> Db.collect_list Query.art (category, id)) >|= function
         | Error error -> Error error
         | Ok [] -> Error `Not_found
         | Ok
@@ -327,13 +334,24 @@ let sqlite path =
         >|= function
         | Error error -> Error error
         | Ok [] -> Error `Not_found
-        | Ok ((id, (name, (description, (_, (_, (_, (_, _))))))) :: _ as rows) ->
+        | Ok ((id, (name, (description, (_, (_, (_, (_, (_, _)))))))) :: _ as rows) ->
             let entries =
               List.filter_map
-                (fun (_, (_, (_, (entry_id, (position, (name, (description, art_id))))))) ->
-                  match (entry_id, position, name, description, art_id) with
-                  | Some id, Some position, Some name, Some description, Some art_id ->
-                      Some Model.{ id; position; name; description; art_id }
+                (fun
+                  ( _,
+                    ( _,
+                      ( _,
+                        ( entry_id,
+                          ( position,
+                            (name, (description, (art_id, category))) ) ) ) ) ) ->
+                  match (entry_id, position, name, description, art_id, category) with
+                  | ( Some id,
+                      Some position,
+                      Some name,
+                      Some description,
+                      Some art_id,
+                      Some category ) ->
+                      Some Model.{ id; position; name; description; art_id; category }
                   | _ -> None)
                 rows
             in
@@ -513,7 +531,7 @@ let live ~url ~cache_dir ~poll_seconds ~download_timeout_seconds =
             close;
             check = (fun () -> with_current (fun value -> value.check ()));
             health = (fun () -> with_current (fun value -> value.health ()));
-            art = (fun id -> with_current (fun value -> value.art id));
+            art = (fun category id -> with_current (fun value -> value.art category id));
             source_art =
               (fun id -> with_current (fun value -> value.source_art id));
             story_groups =
@@ -531,7 +549,7 @@ let live ~url ~cache_dir ~poll_seconds ~download_timeout_seconds =
 
 let close (database : t) = database.close ()
 let health (database : t) = database.health ()
-let art (database : t) id = database.art id
+let art (database : t) category id = database.art category id
 let source_art (database : t) id = database.source_art id
 let story_groups (database : t) locale = database.story_groups locale
 let story (database : t) locale id = database.story locale id

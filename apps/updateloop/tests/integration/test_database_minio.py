@@ -146,9 +146,9 @@ async def test_monolithic_database_and_pngs_publish_to_minio(isolated_bucket, tm
         ).fetchone()[0]
     head = client.head_object(Bucket=bucket, Key=object_key)
     assert head["ContentType"] == "image/png"
-    assert head["CacheControl"] == "public, max-age=300"
+    assert head["CacheControl"] == "public, max-age=31536000, immutable"
     assert head["Metadata"] == {}
-    assert "/composition/image/fixture.png" in object_key
+    assert object_key == (f"ART/{art.upstream_version}/composition/image/fixture.png")
     database_head = client.head_object(Bucket=bucket, Key=DATABASE_OBJECT_KEY)
     assert database_head["ContentType"] == "application/vnd.sqlite3"
     assert database_head["CacheControl"] == "no-cache"

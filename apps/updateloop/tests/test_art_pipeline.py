@@ -44,25 +44,26 @@ def test_picture_png_bytes_are_preserved(tmp_path: Path):
     assert manifest.arts[0].image.content == expected
 
 
-def test_picture_identifier_collision_keeps_later_legacy_category(tmp_path: Path):
+def test_picture_identity_includes_category(tmp_path: Path):
     write_png(
         tmp_path / "assets/torappu/dynamicassets/avg/images/shared.png",
         (1, 2, 3, 255),
     )
-    expected = write_png(
+    background = write_png(
         tmp_path / "assets/torappu/dynamicassets/avg/backgrounds/shared.png",
         (4, 5, 6, 255),
     )
 
     manifest = build_art_manifest(tmp_path, "v1")
 
-    assert len(manifest.arts) == 1
-    assert manifest.arts[0].id == "shared"
-    assert manifest.arts[0].category == "background"
-    assert manifest.arts[0].image.content == expected
+    assert [(art.category, art.id) for art in manifest.arts] == [
+        ("background", "shared"),
+        ("image", "shared"),
+    ]
+    assert manifest.arts[0].image.content == background
 
 
-def test_independent_bundle_manifests_merge_with_category_precedence():
+def test_independent_bundle_manifests_keep_same_id_in_distinct_categories():
     image = PngArtifact.from_image(Image.new("RGBA", (1, 1), (1, 2, 3, 255)))
     background = PngArtifact.from_image(Image.new("RGBA", (1, 1), (4, 5, 6, 255)))
 
@@ -74,9 +75,11 @@ def test_independent_bundle_manifests_merge_with_category_precedence():
         "v1",
     )
 
-    assert len(merged.arts) == 1
-    assert merged.arts[0].category == "background"
-    assert merged.arts[0].image == background
+    assert [(art.category, art.id) for art in merged.arts] == [
+        ("background", "shared"),
+        ("image", "shared"),
+    ]
+    assert [art.image for art in merged.arts] == [background, image]
 
 
 def test_cached_art_manifest_round_trips_without_pickle(tmp_path: Path):
@@ -104,6 +107,7 @@ def test_cached_art_manifest_round_trips_without_pickle(tmp_path: Path):
     assert cached.arts[0].image.path == (tmp_path / "processed/00000000.png").resolve()
     assert cached.arts[0].image.byte_size == len(value.arts[0].image.content)
     assert cached.arts[0].image.content == value.arts[0].image.content
+    assert cached.arts[0].res_version is None
     assert cached_payload(tmp_path)["arts"][0]["image_path"] == "processed/00000000.png"
 
 
@@ -269,7 +273,15 @@ def test_cached_manifest_rejects_missing_source_reference(tmp_path: Path):
         read_art_manifest(tmp_path)
 
 
-def test_character_sources_precede_resize_and_composition(tmp_path: Path):
+@pytest.mark.parametrize(
+    ("face_position_key", "face_size_key"),
+    [("FacePos", "FaceSize"), ("facePos", "faceSize")],
+)
+def test_character_sources_precede_resize_and_composition(
+    tmp_path: Path,
+    face_position_key: str,
+    face_size_key: str,
+):
     character_root = tmp_path / "assets/torappu/dynamicassets/avg/characters"
     directory = character_root / "char_test"
     write_png(directory / "face.png", (0, 0, 255, 255), size=(2, 2))
@@ -281,8 +293,8 @@ def test_character_sources_precede_resize_and_composition(tmp_path: Path):
         {
             "spriteGroups": [
                 {
-                    "FacePos": {"x": 1, "y": 1},
-                    "FaceSize": {"x": 2, "y": 2},
+                    face_position_key: {"x": 1, "y": 1},
+                    face_size_key: {"x": 2, "y": 2},
                     "sprites": [
                         {"sprite": {"m_PathID": 1}, "alphaTex": {"m_PathID": 2}},
                         {"sprite": {"m_PathID": 3}, "alphaTex": {"m_PathID": 4}},

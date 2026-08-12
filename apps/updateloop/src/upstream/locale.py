@@ -11,9 +11,11 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import tempfile
 import zipfile
 from pathlib import Path, PurePosixPath
+from urllib.parse import quote
 
 import httpx
 
@@ -36,8 +38,15 @@ _SELECTED_PATHS = {
 }
 # Bump this when the selected inputs or extracted directory layout changes;
 # resVersion identifies upstream content, not the local extraction recipe.
-_LOCALE_EXTRACTION_CACHE_FORMAT = "2"
+_LOCALE_EXTRACTION_CACHE_FORMAT = "3"
 _RAW_CONTENT_ACCEPT = "application/vnd.github.raw+json"
+_HISTORY_PAGE_SIZE = 100
+_HISTORY_API_REQUEST_LIMIT = 48
+_HISTORY_DOWNLOAD_CONCURRENCY = 8
+
+_ASSET_PREFIX = Path("assets/torappu/dynamicassets")
+_DATA_ROOT = _ASSET_PREFIX / "gamedata"
+_INCOMPLETE_UPSTREAM_LOGGER = logging.getLogger("arkwaifu_updateloop.incomplete_upstream")
 
 _ARCHIVE_CACHE_NAMESPACE = "game-data"
 _ARCHIVE_CACHE_PATH = PurePosixPath("archive.zip")
@@ -53,6 +62,10 @@ class _SnapshotVersionMismatch(RuntimeError):
         )
 
 
+class _HistoryRequestBudgetExhausted(RuntimeError):
+    """Stop optional history recovery before exhausting GitHub's API quota."""
+
+
 def _parse_manifest(
     unit: LocaleUnit,
     upstream_version: str,
@@ -66,6 +79,48 @@ def _parse_manifest(
         story_groups=parse_story_groups(data_root),
         galleries=parse_galleries(data_root),
     )
+
+
+def _missing_story_paths(data_root: Path) -> tuple[PurePosixPath, ...]:
+    """Return referenced story text paths absent from the current snapshot."""
+
+    with (data_root / _DATA_ROOT / "excel/story_review_table.json").open(
+        encoding="utf-8"
+    ) as handle:
+        table = json.load(handle)
+    missing: dict[PurePosixPath, None] = {}
+    for group in _json_values(table):
+        if not isinstance(group, dict):
+            continue
+        for story in _json_values(group.get("infoUnlockDatas")):
+            story_name = story.get("storyTxt") if isinstance(story, dict) else None
+            if not isinstance(story_name, str) or not story_name:
+                continue
+            path = PurePosixPath(f"gamedata/story/{story_name}.txt")
+            if path.is_absolute() or ".." in path.parts:
+                raise ValueError(f"unsafe historical story path: {path}")
+            local_path = data_root / _ASSET_PREFIX.joinpath(*path.parts)
+            if not local_path.is_file():
+                missing[path] = None
+    return tuple(missing)
+
+
+def _json_values(value: object) -> tuple[object, ...]:
+    if isinstance(value, dict):
+        return tuple(value.values())
+    if isinstance(value, list):
+        return tuple(value)
+    return ()
+
+
+def _write_story_text(data_root: Path, path: PurePosixPath, content: bytes) -> None:
+    output = data_root / _ASSET_PREFIX.joinpath(*path.parts)
+    output.parent.mkdir(parents=True, exist_ok=True)
+    output.write_bytes(content)
+
+
+def _quoted_path(path: PurePosixPath) -> str:
+    return "/".join(quote(part, safe="") for part in path.parts)
 
 
 def _version_id(payload: object, context: str) -> str:
@@ -90,17 +145,24 @@ class LiveLocaleBuilder:
         self,
         *,
         github_api_url: str = "https://api.github.com",
+        github_raw_url: str = "https://raw.githubusercontent.com",
         github_token: str | None = None,
         transport: httpx.AsyncBaseTransport | None = None,
         cache: UpstreamCache | None = None,
     ) -> None:
         self._api_url = github_api_url.rstrip("/")
+        self._raw_url = github_raw_url.rstrip("/")
         self._token = github_token
         self._transport = transport
         self._cache = cache
         self._detected_versions: dict[LocaleUnit, str] = {}
         self._archive_task: asyncio.Task[Path] | None = None
         self._archive_directory: tempfile.TemporaryDirectory[str] | None = None
+        self._history_api_requests = 0
+        self._history_api_lock = asyncio.Lock()
+        self._history_downloads = asyncio.Semaphore(_HISTORY_DOWNLOAD_CONCURRENCY)
+        self._history_directory_locks: dict[tuple[str, PurePosixPath], asyncio.Lock] = {}
+        self._historical_story_text: dict[tuple[str, PurePosixPath], bytes | None] = {}
         self._closed = False
 
     async def detect_version(self, unit: LocaleUnit) -> str:
@@ -153,6 +215,7 @@ class LiveLocaleBuilder:
                         _SERVER_DIRECTORIES[unit],
                     )
                 )
+                await self._recover_missing_story_texts(unit, data_root)
             else:
                 fingerprint = f"{_LOCALE_EXTRACTION_CACHE_FORMAT}:{unit}:{upstream_version}"
 
@@ -165,6 +228,7 @@ class LiveLocaleBuilder:
                             _SERVER_DIRECTORIES[unit],
                         )
                     )
+                    await self._recover_missing_story_texts(unit, destination)
 
                 cached_data = await self._cache.directory(
                     upstream_version,
@@ -181,6 +245,218 @@ class LiveLocaleBuilder:
                     data_root,
                 )
             )
+
+    async def _recover_missing_story_texts(
+        self,
+        unit: LocaleUnit,
+        data_root: Path,
+    ) -> None:
+        """Fill story paths removed from ``master`` with their latest history copy.
+
+        Lookups are grouped by repository directory. One commits request finds
+        every historical state of that directory, and one contents request
+        identifies all requested files present in a state. The recovered text
+        becomes part of the extracted cache entry; commit identifiers remain
+        transient implementation details and are never published or persisted.
+        """
+
+        missing = await await_owned(asyncio.to_thread(_missing_story_paths, data_root))
+        if not missing:
+            return
+        grouped: dict[PurePosixPath, set[str]] = {}
+        for path in missing:
+            grouped.setdefault(path.parent, set()).add(path.name)
+
+        async with self._client() as client, self._raw_client() as raw_client:
+            for directory, names in grouped.items():
+                try:
+                    await self._recover_story_directory(
+                        client,
+                        raw_client,
+                        _SERVER_DIRECTORIES[unit],
+                        data_root,
+                        directory,
+                        names,
+                    )
+                except (
+                    _HistoryRequestBudgetExhausted,
+                    httpx.HTTPError,
+                    OSError,
+                    TypeError,
+                    ValueError,
+                ) as error:
+                    _INCOMPLETE_UPSTREAM_LOGGER.warning(
+                        "historical story lookup failed; continuing with current snapshot "
+                        "unit=%s directory=%s error=%s",
+                        unit,
+                        directory,
+                        error,
+                    )
+
+    async def _recover_story_directory(
+        self,
+        client: httpx.AsyncClient,
+        raw_client: httpx.AsyncClient,
+        server: str,
+        data_root: Path,
+        directory: PurePosixPath,
+        names: set[str],
+    ) -> None:
+        key = (server, directory)
+        lock = self._history_directory_locks.setdefault(key, asyncio.Lock())
+        async with lock:
+            unresolved = set(names)
+            for name in tuple(unresolved):
+                path = directory / name
+                cached = self._historical_story_text.get((server, path), ...)
+                if cached is ...:
+                    continue
+                unresolved.remove(name)
+                if cached is not None:
+                    await await_owned(asyncio.to_thread(_write_story_text, data_root, path, cached))
+            if not unresolved:
+                return
+
+            repository_directory = PurePosixPath(server) / directory
+            seen_refs: set[str] = set()
+            page = 1
+            while unresolved:
+                response = await self._history_api_get(
+                    client,
+                    f"{self._api_url}/repos/{_REPOSITORY}/commits",
+                    params={
+                        "sha": _BRANCH,
+                        "path": repository_directory.as_posix(),
+                        "per_page": _HISTORY_PAGE_SIZE,
+                        "page": page,
+                    },
+                )
+                response.raise_for_status()
+                commits = response.json()
+                if not isinstance(commits, list):
+                    raise TypeError("GitHub commits response is not a list")
+
+                for commit in commits:
+                    if not isinstance(commit, dict):
+                        raise TypeError("GitHub commit entry is not an object")
+                    parents = commit.get("parents")
+                    if not isinstance(parents, list):
+                        raise TypeError("GitHub commit parents are not a list")
+                    refs = [parent.get("sha") for parent in parents[:1] if isinstance(parent, dict)]
+                    if not refs:
+                        refs = [commit.get("sha")]
+                    for ref in refs:
+                        if not isinstance(ref, str) or not ref or ref in seen_refs:
+                            continue
+                        seen_refs.add(ref)
+                        recovered = await self._recover_story_snapshot(
+                            client,
+                            raw_client,
+                            server,
+                            directory,
+                            ref,
+                            unresolved,
+                        )
+                        for name, content in recovered.items():
+                            path = directory / name
+                            self._historical_story_text[(server, path)] = content
+                            await await_owned(
+                                asyncio.to_thread(
+                                    _write_story_text,
+                                    data_root,
+                                    path,
+                                    content,
+                                )
+                            )
+                            unresolved.remove(name)
+                        if not unresolved:
+                            break
+                    if not unresolved:
+                        break
+
+                if len(commits) < _HISTORY_PAGE_SIZE or not commits:
+                    break
+                page += 1
+
+            for name in unresolved:
+                self._historical_story_text[(server, directory / name)] = None
+
+    async def _recover_story_snapshot(
+        self,
+        client: httpx.AsyncClient,
+        raw_client: httpx.AsyncClient,
+        server: str,
+        directory: PurePosixPath,
+        ref: str,
+        unresolved: set[str],
+    ) -> dict[str, bytes]:
+        repository_directory = PurePosixPath(server) / directory
+        response = await self._history_api_get(
+            client,
+            f"{self._api_url}/repos/{_REPOSITORY}/contents/{_quoted_path(repository_directory)}",
+            params={"ref": ref},
+        )
+        if response.status_code == 404:
+            return {}
+        response.raise_for_status()
+        entries = response.json()
+        if not isinstance(entries, list):
+            raise TypeError("GitHub directory contents response is not a list")
+        present = {
+            entry.get("name")
+            for entry in entries
+            if isinstance(entry, dict)
+            and entry.get("type") == "file"
+            and entry.get("name") in unresolved
+        }
+        downloads = await asyncio.gather(
+            *(
+                self._download_historical_story(
+                    raw_client,
+                    ref,
+                    PurePosixPath(server) / directory / name,
+                )
+                for name in sorted(present)
+            )
+        )
+        return {
+            name: content
+            for name, content in zip(sorted(present), downloads, strict=True)
+            if content is not None
+        }
+
+    async def _download_historical_story(
+        self,
+        client: httpx.AsyncClient,
+        ref: str,
+        path: PurePosixPath,
+    ) -> bytes | None:
+        async with self._history_downloads:
+            response = await client.get(
+                f"{self._raw_url}/{_REPOSITORY}/{quote(ref, safe='')}/{_quoted_path(path)}",
+                headers={"Accept": "text/plain"},
+            )
+        if response.status_code == 404:
+            return None
+        response.raise_for_status()
+        content = response.content
+        content.decode("utf-8")
+        return content
+
+    async def _history_api_get(
+        self,
+        client: httpx.AsyncClient,
+        url: str,
+        *,
+        params: dict[str, str | int],
+    ) -> httpx.Response:
+        async with self._history_api_lock:
+            if self._history_api_requests >= _HISTORY_API_REQUEST_LIMIT:
+                raise _HistoryRequestBudgetExhausted(
+                    f"reached the run limit of {_HISTORY_API_REQUEST_LIMIT} GitHub API requests"
+                )
+            self._history_api_requests += 1
+        return await client.get(url, params=params)
 
     async def _archive(self) -> Path:
         """Get the one all-server branch snapshot owned by this builder."""
@@ -287,6 +563,16 @@ class LiveLocaleBuilder:
             headers["Authorization"] = f"Bearer {self._token}"
         return httpx.AsyncClient(
             headers=headers,
+            timeout=httpx.Timeout(120, connect=30),
+            follow_redirects=True,
+            transport=self._transport,
+        )
+
+    def _raw_client(self) -> httpx.AsyncClient:
+        """Create an unauthenticated client for public historical story bytes."""
+
+        return httpx.AsyncClient(
+            headers={"User-Agent": "arkwaifu-updateloop"},
             timeout=httpx.Timeout(120, connect=30),
             follow_redirects=True,
             transport=self._transport,

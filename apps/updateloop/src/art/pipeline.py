@@ -146,8 +146,8 @@ def _scan_character(directory: Path) -> tuple[_Body, ...]:
     result: list[_Body] = []
     for hub in hubs:
         raw_sprites = list(hub.get("sprites", []))
-        face_position = hub.get("FacePos", {})
-        face_size = hub.get("FaceSize", {})
+        face_position = hub.get("FacePos", hub.get("facePos", {}))
+        face_size = hub.get("FaceSize", hub.get("faceSize", {}))
         x = float(face_position.get("x", -1))
         y = float(face_position.get("y", -1))
         width = float(face_size.get("x", 0))
@@ -276,22 +276,21 @@ def _character_records(extracted_root: Path) -> tuple[list[ArtRecord], list[Sour
     return arts, list(sources.values())
 
 
-def _resolve_art_id_collisions(records: tuple[ArtRecord, ...]) -> tuple[ArtRecord, ...]:
-    """Resolve legacy identifier collisions using category processing order."""
+def _deduplicate_arts(records: tuple[ArtRecord, ...]) -> tuple[ArtRecord, ...]:
+    """Keep the final record for each category-qualified art identity."""
 
-    by_id: dict[str, ArtRecord] = {}
+    by_identity: dict[tuple[str, str], ArtRecord] = {}
     for record in records:
-        previous = by_id.get(record.id)
+        identity = (record.category, record.id)
+        previous = by_identity.get(identity)
         if previous is not None:
             _LOGGER.warning(
-                "art identifier collision; keeping later legacy category "
-                "art_id=%s previous_category=%s category=%s",
-                record.id,
-                previous.category,
+                "duplicate art identity; keeping later bundle category=%s art_id=%s",
                 record.category,
+                record.id,
             )
-        by_id[record.id] = record
-    return tuple(by_id.values())
+        by_identity[identity] = record
+    return tuple(by_identity.values())
 
 
 def build_art_manifest(extracted_root: Path, upstream_version: str) -> ArtManifest:
@@ -302,7 +301,8 @@ def build_art_manifest(extracted_root: Path, upstream_version: str) -> ArtManife
         upstream_version=upstream_version,
         arts=tuple(
             sorted(
-                _resolve_art_id_collisions((*pictures, *characters)), key=lambda record: record.id
+                _deduplicate_arts((*pictures, *characters)),
+                key=lambda record: (record.category, record.id),
             )
         ),
         source_arts=tuple(sorted(sources, key=lambda record: record.id)),
@@ -313,12 +313,7 @@ def merge_art_manifests(
     manifests: Sequence[ArtManifest],
     upstream_version: str,
 ) -> ArtManifest:
-    """Merge independently processed bundles using the legacy category precedence.
-
-    Bundle extraction is concurrent, so collisions cannot depend on completion
-    order. Pictures are considered first and character compositions last, as in
-    the previous updater.
-    """
+    """Merge independently processed bundles by category-qualified identity."""
     if not isinstance(upstream_version, str) or not upstream_version:
         raise ValueError("upstream version cannot be empty")
     for manifest in manifests:
@@ -327,18 +322,14 @@ def merge_art_manifests(
         if manifest.upstream_version != upstream_version:
             raise ValueError("cannot merge art manifests from different upstream versions")
 
-    category_order = {"image": 0, "background": 1, "item": 2, "character": 3}
-    arts = sorted(
-        (art for manifest in manifests for art in manifest.arts),
-        key=lambda art: (category_order[art.category], art.id),
-    )
+    arts = tuple(art for manifest in manifests for art in manifest.arts)
     sources: dict[str, SourceArtRecord] = {}
     for manifest in manifests:
         for source in manifest.source_arts:
             sources[source.id] = source
     return ArtManifest(
         upstream_version=upstream_version,
-        arts=tuple(sorted(_resolve_art_id_collisions(tuple(arts)), key=lambda art: art.id)),
+        arts=tuple(sorted(_deduplicate_arts(arts), key=lambda art: (art.category, art.id))),
         source_arts=tuple(sorted(sources.values(), key=lambda source: source.id)),
     )
 
@@ -347,7 +338,9 @@ def write_art_manifest(manifest: ArtManifest, destination: Path) -> None:
     """Persist one cache manifest and its ordinal PNG files.
 
     Ordinal names keep the cache layout independent from upstream identifiers;
-    ``manifest.json`` is the only index and is written after all images.
+    ``manifest.json`` is the only index and is written after all images. A
+    rendered cache entry belongs to exactly one upstream version, so record
+    origins inherit ``upstream_version`` instead of being repeated per record.
     """
     processed = destination / "processed"
     processed.mkdir(parents=True, exist_ok=True)
@@ -500,10 +493,10 @@ def _read_art_manifest(source: Path) -> ArtManifest:
 def _validate_cached_relationships(manifest: ArtManifest) -> None:
     """Check relationships owned by the cache format rather than upstream data."""
 
-    art_ids = [art.id for art in manifest.arts]
+    art_ids = [(art.category, art.id) for art in manifest.arts]
     source_ids = [source.id for source in manifest.source_arts]
     if len(art_ids) != len(set(art_ids)):
-        raise ValueError("cached art identifiers are not unique")
+        raise ValueError("cached art identities are not unique")
     if len(source_ids) != len(set(source_ids)):
         raise ValueError("cached source-art identifiers are not unique")
 

@@ -7,7 +7,6 @@ from pathlib import Path
 from typing import Protocol
 
 import boto3
-from boto3.s3.transfer import TransferConfig
 from botocore.config import Config
 from botocore.exceptions import ClientError
 
@@ -16,9 +15,22 @@ from .domain import PngImage
 
 DATABASE_OBJECT_KEY = "arkwaifu.sqlite3"
 _DATABASE_CONTENT_TYPE = "application/vnd.sqlite3"
-_PNG_CACHE_CONTROL = "public, max-age=300"
+_PNG_CONTENT_TYPE = "image/png"
+_PNG_CACHE_CONTROL = "public, max-age=31536000, immutable"
 _MAX_POOL_CONNECTIONS = 16
-_PNG_TRANSFER_CONFIG = TransferConfig(use_threads=False)
+
+
+def _error_code(error: ClientError) -> str | None:
+    """Read one S3 error code without assuming a particular provider."""
+
+    code = error.response.get("Error", {}).get("Code")
+    return code if isinstance(code, str) else None
+
+
+def _is_missing(error: ClientError) -> bool:
+    """Return whether a provider reported an absent object."""
+
+    return _error_code(error) in {"404", "NoSuchKey", "NotFound"}
 
 
 class ObjectStore(Protocol):
@@ -33,7 +45,7 @@ class ObjectStore(Protocol):
         ...
 
     async def put_png(self, key: str, artifact: PngImage) -> None:
-        """Upload one composition or source PNG under its version-scoped key."""
+        """Create one immutable composition or source PNG object."""
         ...
 
 
@@ -77,8 +89,7 @@ class S3ObjectStore:
         try:
             self._client.download_file(self._bucket, DATABASE_OBJECT_KEY, str(destination))
         except ClientError as error:
-            code = error.response.get("Error", {}).get("Code")
-            if code in {"404", "NoSuchKey", "NotFound"}:
+            if _is_missing(error):
                 destination.unlink(missing_ok=True)
                 return False
             raise
@@ -100,29 +111,52 @@ class S3ObjectStore:
         )
 
     async def put_png(self, key: str, artifact: PngImage) -> None:
-        """Upload one composition or source PNG."""
+        """Create one PNG, accepting an already matching immutable object."""
         await await_owned(asyncio.to_thread(self._put_png, key, artifact))
 
     def _put_png(self, key: str, artifact: PngImage) -> None:
-        extra_args = {
-            "ContentType": "image/png",
+        try:
+            existing = self._client.head_object(Bucket=self._bucket, Key=key)
+        except ClientError as error:
+            if not _is_missing(error):
+                raise
+        else:
+            self._validate_png(key, artifact, existing)
+            return
+
+        request = {
+            "Bucket": self._bucket,
+            "Key": key,
+            "ContentLength": artifact.byte_size,
+            "ContentType": _PNG_CONTENT_TYPE,
             "CacheControl": _PNG_CACHE_CONTROL,
         }
-        if artifact.path is not None:
-            self._client.upload_file(
-                str(artifact.path),
-                self._bucket,
-                key,
-                ExtraArgs=extra_args,
-                Config=_PNG_TRANSFER_CONFIG,
+        if artifact.path is None:
+            self._client.put_object(Body=artifact.content, **request)
+        else:
+            with artifact.path.open("rb") as content:
+                self._client.put_object(Body=content, **request)
+
+    @staticmethod
+    def _validate_png(key: str, artifact: PngImage, metadata: dict[str, object]) -> None:
+        """Require an existing object to match the immutable PNG contract."""
+
+        expected = {
+            "ContentLength": artifact.byte_size,
+            "ContentType": _PNG_CONTENT_TYPE,
+            "CacheControl": _PNG_CACHE_CONTROL,
+        }
+        mismatches = {
+            name: (metadata.get(name), value)
+            for name, value in expected.items()
+            if metadata.get(name) != value
+        }
+        if mismatches:
+            detail = ", ".join(
+                f"{name}={actual!r} (expected {wanted!r})"
+                for name, (actual, wanted) in mismatches.items()
             )
-            return
-        self._client.put_object(
-            Bucket=self._bucket,
-            Key=key,
-            Body=artifact.content,
-            **extra_args,
-        )
+            raise ValueError(f"immutable PNG object conflicts with {key}: {detail}")
 
 
 class MemoryObjectStore:
@@ -146,7 +180,9 @@ class MemoryObjectStore:
         self.database = source.read_bytes()
 
     async def put_png(self, key: str, artifact: PngImage) -> None:
-        """Store one PNG under its public object key."""
-        # Model only the current object value. Production S3 bucket versioning,
-        # not this deterministic test adapter, retains overwritten versions.
-        self.objects[key] = artifact.content
+        """Create one immutable PNG or accept an identical existing value."""
+
+        content = artifact.content
+        existing = self.objects.setdefault(key, content)
+        if existing != content:
+            raise ValueError(f"immutable PNG object conflicts with {key}")
