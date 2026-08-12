@@ -10,8 +10,9 @@ type t = {
   health : unit -> (unit, error) result Lwt.t;
   art : string -> string -> (Model.art, error) result Lwt.t;
   source_art : string -> (Model.source_art, error) result Lwt.t;
-  story_groups : string -> (Model.story_group list, error) result Lwt.t;
-  stories_by_group : string -> string -> (Model.story list, error) result Lwt.t;
+  story_groups : string -> (Model.story_group_summary list, error) result Lwt.t;
+  stories_by_group : string -> string -> (Model.story_summary list, error) result Lwt.t;
+  story_group : string -> string -> (Model.story_group_detail, error) result Lwt.t;
   story : string -> string -> (Model.story, error) result Lwt.t;
   galleries : string -> (Model.gallery list, error) result Lwt.t;
   gallery : string -> string -> (Model.gallery, error) result Lwt.t;
@@ -36,6 +37,103 @@ let find_by_id id get_id values =
 let locale_values locale values =
   Option.value ~default:[] (List.assoc_opt locale values)
 
+let resolve_reference arts (reference : Model.art_reference) =
+  let composition_object_key =
+    arts
+    |> List.find_opt (fun (art : Model.art) ->
+           String.equal art.category reference.category
+           && String.equal art.id reference.art_id)
+    |> Option.map (fun (art : Model.art) -> art.image.object_key)
+  in
+  { reference with composition_object_key }
+
+let available_references arts references =
+  references
+  |> List.map (resolve_reference arts)
+  |> List.filter (fun (reference : Model.art_reference) ->
+         Option.is_some reference.composition_object_key)
+
+let unique_references references =
+  let seen = Hashtbl.create (List.length references) in
+  List.filter
+    (fun (reference : Model.art_reference) ->
+      let key = (reference.category, reference.art_id) in
+      if Hashtbl.mem seen key then false
+      else (
+        Hashtbl.add seen key ();
+        true))
+    references
+
+let character_code value position =
+  if String.length value = 0 then 0L
+  else Int64.of_int (Char.code value.[position mod String.length value])
+
+let representative_score seed (reference : Model.art_reference) =
+  let weighted factor value = Int64.mul factor value in
+  let middle value = String.length value / 2 in
+  let score =
+    Int64.add
+      (weighted 1_103_515_245L (Int64.of_int (String.length reference.art_id)))
+      (Int64.add
+         (weighted 12_345L (character_code reference.art_id 0))
+         (Int64.add
+            (weighted 2_654_435_761L
+               (character_code reference.art_id (middle reference.art_id)))
+            (Int64.add
+               (weighted 97L
+                  (character_code reference.art_id
+                     (String.length reference.art_id - 1)))
+               (Int64.add
+                  (weighted 193L (Int64.of_int (String.length seed)))
+                  (Int64.add
+                     (weighted 389L (character_code seed 0))
+                     (Int64.add
+                        (weighted 769L (character_code seed (middle seed)))
+                        (weighted 1_543L
+                           (character_code seed (String.length seed - 1)))))))))
+  in
+  Int64.rem score 2_147_483_647L
+
+let rec take count values =
+  if count <= 0 then []
+  else
+    match values with
+    | [] -> []
+    | value :: rest -> value :: take (count - 1) rest
+
+let preview_references ~seed references =
+  let choose category =
+    references
+    |> unique_references
+    |> List.filter (fun (reference : Model.art_reference) ->
+           String.equal reference.category category)
+    |> List.sort (fun left right ->
+           match
+             Int64.compare
+               (representative_score seed left)
+               (representative_score seed right)
+           with
+           | 0 -> String.compare left.art_id right.art_id
+           | order -> order)
+    |> take 3
+  in
+  match choose "image" with
+  | _ :: _ as references -> references
+  | [] -> choose "background"
+
+let representative_reference = function
+  | reference :: _ -> Some reference
+  | [] -> None
+
+let stories_in_group snapshot locale group_id =
+  locale_values locale snapshot.stories
+  |> List.filter (fun (story : Model.story) -> String.equal story.group_id group_id)
+
+let group_references snapshot locale group_id =
+  stories_in_group snapshot locale group_id
+  |> List.concat_map (fun (story : Model.story) -> story.art_references)
+  |> available_references snapshot.arts |> unique_references
+
 let memory snapshot =
   {
     close = (fun () -> Lwt.return_unit);
@@ -55,7 +153,25 @@ let memory snapshot =
              (fun (value : Model.source_art) -> value.id)
              snapshot.source_arts));
     story_groups =
-      (fun locale -> Lwt.return (Ok (locale_values locale snapshot.story_groups)));
+      (fun locale ->
+        locale_values locale snapshot.story_groups
+        |> List.map (fun (group : Model.story_group) ->
+               let references =
+                 group_references snapshot locale group.id
+                 |> List.filter (fun (reference : Model.art_reference) ->
+                        Option.is_some reference.composition_object_key)
+               in
+               let preview_art_references =
+                 preview_references ~seed:group.id references
+               in
+               Model.
+                 {
+                   group;
+                   representative_art_reference =
+                     representative_reference preview_art_references;
+                   preview_art_references;
+                 })
+        |> Result.ok |> Lwt.return);
     stories_by_group =
       (fun locale group_id ->
         if
@@ -63,19 +179,61 @@ let memory snapshot =
           |> List.exists (fun (group : Model.story_group) ->
                  String.equal group_id group.id)
         then
-          locale_values locale snapshot.stories
-          |> List.filter_map (fun (story : Model.story) ->
-                 if String.equal group_id story.group_id then
-                   Some { story with art_references = [] }
-                 else None)
+          stories_in_group snapshot locale group_id
+          |> List.map (fun (story : Model.story) ->
+                 let references =
+                   available_references snapshot.arts story.art_references
+                 in
+                 let preview_art_references =
+                   preview_references ~seed:story.id references
+                 in
+                 Model.
+                   {
+                     story = { story with art_references = [] };
+                     representative_art_reference =
+                       representative_reference preview_art_references;
+                     preview_art_references;
+                   })
           |> Result.ok |> Lwt.return
         else Lwt.return (Error `Not_found));
+    story_group =
+      (fun locale id ->
+        match
+          find_by_id id
+            (fun (value : Model.story_group) -> value.id)
+            (locale_values locale snapshot.story_groups)
+        with
+        | Error error -> Lwt.return (Error error)
+        | Ok group ->
+            let art_references = group_references snapshot locale id in
+            let preview_art_references =
+              art_references
+              |> List.filter (fun (reference : Model.art_reference) ->
+                     Option.is_some reference.composition_object_key)
+              |> preview_references ~seed:group.id
+            in
+            Lwt.return
+              (Ok
+                 Model.
+                   {
+                     group;
+                     representative_art_reference =
+                       representative_reference preview_art_references;
+                     preview_art_references;
+                     art_references;
+                   }));
     story =
       (fun locale id ->
-        Lwt.return
-          (find_by_id id
-             (fun (value : Model.story) -> value.id)
-             (locale_values locale snapshot.stories)));
+        find_by_id id
+          (fun (value : Model.story) -> value.id)
+          (locale_values locale snapshot.stories)
+        |> Result.map (fun (story : Model.story) ->
+               {
+                 story with
+                 art_references =
+                   List.map (resolve_reference snapshot.arts) story.art_references;
+               })
+        |> Lwt.return);
     galleries =
       (fun locale ->
         locale_values locale snapshot.galleries
@@ -83,10 +241,27 @@ let memory snapshot =
         |> Result.ok |> Lwt.return);
     gallery =
       (fun locale id ->
-        Lwt.return
-          (find_by_id id
-             (fun (value : Model.gallery) -> value.id)
-             (locale_values locale snapshot.galleries)));
+        find_by_id id
+          (fun (value : Model.gallery) -> value.id)
+          (locale_values locale snapshot.galleries)
+        |> Result.map (fun (gallery : Model.gallery) ->
+               {
+                 gallery with
+                 entries =
+                   List.map
+                     (fun (entry : Model.gallery_entry) ->
+                       let composition_object_key =
+                         snapshot.arts
+                         |> List.find_opt (fun (art : Model.art) ->
+                                String.equal art.category entry.category
+                                && String.equal art.id entry.art_id)
+                         |> Option.map (fun (art : Model.art) ->
+                                art.image.object_key)
+                       in
+                       { entry with composition_object_key })
+                     gallery.entries;
+               })
+        |> Lwt.return);
   }
 
 module Query = struct
@@ -129,28 +304,154 @@ module Query = struct
         WHERE source_art_id = ?
       |}
 
+  let optional_reference =
+    t2 (option string)
+      (t2 (option string)
+         (t2 (option string)
+            (t2 (option string)
+               (t2 (option string)
+                  (t2 (option string) (option string))))))
+
   let story_groups =
-    let row = t2 string (t2 string string) in
-    (string ->* row)
+    let row = t2 string (t2 string (t2 string optional_reference)) in
+    (t2 string string ->* row)
       {|
-        SELECT group_id, name, group_type
-        FROM story_groups
-        WHERE locale = ?
-        ORDER BY position
+        WITH candidate_references AS (
+          SELECT story.group_id, story.position AS story_position,
+                 reference.position AS reference_position, reference.art_id,
+                 reference.kind, reference.category, reference.title,
+                 reference.subtitle, reference.names_json, art.object_key,
+                 ROW_NUMBER() OVER (
+                   PARTITION BY story.group_id, reference.category,
+                                reference.art_id
+                   ORDER BY story.position, reference.position
+                 ) AS duplicate_rank
+          FROM stories AS story
+          JOIN story_art_references AS reference
+            ON reference.locale = story.locale
+           AND reference.story_id = story.story_id
+          JOIN arts AS art
+            ON art.category = reference.category
+           AND art.art_id = reference.art_id
+          WHERE story.locale = ?
+            AND reference.category IN ('image', 'background')
+        ), unique_references AS (
+          SELECT *,
+                 MAX(CASE reference.category WHEN 'image' THEN 1 ELSE 0 END)
+                   OVER (PARTITION BY group_id) AS has_image,
+                 (
+                   length(art_id) * 1103515245
+                   + unicode(substr(art_id, 1, 1)) * 12345
+                   + unicode(substr(
+                       art_id,
+                       (length(art_id) / 2) + 1,
+                       1
+                     )) * 2654435761
+                   + unicode(substr(art_id, -1, 1)) * 97
+                   + length(group_id) * 193
+                   + unicode(substr(group_id, 1, 1)) * 389
+                   + unicode(substr(
+                       group_id,
+                       (length(group_id) / 2) + 1,
+                       1
+                     )) * 769
+                   + unicode(substr(group_id, -1, 1)) * 1543
+                 ) % 2147483647 AS shuffle_score
+          FROM candidate_references AS reference
+          WHERE duplicate_rank = 1
+        ), ranked_references AS (
+          SELECT *,
+                 ROW_NUMBER() OVER (
+                   PARTITION BY group_id
+                   ORDER BY shuffle_score, art_id, story_position,
+                            reference_position
+                 ) AS rank
+          FROM unique_references
+          WHERE (has_image = 1 AND category = 'image')
+             OR (has_image = 0 AND category = 'background')
+        )
+        SELECT story_group.group_id, story_group.name, story_group.group_type,
+               reference.art_id, reference.kind, reference.category,
+               reference.title, reference.subtitle, reference.names_json,
+               reference.object_key
+        FROM story_groups AS story_group
+        LEFT JOIN ranked_references AS reference
+          ON reference.group_id = story_group.group_id AND reference.rank <= 3
+        WHERE story_group.locale = ?
+        ORDER BY story_group.position, reference.rank
       |}
 
   let stories_by_group =
     let row =
       t2 string
         (t2 string
-           (t2 string (t2 string (t2 string (t2 string string)))))
+           (t2 string
+              (t2 string
+                 (t2 string (t2 string (t2 string optional_reference))))))
     in
-    (t2 string string ->* row)
+    (t2 (t2 string string) (t2 string string) ->* row)
       {|
-        SELECT story_id, group_id, tag, tag_text, code, name, info
-        FROM stories
-        WHERE locale = ? AND group_id = ?
-        ORDER BY position
+        WITH candidate_references AS (
+          SELECT reference.story_id, reference.position, reference.art_id,
+                 reference.kind, reference.category, reference.title,
+                 reference.subtitle, reference.names_json, art.object_key,
+                 ROW_NUMBER() OVER (
+                   PARTITION BY reference.story_id, reference.category,
+                                reference.art_id
+                   ORDER BY reference.position
+                 ) AS duplicate_rank
+          FROM stories AS candidate_story
+          JOIN story_art_references AS reference
+            ON reference.locale = candidate_story.locale
+           AND reference.story_id = candidate_story.story_id
+          JOIN arts AS art
+            ON art.category = reference.category
+           AND art.art_id = reference.art_id
+          WHERE candidate_story.locale = ? AND candidate_story.group_id = ?
+            AND reference.category IN ('image', 'background')
+        ), unique_references AS (
+          SELECT *,
+                 MAX(CASE reference.category WHEN 'image' THEN 1 ELSE 0 END)
+                   OVER (PARTITION BY story_id) AS has_image,
+                 (
+                   length(art_id) * 1103515245
+                   + unicode(substr(art_id, 1, 1)) * 12345
+                   + unicode(substr(
+                       art_id,
+                       (length(art_id) / 2) + 1,
+                       1
+                     )) * 2654435761
+                   + unicode(substr(art_id, -1, 1)) * 97
+                   + length(story_id) * 193
+                   + unicode(substr(story_id, 1, 1)) * 389
+                   + unicode(substr(
+                       story_id,
+                       (length(story_id) / 2) + 1,
+                       1
+                     )) * 769
+                   + unicode(substr(story_id, -1, 1)) * 1543
+                 ) % 2147483647 AS shuffle_score
+          FROM candidate_references AS reference
+          WHERE duplicate_rank = 1
+        ), ranked_references AS (
+          SELECT *,
+                 ROW_NUMBER() OVER (
+                   PARTITION BY story_id
+                   ORDER BY shuffle_score, art_id, position
+                 ) AS rank
+          FROM unique_references
+          WHERE (has_image = 1 AND category = 'image')
+             OR (has_image = 0 AND category = 'background')
+        )
+        SELECT story.story_id, story.group_id, story.tag, story.tag_text,
+               story.code, story.name, story.info, reference.art_id,
+               reference.kind, reference.category, reference.title,
+               reference.subtitle, reference.names_json, reference.object_key
+        FROM stories AS story
+        LEFT JOIN ranked_references AS reference
+          ON reference.story_id = story.story_id AND reference.rank <= 3
+        WHERE story.locale = ? AND story.group_id = ?
+        ORDER BY story.position, reference.rank
       |}
 
   let story_group_exists =
@@ -159,6 +460,35 @@ module Query = struct
         SELECT 1
         FROM story_groups
         WHERE locale = ? AND group_id = ?
+      |}
+
+  let story_group =
+    let row = t2 string (t2 string (t2 string optional_reference)) in
+    (t2 (t2 string string) (t2 string string) ->* row)
+      {|
+        WITH group_references AS (
+          SELECT story.group_id, story.position AS story_position,
+                 reference.position AS reference_position, reference.art_id,
+                 reference.kind, reference.category, reference.title,
+                 reference.subtitle, reference.names_json, art.object_key
+          FROM stories AS story
+          JOIN story_art_references AS reference
+            ON reference.locale = story.locale
+           AND reference.story_id = story.story_id
+          JOIN arts AS art
+            ON art.category = reference.category
+           AND art.art_id = reference.art_id
+          WHERE story.locale = ? AND story.group_id = ?
+        )
+        SELECT story_group.group_id, story_group.name, story_group.group_type,
+               reference.art_id, reference.kind, reference.category,
+               reference.title, reference.subtitle, reference.names_json,
+               reference.object_key
+        FROM story_groups AS story_group
+        LEFT JOIN group_references AS reference
+          ON reference.group_id = story_group.group_id
+        WHERE story_group.locale = ? AND story_group.group_id = ?
+        ORDER BY reference.story_position, reference.reference_position
       |}
 
   let story =
@@ -173,18 +503,23 @@ module Query = struct
                           (t2 (option string)
                              (t2 (option string)
                                 (t2 (option string)
-                                   (t2 (option string) (option string)))))))))))
+                                   (t2 (option string)
+                                      (t2 (option string)
+                                         (option string))))))))))))
     in
     (t2 string string ->* row)
       {|
         SELECT story.group_id, story.tag, story.tag_text, story.code,
                story.name, story.info, reference.art_id, reference.kind,
                reference.category, reference.title, reference.subtitle,
-               reference.names_json
+               reference.names_json, art.object_key
         FROM stories AS story
         LEFT JOIN story_art_references AS reference
           ON reference.locale = story.locale
          AND reference.story_id = story.story_id
+        LEFT JOIN arts AS art
+          ON art.category = reference.category
+         AND art.art_id = reference.art_id
         WHERE story.locale = ? AND story.story_id = ?
         ORDER BY reference.position
       |}
@@ -208,17 +543,21 @@ module Query = struct
                  (t2 (option int)
                        (t2 (option string)
                           (t2 (option string)
-                             (t2 (option string) (option string))))))))
+                             (t2 (option string)
+                                (t2 (option string) (option string)))))))))
     in
     (t2 string string ->* row)
       {|
         SELECT gallery.gallery_id, gallery.name, gallery.description,
                entry.entry_id, entry.position, entry.name,
-               entry.description, entry.art_id, entry.category
+               entry.description, entry.art_id, entry.category, art.object_key
         FROM galleries AS gallery
         LEFT JOIN gallery_entries AS entry
           ON entry.locale = gallery.locale
          AND entry.gallery_id = gallery.gallery_id
+        LEFT JOIN arts AS art
+          ON art.category = entry.category
+         AND art.art_id = entry.art_id
         WHERE gallery.locale = ? AND gallery.gallery_id = ?
         ORDER BY entry.position
       |}
@@ -304,16 +643,73 @@ let sqlite path =
                   image = { object_key; byte_size; width; height };
                 }
       in
+      let names_from_json = function
+        | None -> []
+        | Some raw ->
+            Yojson.Safe.from_string raw |> Yojson.Safe.Util.to_list
+            |> List.filter_map (function `String value -> Some value | _ -> None)
+      in
+      let reference_from_columns
+          (art_id, (kind, (category, (title, (subtitle, (names, object_key)))))) =
+        match (art_id, kind, category) with
+        | Some art_id, Some kind, Some category ->
+            Some
+              Model.
+                {
+                  art_id;
+                  kind;
+                  category;
+                  title;
+                  subtitle;
+                  names = names_from_json names;
+                  composition_object_key = object_key;
+                }
+        | _ -> None
+      in
       let story_groups locale =
-        use (fun (module Db) -> Db.collect_list Query.story_groups locale)
+        use (fun (module Db) ->
+            Db.collect_list Query.story_groups (locale, locale))
         >|= Result.map (fun rows ->
-                List.map
-                  (fun (id, (name, group_type)) -> Model.{ id; name; group_type })
-                  rows)
+                let rec gather id references = function
+                  | (next_id, (_, (_, reference))) :: rest
+                    when String.equal id next_id ->
+                      let references =
+                        match reference_from_columns reference with
+                        | Some reference -> reference :: references
+                        | None -> references
+                      in
+                      gather id references rest
+                  | remaining -> (List.rev references, remaining)
+                in
+                let rec decode summaries = function
+                  | [] -> List.rev summaries
+                  | (id, (name, (group_type, reference))) :: rest ->
+                      let initial =
+                        match reference_from_columns reference with
+                        | Some reference -> [ reference ]
+                        | None -> []
+                      in
+                      let references, remaining = gather id initial rest in
+                      let preview_art_references =
+                        preview_references ~seed:id references
+                      in
+                      let summary =
+                        Model.
+                          {
+                            group = { id; name; group_type };
+                            representative_art_reference =
+                              representative_reference preview_art_references;
+                            preview_art_references;
+                          }
+                      in
+                      decode (summary :: summaries) remaining
+                in
+                decode [] rows)
       in
       let stories_by_group locale group_id =
         use (fun (module Db) ->
-            Db.collect_list Query.stories_by_group (locale, group_id)
+            Db.collect_list Query.stories_by_group
+              ((locale, group_id), (locale, group_id))
             >>= fun rows ->
             match rows with
             | Error error -> Lwt.return (Error error)
@@ -326,27 +722,85 @@ let sqlite path =
         | Ok (`Empty None) -> Error `Not_found
         | Ok (`Empty (Some _)) -> Ok []
         | Ok (`Stories rows) ->
-            rows
-            |> List.map
-                 (fun (id, (group_id, (tag, (tag_text, (code, (name, info)))))) ->
-                   Model.
-                     {
-                       id;
-                       group_id;
-                       tag;
-                       tag_text;
-                       code;
-                       name;
-                       info;
-                       art_references = [];
-                     })
-            |> Result.ok
+            let rec gather id references = function
+              | ( next_id,
+                  (_, (_, (_, (_, (_, (_, reference)))))) )
+                :: rest
+                when String.equal id next_id ->
+                  let references =
+                    match reference_from_columns reference with
+                    | Some reference -> reference :: references
+                    | None -> references
+                  in
+                  gather id references rest
+              | remaining -> (List.rev references, remaining)
+            in
+            let rec decode summaries = function
+              | [] -> List.rev summaries
+              | ( id,
+                  ( group_id,
+                    (tag, (tag_text, (code, (name, (info, reference))))) ) )
+                :: rest ->
+                  let initial =
+                    match reference_from_columns reference with
+                    | Some reference -> [ reference ]
+                    | None -> []
+                  in
+                  let references, remaining = gather id initial rest in
+                  let preview_art_references =
+                    preview_references ~seed:id references
+                  in
+                  let summary =
+                    Model.
+                      {
+                        story =
+                          {
+                            id;
+                            group_id;
+                            tag;
+                            tag_text;
+                            code;
+                            name;
+                            info;
+                            art_references = [];
+                          };
+                        representative_art_reference =
+                          representative_reference preview_art_references;
+                        preview_art_references;
+                      }
+                  in
+                  decode (summary :: summaries) remaining
+            in
+            Ok (decode [] rows)
       in
-      let names_from_json = function
-        | None -> []
-        | Some raw ->
-            Yojson.Safe.from_string raw |> Yojson.Safe.Util.to_list
-            |> List.filter_map (function `String value -> Some value | _ -> None)
+      let story_group locale id =
+        use (fun (module Db) ->
+            Db.collect_list Query.story_group ((locale, id), (locale, id)))
+        >|= function
+        | Error error -> Error error
+        | Ok [] -> Error `Not_found
+        | Ok ((id, (name, (group_type, _))) :: _ as rows) ->
+            let art_references =
+              rows
+              |> List.filter_map (fun (_, (_, (_, reference))) ->
+                     reference_from_columns reference)
+              |> unique_references
+            in
+            let preview_art_references =
+              art_references
+              |> List.filter (fun (reference : Model.art_reference) ->
+                     Option.is_some reference.composition_object_key)
+              |> preview_references ~seed:id
+            in
+            Ok
+              Model.
+                {
+                  group = { id; name; group_type };
+                  representative_art_reference =
+                    representative_reference preview_art_references;
+                  preview_art_references;
+                  art_references;
+                }
       in
       let story locale id =
         use (fun (module Db) -> Db.collect_list Query.story (locale, id))
@@ -354,37 +808,12 @@ let sqlite path =
         | Error error -> Error error
         | Ok [] -> Error `Not_found
         | Ok
-            (( group_id,
-               ( tag,
-                 ( tag_text,
-                   ( code,
-                     ( name,
-                       (info, (_, (_, (_, (_, (_, _)))))) ) ) ) ) )
-            :: _ as rows) ->
+            ((group_id, (tag, (tag_text, (code, (name, (info, _)))))) :: _ as rows)
+          ->
             let art_references =
               List.filter_map
-                (fun
-                  ( _,
-                    ( _,
-                      ( _,
-                        ( _,
-                          ( _,
-                            ( _,
-                              ( art_id,
-                                (kind, (category, (title, (subtitle, names)))) ) ) ) ) ) ) ) ->
-                  match (art_id, kind, category) with
-                  | Some art_id, Some kind, Some category ->
-                      Some
-                        Model.
-                          {
-                            art_id;
-                            kind;
-                            category;
-                            title;
-                            subtitle;
-                            names = names_from_json names;
-                          }
-                  | _ -> None)
+                (fun (_, (_, (_, (_, (_, (_, reference)))))) ->
+                  reference_from_columns reference)
                 rows
             in
             Ok Model.{ id; group_id; tag; tag_text; code; name; info; art_references }
@@ -402,7 +831,7 @@ let sqlite path =
         >|= function
         | Error error -> Error error
         | Ok [] -> Error `Not_found
-        | Ok ((id, (name, (description, (_, (_, (_, (_, (_, _)))))))) :: _ as rows) ->
+        | Ok ((id, (name, (description, _))) :: _ as rows) ->
             let entries =
               List.filter_map
                 (fun
@@ -411,7 +840,9 @@ let sqlite path =
                       ( _,
                         ( entry_id,
                           ( position,
-                            (name, (description, (art_id, category))) ) ) ) ) ) ->
+                            ( name,
+                              ( description,
+                                (art_id, (category, object_key)) ) ) ) ) ) ) ) ->
                   match (entry_id, position, name, description, art_id, category) with
                   | ( Some id,
                       Some position,
@@ -419,7 +850,17 @@ let sqlite path =
                       Some description,
                       Some art_id,
                       Some category ) ->
-                      Some Model.{ id; position; name; description; art_id; category }
+                      Some
+                        Model.
+                          {
+                            id;
+                            position;
+                            name;
+                            description;
+                            art_id;
+                            category;
+                            composition_object_key = object_key;
+                          }
                   | _ -> None)
                 rows
             in
@@ -434,6 +875,7 @@ let sqlite path =
           source_art;
           story_groups;
           stories_by_group;
+          story_group;
           story;
           galleries;
           gallery;
@@ -608,6 +1050,9 @@ let live ~url ~cache_dir ~poll_seconds ~download_timeout_seconds =
             stories_by_group =
               (fun locale group_id ->
                 with_current (fun value -> value.stories_by_group locale group_id));
+            story_group =
+              (fun locale id ->
+                with_current (fun value -> value.story_group locale id));
             story =
               (fun locale id -> with_current (fun value -> value.story locale id));
             galleries =
@@ -627,6 +1072,7 @@ let story_groups (database : t) locale = database.story_groups locale
 let stories_by_group (database : t) locale group_id =
   database.stories_by_group locale group_id
 
+let story_group (database : t) locale id = database.story_group locale id
 let story (database : t) locale id = database.story locale id
 let galleries (database : t) locale = database.galleries locale
 let gallery (database : t) locale id = database.gallery locale id

@@ -47,13 +47,24 @@ val art : t -> string -> string -> (Model.art, error) result Lwt.t
 (** Get one original source art record by its logical identifier. *)
 val source_art : t -> string -> (Model.source_art, error) result Lwt.t
 
-(** List ordered story groups for a locale such as ["CN"] or ["EN"]. *)
-val story_groups : t -> string -> (Model.story_group list, error) result Lwt.t
+(** List ordered story groups for a locale such as ["CN"] or ["EN"]. Each
+    summary includes up to three stably shuffled preview references. If any
+    illustration is available, previews contain illustrations only; otherwise
+    they contain backgrounds. The representative is the first preview. *)
+val story_groups :
+  t -> string -> (Model.story_group_summary list, error) result Lwt.t
 
-(** List ordered story summaries in one localized group. Summary art-reference
-    lists are empty. A missing group returns [`Not_found]. *)
+(** List ordered story summaries in one localized group. [art_references]
+    remains empty. Each summary includes up to three stably shuffled preview
+    references using the same preference as [story_groups], and its
+    representative is the first preview. A missing group returns [`Not_found]. *)
 val stories_by_group :
-  t -> string -> string -> (Model.story list, error) result Lwt.t
+  t -> string -> string -> (Model.story_summary list, error) result Lwt.t
+
+(** Get one group, its preview references, and every available art reference
+    across its stories, deduplicated by category and art ID. *)
+val story_group :
+  t -> string -> string -> (Model.story_group_detail, error) result Lwt.t
 
 (** Get one story from the selected locale. *)
 val story : t -> string -> string -> (Model.story, error) result Lwt.t

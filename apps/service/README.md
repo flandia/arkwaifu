@@ -11,12 +11,11 @@ images, or needs updater/S3 credentials.
 | Method and path | Result |
 | --- | --- |
 | `GET /health` | Current local SQLite connectivity |
-| `GET /api/arts/:category/:id` | Selected composition metadata and version-scoped content URL |
-| `GET /api/arts/:category/:id/content` | `303` redirect to the selected composition PNG |
-| `GET /api/source-arts/:id` | Original body, face, or whole-body layer metadata |
-| `GET /api/source-arts/:id/content` | `303` redirect to the original PNG |
-| `GET /api/:locale/story-groups` | Ordered story groups |
-| `GET /api/:locale/story-groups/:id/stories` | Ordered story summaries for one group; `artReferences` is empty |
+| `GET /api/arts/:category/:id` | Selected composition metadata with direct composition and thumbnail object-store URLs |
+| `GET /api/source-arts/:id` | Original body, face, or whole-body layer metadata with a direct object-store URL |
+| `GET /api/:locale/story-groups` | Ordered story groups with rotating-card preview references |
+| `GET /api/:locale/story-groups/:id` | One group with previews and all available, deduplicated `artReferences` |
+| `GET /api/:locale/story-groups/:id/stories` | Ordered story summaries with rotating-card previews; `artReferences` remains empty |
 | `GET /api/:locale/stories/:id` | Story metadata and ordered art references |
 | `GET /api/:locale/galleries` | Gallery summaries |
 | `GET /api/:locale/galleries/:id` | Gallery and ordered entries |
@@ -25,17 +24,84 @@ Locales are explicit and case-insensitive: `CN`, `EN`, `JP`, `KR`, and `TW`.
 Unknown resources and locales return `404`. A database/schema failure returns a
 small `503` response without exposing local paths or connection details.
 An existing story group with no stories returns `200` with an empty JSON list.
+Its group-detail route also returns `200`, with a `null`
+`representativeArtReference`, an empty `previewArtReferences` list, and an empty
+`artReferences` list. Missing groups return `404` from both routes.
 All responses allow public cross-origin reads with
 `Access-Control-Allow-Origin: *`. `OPTIONS` requests return `204` and advertise
 the supported `GET, OPTIONS` methods.
 
-Content endpoints redirect instead of proxying PNG bytes. This keeps the
-service out of the image data path. Configure the bucket or CDN for public
-reads; PNG objects are published as `image/png` under
+Story-group and story-summary card backgrounds use this shape:
+
+```json
+{
+  "representativeArtReference": {
+    "artID": "avg_1",
+    "kind": "picture",
+    "category": "image",
+    "title": null,
+    "subtitle": null,
+    "names": [],
+    "thumbnailContentUrl": "https://objects.example/arkwaifu/ART/v1/thumbnail/image/avg_1.webp"
+  },
+  "previewArtReferences": [
+    {
+      "artID": "avg_1",
+      "kind": "picture",
+      "category": "image",
+      "title": null,
+      "subtitle": null,
+      "names": [],
+      "thumbnailContentUrl": "https://objects.example/arkwaifu/ART/v1/thumbnail/image/avg_1.webp"
+    }
+  ]
+}
+```
+
+`previewArtReferences` contains at most three references in a stable,
+pseudorandom-looking order seeded by the group or story ID. It contains only
+references that resolve against `arts`. When at least one `image` is available,
+the list contains illustrations only; otherwise it falls back to backgrounds.
+The frontend rotates through this list. `representativeArtReference` remains for
+backward compatibility and is always the first preview, or `null` when the list
+is empty.
+Every art-reference payload includes a nullable direct `thumbnailContentUrl`.
+The group-detail `artReferences` list contains every resolvable reference across
+the group's stories, preserves story/reference order, and deduplicates by
+`category` plus `artID`. Story-detail references and gallery entries are
+preserved even when unresolved, in which case `thumbnailContentUrl` is `null`.
+This is populated by the existing SQL joins, without per-reference queries.
+
+These fields are derived from the existing schema-version 2 relationship
+`story_groups -> stories -> story_art_references`, with `arts` used as the
+availability check. They add no table, column, materialized aggregate, or schema
+migration.
+
+The service exposes object-store locations through metadata and has no image
+content or redirect endpoints, keeping it out of the image data path. Thumbnail
+URLs point directly at the updater-published object-store key, derived during
+JSON serialization from the joined composition key without another database
+column: `ART/<resVersion>/thumbnail/<category>/<name>.webp`.
+The former `/api/arts/:category/:id/content`,
+`/api/arts/:category/:id/thumbnail/content`, and
+`/api/source-arts/:id/content` paths are not routed and return `404`.
+
+Before deploying a frontend that uses these URLs against an archive created
+before thumbnails were introduced, run the one-time historical backfill:
+
+```console
+uv run updateloop run art --complete
+```
+
+Deploy the service after the backfill and before the frontend. Normal future
+art runs publish thumbnails for their changed winners automatically.
+
+Configure the bucket or CDN for public reads; original PNG objects are
+published as `image/png` under
 `ART/<resVersion>/<variant>/<category>/<name>.png`, with
 `Cache-Control: public, max-age=31536000, immutable`. The version is the
 snapshot which contributed that create-only object. One current database can
-therefore redirect to several historical version prefixes. Public art metadata
+therefore reference several historical version prefixes. Public art metadata
 includes object location, byte size, and dimensions, but no redundant object
 variant or PNG SHA. The path uses `composition` for final art and `source` for
 retained character layers; the route already determines which kind is returned.
@@ -131,7 +197,7 @@ service's `Database` module is the persistence seam: HTTP handlers ask it for
 domain records, while its live adapter hides SQLite queries, conditional
 downloads, schema checks, and generation replacement. An in-memory adapter
 supports deterministic tests. Dream remains limited to routing and
-JSON/redirect responses.
+JSON responses.
 
 There are no release tables, staged rows, active pointers, or PostgreSQL
 settings. `unit_versions` contains only each unit's `resVersion`; HTTP reads use

@@ -25,7 +25,8 @@ type source_art = {
   image : object_metadata;
 }
 
-(** One picture or character referenced by a story. *)
+(** One picture or character referenced by a story. The composition key is
+    present only when the logical reference resolves against [arts]. *)
 type art_reference = {
   art_id : string;
   kind : string;
@@ -33,6 +34,7 @@ type art_reference = {
   title : string option;
   subtitle : string option;
   names : string list;
+  composition_object_key : string option;
 }
 
 (** One localized story and its ordered art references. *)
@@ -54,7 +56,32 @@ type story_group = {
   group_type : string;
 }
 
-(** One ordered category-qualified art entry in a gallery. *)
+(** A story list row with up to three stable, usable card backgrounds. The
+    representative is the first preview for backward compatibility. *)
+type story_summary = {
+  story : story;
+  representative_art_reference : art_reference option;
+  preview_art_references : art_reference list;
+}
+
+(** A story-group list row with up to three stable, usable card backgrounds. The
+    representative is the first preview for backward compatibility. *)
+type story_group_summary = {
+  group : story_group;
+  representative_art_reference : art_reference option;
+  preview_art_references : art_reference list;
+}
+
+(** One group, its previews, and every available art reference in it. *)
+type story_group_detail = {
+  group : story_group;
+  representative_art_reference : art_reference option;
+  preview_art_references : art_reference list;
+  art_references : art_reference list;
+}
+
+(** One ordered category-qualified art entry in a gallery. The composition key
+    is absent when the logical reference does not resolve against [arts]. *)
 type gallery_entry = {
   id : string;
   position : int;
@@ -62,6 +89,7 @@ type gallery_entry = {
   description : string;
   art_id : string;
   category : string;
+  composition_object_key : string option;
 }
 
 (** One localized gallery. Summaries contain an empty [entries] list. *)
@@ -82,13 +110,22 @@ val art_json : object_base_url:string -> art -> Yojson.Safe.t
 val source_art_json : object_base_url:string -> source_art -> Yojson.Safe.t
 
 (** Encode one story with all art references. *)
-val story_json : story -> Yojson.Safe.t
+val story_json : object_base_url:string -> story -> Yojson.Safe.t
 
-(** Encode one story group summary. *)
-val story_group_json : story_group -> Yojson.Safe.t
+(** Encode one story list row. [artReferences] remains empty for compatibility. *)
+val story_summary_json :
+  object_base_url:string -> story_summary -> Yojson.Safe.t
+
+(** Encode one story-group list row. *)
+val story_group_summary_json :
+  object_base_url:string -> story_group_summary -> Yojson.Safe.t
+
+(** Encode one story group with all available, deduplicated art references. *)
+val story_group_detail_json :
+  object_base_url:string -> story_group_detail -> Yojson.Safe.t
 
 (** Encode one gallery with its entries. *)
-val gallery_json : gallery -> Yojson.Safe.t
+val gallery_json : object_base_url:string -> gallery -> Yojson.Safe.t
 
 (** Encode one gallery without entries. *)
 val gallery_summary_json : gallery -> Yojson.Safe.t
