@@ -13,6 +13,7 @@ images, or needs updater/S3 credentials.
 | `GET /health` | Current local SQLite connectivity |
 | `GET /api/arts/:category/:id` | Selected composition metadata with direct composition and thumbnail object-store URLs |
 | `GET /api/source-arts/:id` | Original body, face, or whole-body layer metadata with a direct object-store URL |
+| `GET /api/:locale/arts/:category/:id/context` | Localized names, related character variants, and every story occurrence of an available art |
 | `GET /api/:locale/story-groups` | Ordered story groups with rotating-card preview references |
 | `GET /api/:locale/story-groups/:id` | One group with previews and all available, deduplicated `artReferences` |
 | `GET /api/:locale/story-groups/:id/stories` | Ordered story summaries with rotating-card previews; `artReferences` remains empty |
@@ -65,6 +66,17 @@ the list contains illustrations only; otherwise it falls back to backgrounds.
 The frontend rotates through this list. `representativeArtReference` remains for
 backward compatibility and is always the first preview, or `null` when the list
 is empty.
+
+Illustration previews prefer art used by fewer distinct story groups (for group
+cards) or stories (for stage cards). The stable shuffle only breaks rarity
+ties. Background fallback uses the same ranking.
+
+The art-context route returns deduplicated localized `names`, every distinct
+localized story `occurrence`, and `siblings` for character art. A sibling is an
+available character whose identifier has the same exact prefix before `#`; its
+payload includes localized names and a direct `thumbnailContentUrl`. Other art
+categories return an empty sibling list.
+
 Every art-reference payload includes a nullable direct `thumbnailContentUrl`.
 The group-detail `artReferences` list contains every resolvable reference across
 the group's stories, preserves story/reference order, and deduplicates by

@@ -100,6 +100,32 @@ type gallery = {
   entries : gallery_entry list;
 }
 
+(** One available character variant related to the selected art. *)
+type art_sibling = {
+  art_id : string;
+  names : string list;
+  composition_object_key : string;
+}
+
+(** One localized story occurrence of an art. *)
+type art_occurrence = {
+  group_id : string;
+  group_name : string;
+  group_type : string;
+  story_id : string;
+  story_name : string;
+  story_code : string;
+  story_tag_text : string;
+}
+
+(** Localized names, related character variants, and story occurrences for an
+    available art. *)
+type art_context = {
+  names : string list;
+  siblings : art_sibling list;
+  occurrences : art_occurrence list;
+}
+
 (** Build the public URL of an object key, escaping every path segment. *)
 val content_url : object_base_url:string -> string -> string
 
@@ -129,3 +155,7 @@ val gallery_json : object_base_url:string -> gallery -> Yojson.Safe.t
 
 (** Encode one gallery without entries. *)
 val gallery_summary_json : gallery -> Yojson.Safe.t
+
+(** Encode localized context for one art. *)
+val art_context_json :
+  object_base_url:string -> art_context -> Yojson.Safe.t

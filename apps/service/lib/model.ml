@@ -83,6 +83,28 @@ type gallery = {
   entries : gallery_entry list;
 }
 
+type art_sibling = {
+  art_id : string;
+  names : string list;
+  composition_object_key : string;
+}
+
+type art_occurrence = {
+  group_id : string;
+  group_name : string;
+  group_type : string;
+  story_id : string;
+  story_name : string;
+  story_code : string;
+  story_tag_text : string;
+}
+
+type art_context = {
+  names : string list;
+  siblings : art_sibling list;
+  occurrences : art_occurrence list;
+}
+
 let trim_trailing_slash value =
   if String.length value > 0 && value.[String.length value - 1] = '/' then
     String.sub value 0 (String.length value - 1)
@@ -255,3 +277,37 @@ let gallery_json ~object_base_url (gallery : gallery) =
                (gallery_entry_json ~object_base_url)
                gallery.entries) );
       ])
+
+let art_sibling_json ~object_base_url (sibling : art_sibling) =
+  `Assoc
+    [
+      ("artID", `String sibling.art_id);
+      ("names", string_list sibling.names);
+      ( "thumbnailContentUrl",
+        `String
+          (thumbnail_content_url ~object_base_url
+             sibling.composition_object_key) );
+    ]
+
+let art_occurrence_json (occurrence : art_occurrence) =
+  `Assoc
+    [
+      ("groupID", `String occurrence.group_id);
+      ("groupName", `String occurrence.group_name);
+      ("groupType", `String occurrence.group_type);
+      ("storyID", `String occurrence.story_id);
+      ("storyName", `String occurrence.story_name);
+      ("storyCode", `String occurrence.story_code);
+      ("storyTagText", `String occurrence.story_tag_text);
+    ]
+
+let art_context_json ~object_base_url (context : art_context) =
+  `Assoc
+    [
+      ("names", string_list context.names);
+      ( "siblings",
+        `List
+          (List.map (art_sibling_json ~object_base_url) context.siblings) );
+      ( "occurrences",
+        `List (List.map art_occurrence_json context.occurrences) );
+    ]

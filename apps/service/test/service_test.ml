@@ -112,6 +112,18 @@ let background_reference =
       composition_object_key = None;
     }
 
+let art_reference category art_id names =
+  Model.
+    {
+      art_id;
+      kind = "picture";
+      category;
+      title = None;
+      subtitle = None;
+      names;
+      composition_object_key = None;
+    }
+
 let story =
   Model.
     {
@@ -164,6 +176,11 @@ let story_group =
 
 let empty_story_group =
   Model.{ id = "empty"; name = "Empty group"; group_type = "other" }
+
+let require_ok label = function
+  | Ok value -> value
+  | Error `Not_found -> Alcotest.failf "%s unexpectedly returned not found" label
+  | Error (`Unavailable error) -> Alcotest.failf "%s unavailable: %s" label error
 
 let test_art_json () =
   let json = Model.art_json ~object_base_url:"https://objects.example/bucket/" art in
@@ -387,6 +404,101 @@ let test_memory_database () =
         && (List.hd value.entries).composition_object_key = None
     | _ -> false)
 
+let test_memory_art_context_and_rarity () =
+  let character = picture_art "event" "character" in
+  let sibling = picture_art "event#1$1" "character" in
+  let sibling_without_name = picture_art "event#2$2" "character" in
+  let similarly_named = picture_art "eventual#1$1" "character" in
+  let other_group =
+    Model.{ id = "other"; name = "Other"; group_type = "major_event" }
+  in
+  let other_story =
+    Model.
+      {
+        id = "other-story";
+        group_id = "other";
+        tag = "after";
+        tag_text = "After";
+        code = "S2";
+        name = "Other story";
+        info = "";
+        art_references =
+          [
+            story_reference;
+            art_reference "character" "event" [ "安洁莉娜" ];
+            art_reference "character" "event" [ "Angelina"; "安洁莉娜" ];
+            art_reference "character" "event#1$1" [ "安洁莉娜（异格）" ];
+          ];
+      }
+  in
+  let snapshot : Database.snapshot =
+    {
+      Database.empty_snapshot with
+      arts =
+        [
+          illustration_art;
+          alternate_illustration_art;
+          third_illustration_art;
+          fourth_illustration_art;
+          character;
+          sibling;
+          sibling_without_name;
+          similarly_named;
+        ];
+      story_groups = [ ("CN", [ story_group; other_group ]) ];
+      stories = [ ("CN", [ story; other_story ]) ];
+    }
+  in
+  let database = Database.memory snapshot in
+  let group =
+    Lwt_main.run (Database.story_group database "CN" "group")
+    |> require_ok "memory rarity group"
+  in
+  Alcotest.(check bool)
+    "group preview excludes art shared by another group" true
+    (not
+       (List.exists
+          (fun (reference : Model.art_reference) ->
+            String.equal reference.art_id "illustration")
+          group.preview_art_references));
+  let stories =
+    Lwt_main.run (Database.stories_by_group database "CN" "group")
+    |> require_ok "memory rarity stories"
+  in
+  Alcotest.(check bool)
+    "story preview excludes art shared by another story" true
+    (match stories with
+    | summary :: _ ->
+        not
+          (List.exists
+             (fun (reference : Model.art_reference) ->
+               String.equal reference.art_id "illustration")
+             summary.preview_art_references)
+    | [] -> false);
+  let context =
+    Lwt_main.run (Database.art_context database "CN" "character" "event")
+    |> require_ok "memory art context"
+  in
+  Alcotest.(check (list string))
+    "localized names preserve first occurrence" [ "安洁莉娜"; "Angelina" ]
+    context.names;
+  Alcotest.(check (list string))
+    "siblings use an exact hash boundary" [ "event#1$1"; "event#2$2" ]
+    (List.map (fun (sibling : Model.art_sibling) -> sibling.art_id) context.siblings);
+  Alcotest.(check (list string))
+    "duplicate references produce one occurrence" [ "other-story" ]
+    (List.map
+       (fun (occurrence : Model.art_occurrence) -> occurrence.story_id)
+       context.occurrences);
+  Alcotest.(check bool)
+    "missing exact art returns not found" true
+    (match
+       Lwt_main.run
+         (Database.art_context database "CN" "character" "missing")
+     with
+    | Error `Not_found -> true
+    | _ -> false)
+
 (* This is a reader fixture, not a copy of the updater-owned production schema. *)
 let reader_fixture_schema =
   {|
@@ -515,14 +627,21 @@ let sqlite_rows =
       ('fourth', 'image',
        'ART/art-v1/composition/image/fourth.png', 44, 1920, 1080),
       ('background', 'background',
-       'ART/art-v1/composition/background/background.png', 44, 1920, 1080);
+       'ART/art-v1/composition/background/background.png', 44, 1920, 1080),
+      ('event#1$1', 'character',
+       'ART/art-v1/composition/character/event#1$1.png', 44, 1000, 1000),
+      ('event#2$2', 'character',
+       'ART/art-v1/composition/character/event#2$2.png', 44, 1000, 1000),
+      ('eventual#1$1', 'character',
+       'ART/art-v1/composition/character/eventual#1$1.png', 44, 1000, 1000);
     INSERT INTO source_arts
       VALUES ('source', 'character', 'body', '1',
               'ART/art-v1/source/character/source.png', 43, 11, 21);
     INSERT INTO art_source_refs VALUES ('character', 'event', 0, 'source');
     INSERT INTO story_groups VALUES
       ('CN', 'group', 'Group', 'main_story', 0),
-      ('CN', 'empty', 'Empty group', 'other', 1);
+      ('CN', 'other', 'Other', 'major_event', 1),
+      ('CN', 'empty', 'Empty group', 'other', 2);
     INSERT INTO stories
       VALUES ('CN', 'story', 'group', 'before', 'Before', 'S1', 'Story', 'Info', 0);
     INSERT INTO stories
@@ -531,6 +650,9 @@ let sqlite_rows =
     INSERT INTO stories
       VALUES ('CN', 'background-only', 'group', 'after', 'After', 'S3',
               'Background story', 'Background info', 2);
+    INSERT INTO stories
+      VALUES ('CN', 'other-story', 'other', 'after', 'After', 'OS1',
+              'Other story', 'Other info', 0);
     INSERT INTO story_art_references
       VALUES
         ('CN', 'story', 0, 'background', 'picture', 'background', NULL, NULL,
@@ -546,7 +668,15 @@ let sqlite_rows =
         ('CN', 'aaa-later', 0, 'illustration', 'picture', 'image', 'Title', NULL,
          '["Alias"]'),
         ('CN', 'background-only', 0, 'background', 'picture', 'background', NULL,
-         NULL, '[]');
+         NULL, '[]'),
+        ('CN', 'other-story', 0, 'illustration', 'picture', 'image', 'Title',
+         NULL, '[]'),
+        ('CN', 'other-story', 1, 'event', 'character', 'character', NULL, NULL,
+         '["安洁莉娜"]'),
+        ('CN', 'other-story', 2, 'event', 'character', 'character', NULL, NULL,
+         '["Angelina","安洁莉娜"]'),
+        ('CN', 'other-story', 3, 'event#1$1', 'character', 'character', NULL,
+         NULL, '["安洁莉娜（异格）"]');
     INSERT INTO galleries VALUES ('CN', 'gallery', 'Gallery', 'Description');
     INSERT INTO gallery_entries
       VALUES ('CN', 'gallery', 0, 'entry', 'Entry', 'Entry description',
@@ -571,11 +701,6 @@ let with_sqlite_database callback =
             (fun () -> callback database)
       | Error error -> Alcotest.failf "cannot open SQLite fixture: %s" error)
 
-let require_ok label = function
-  | Ok value -> value
-  | Error `Not_found -> Alcotest.failf "%s unexpectedly returned not found" label
-  | Error (`Unavailable error) -> Alcotest.failf "%s unavailable: %s" label error
-
 let test_sqlite_database () =
   with_sqlite_database (fun database ->
       Lwt_main.run (Database.health database) |> require_ok "health";
@@ -597,7 +722,7 @@ let test_sqlite_database () =
         Lwt_main.run (Database.story_groups database "CN") |> require_ok "story groups"
       in
       Alcotest.(check (list string))
-        "story group IDs" [ "group"; "empty" ]
+        "story group IDs" [ "group"; "other"; "empty" ]
         (List.map
            (fun (summary : Model.story_group_summary) -> summary.group.id)
            groups);
@@ -617,6 +742,16 @@ let test_sqlite_database () =
               (fun (reference : Model.art_reference) -> reference.category)
               preview_art_references
         | _ -> []);
+      Alcotest.(check bool)
+        "group preview prioritizes illustrations unique to its group" true
+        (match groups with
+        | { preview_art_references; _ } :: _ ->
+            not
+              (List.exists
+                 (fun (reference : Model.art_reference) ->
+                   String.equal reference.art_id "illustration")
+                 preview_art_references)
+        | _ -> false);
 
       let stories =
         Lwt_main.run (Database.stories_by_group database "CN" "group")
@@ -646,6 +781,16 @@ let test_sqlite_database () =
         (match stories with
         | summary :: _ -> List.length summary.preview_art_references
         | [] -> 0);
+      Alcotest.(check bool)
+        "story preview prioritizes illustrations unique to its story" true
+        (match stories with
+        | summary :: _ ->
+            not
+              (List.exists
+                 (fun (reference : Model.art_reference) ->
+                   String.equal reference.art_id "illustration")
+                 summary.preview_art_references)
+        | [] -> false);
       Alcotest.(check (list string))
         "existing empty story group" []
         (Lwt_main.run (Database.stories_by_group database "CN" "empty")
@@ -669,6 +814,17 @@ let test_sqlite_database () =
         [ "background"; "illustration"; "alternate"; "third"; "fourth" ]
         (List.map (fun (reference : Model.art_reference) -> reference.art_id)
            group_detail.art_references);
+      Alcotest.(check (list string))
+        "group detail uses the rarity-ranked index previews"
+        (match groups with
+        | summary :: _ ->
+            List.map
+              (fun (reference : Model.art_reference) -> reference.art_id)
+              summary.preview_art_references
+        | [] -> [])
+        (List.map
+           (fun (reference : Model.art_reference) -> reference.art_id)
+           group_detail.preview_art_references);
       Alcotest.(check bool)
         "empty group detail"
         true
@@ -717,9 +873,64 @@ let test_sqlite_database () =
       Alcotest.(check (option string))
         "gallery entry joined composition"
         (Some "ART/art-v1/composition/character/event.png")
-        (List.hd gallery.entries).composition_object_key)
+        (List.hd gallery.entries).composition_object_key;
+
+      let context =
+        Lwt_main.run (Database.art_context database "CN" "character" "event")
+        |> require_ok "art context"
+      in
+      Alcotest.(check (list string))
+        "context names are localized and deduplicated"
+        [ "安洁莉娜"; "Angelina" ] context.names;
+      Alcotest.(check (list string))
+        "context siblings use exact prefix boundary"
+        [ "event#1$1"; "event#2$2" ]
+        (List.map
+           (fun (sibling : Model.art_sibling) -> sibling.art_id)
+           context.siblings);
+      Alcotest.(check (list string))
+        "context occurrences are distinct by story" [ "other-story" ]
+        (List.map
+           (fun (occurrence : Model.art_occurrence) -> occurrence.story_id)
+           context.occurrences);
+      let image_context =
+        Lwt_main.run
+          (Database.art_context database "CN" "image" "illustration")
+        |> require_ok "image context"
+      in
+      Alcotest.(check bool)
+        "non-character context has no siblings" true
+        (image_context.siblings = []);
+      Alcotest.(check bool)
+        "missing context art" true
+        (match
+           Lwt_main.run
+             (Database.art_context database "CN" "character" "missing")
+         with
+        | Error `Not_found -> true
+        | _ -> false))
 
 let test_http_story_listing_and_cors () =
+  let context_group =
+    Model.{ id = "context"; name = "Context"; group_type = "major_event" }
+  in
+  let context_story =
+    Model.
+      {
+        id = "context-story";
+        group_id = "context";
+        tag = "after";
+        tag_text = "After";
+        code = "C1";
+        name = "Context story";
+        info = "";
+        art_references =
+          [
+            art_reference "character" "event" [ "安洁莉娜" ];
+            art_reference "character" "event#1$1" [ "安洁莉娜（异格）" ];
+          ];
+      }
+  in
   let snapshot : Database.snapshot =
     { Database.empty_snapshot with
       arts =
@@ -730,10 +941,16 @@ let test_http_story_listing_and_cors () =
           third_illustration_art;
           fourth_illustration_art;
           background_art;
+          picture_art "event#1$1" "character";
         ];
       source_arts = [ source_art ];
-      story_groups = [ ("CN", [ story_group; empty_story_group ]) ];
-      stories = [ ("CN", [ story; later_story; background_only_story ]) ];
+      story_groups =
+        [ ("CN", [ story_group; context_group; empty_story_group ]) ];
+      stories =
+        [
+          ( "CN",
+            [ story; later_story; background_only_story; context_story ] );
+        ];
     }
   in
   let handler =
@@ -789,6 +1006,33 @@ let test_http_story_listing_and_cors () =
     "art metadata has direct thumbnail object-store URL"
     "https://objects.example/bucket/ART/26-08-07-10-51-39_26e0fc/thumbnail/character/event.webp"
     (art_metadata_json |> member "thumbnailContentUrl" |> to_string);
+
+  let art_context =
+    Dream.test handler
+      (Dream.request ~method_:`GET
+         ~target:"/api/CN/arts/character/event/context" "")
+  in
+  Alcotest.(check int) "art context status" 200
+    (Dream.status art_context |> Dream.status_to_int);
+  let art_context_json =
+    Lwt_main.run (Dream.body art_context) |> Yojson.Safe.from_string
+  in
+  Alcotest.(check (list string))
+    "art context names" [ "安洁莉娜" ]
+    (art_context_json |> member "names" |> to_list |> filter_string);
+  Alcotest.(check string)
+    "art context sibling" "event#1$1"
+    (art_context_json |> member "siblings" |> to_list |> List.hd
+    |> member "artID" |> to_string);
+  Alcotest.(check bool)
+    "art context sibling URL is direct" true
+    (art_context_json |> member "siblings" |> to_list |> List.hd
+    |> member "thumbnailContentUrl" |> to_string
+    |> String.starts_with ~prefix:"https://objects.example/bucket/ART/");
+  Alcotest.(check string)
+    "art occurrence group is routable" "context"
+    (art_context_json |> member "occurrences" |> to_list |> List.hd
+    |> member "groupID" |> to_string);
 
   let source_metadata =
     Dream.test handler
@@ -988,6 +1232,8 @@ let () =
       ( "database",
         [
           Alcotest.test_case "memory lookup" `Quick test_memory_database;
+          Alcotest.test_case "memory art context and rarity" `Quick
+            test_memory_art_context_and_rarity;
           Alcotest.test_case "SQLite queries" `Quick test_sqlite_database;
         ] );
       ( "http",

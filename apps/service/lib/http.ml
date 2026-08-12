@@ -58,6 +58,11 @@ let routes ~database ~object_base_url =
           >>= respond (fun () -> `Assoc [ ("status", `String "ok") ]));
       Dream.get "/api/arts/:category/:id" art;
       Dream.get "/api/source-arts/:id" source_art;
+      Dream.get "/api/:locale/arts/:category/:id/context" (fun request ->
+          with_locale request (fun locale ->
+              Database.art_context database locale
+                (Dream.param request "category") (Dream.param request "id")
+              >>= respond (Model.art_context_json ~object_base_url)));
       Dream.get "/api/:locale/story-groups" (fun request ->
           with_locale request (fun locale ->
               Database.story_groups database locale
