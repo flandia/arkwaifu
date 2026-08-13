@@ -1,6 +1,6 @@
 import { use } from "react";
 import { useLocation, useParams } from "react-router";
-import { getGalleries, getGalleryData, type GallerySummary } from "../api";
+import { getGalleries, getGallery, type GallerySummary } from "../api";
 import { useUi, useUiLanguage } from "../i18n";
 import { localeLanguageTag, requiredLocale, TransitionLink, useCategoryLabel } from "../navigation";
 import {
@@ -105,7 +105,8 @@ export function GalleryDetailPage() {
   const params = useParams();
   const locale = requiredLocale(params.locale);
   const galleryID = params.galleryID ?? "";
-  const [gallery, entries] = use(getGalleryData(locale, galleryID));
+  const gallery = use(getGallery(locale, galleryID));
+  const entries = gallery.entries;
   const location = useLocation();
   const language = localeLanguageTag(locale);
   const identities = new Map<string, number>();

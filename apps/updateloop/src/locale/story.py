@@ -130,7 +130,7 @@ def _integrated_strategies_groups(
 
     # Monthly-squad scripts are chat logs with no indexed AVG artwork. Claim
     # their catalog paths so removing that category does not republish them as
-    # unclassified story files.
+    # remaining story files.
     for detail in details.values():
         chats = _mapping(_at(detail, "archiveComp", "chat", "chat"))
         for squad in _values(_at(detail, "monthSquad")):

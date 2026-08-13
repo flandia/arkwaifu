@@ -109,7 +109,7 @@ def _read_versions(path: Path, current_version: str) -> tuple[str, ...]:
     return versions
 
 
-class LiveWindowsVersionHistory:
+class WindowsVersionHistory:
     """Resolve the ordered official Windows versions needed by a complete run."""
 
     def __init__(
@@ -120,6 +120,7 @@ class LiveWindowsVersionHistory:
         cache: UpstreamCache,
         transport: httpx.AsyncBaseTransport | None = None,
     ) -> None:
+        """Configure Windows version discovery through GitHub and the upstream cache."""
         self._api_url = github_api_url.rstrip("/")
         self._raw_url = github_raw_url.rstrip("/")
         self._token = github_token

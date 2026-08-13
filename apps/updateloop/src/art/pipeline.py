@@ -337,10 +337,7 @@ def merge_art_manifests(
 def write_art_manifest(manifest: ArtManifest, destination: Path) -> None:
     """Persist one cache manifest and its ordinal PNG files.
 
-    Ordinal names keep the cache layout independent from upstream identifiers;
-    ``manifest.json`` is the only index and is written after all images. A
-    rendered cache entry belongs to exactly one upstream version, so record
-    origins inherit ``upstream_version`` instead of being repeated per record.
+    Ordinal names keep the cache layout independent from upstream identifiers. The function writes ``manifest.json`` after every image. Each cache entry belongs to one upstream version, so records inherit the manifest's ``upstream_version``.
     """
     processed = destination / "processed"
     processed.mkdir(parents=True, exist_ok=True)
@@ -517,8 +514,7 @@ def _validate_cached_relationships(manifest: ArtManifest) -> None:
 def read_art_manifest(source: Path) -> ArtManifest:
     """Load a cached manifest and decode every referenced PNG.
 
-    This validates the updater's cache format and source-art relationships. It
-    deliberately does not impose additional assumptions on the upstream schema.
+    The function validates the updater's cache format and source-art relationships without imposing extra assumptions on the upstream schema.
     """
     try:
         return _read_art_manifest(source)

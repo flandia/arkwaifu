@@ -7,7 +7,7 @@ from pathlib import Path
 import httpx
 import pytest
 
-from arkwaifu_updateloop.upstream.art_history import LiveWindowsVersionHistory
+from arkwaifu_updateloop.upstream.art_history import WindowsVersionHistory
 from arkwaifu_updateloop.upstream.cache import UpstreamCache
 
 _CURRENT = "26-08-07-10-51-39_26e0fc"
@@ -20,8 +20,8 @@ def _history(
     respond,
     *,
     token: str | None = "github-secret",
-) -> LiveWindowsVersionHistory:
-    return LiveWindowsVersionHistory(
+) -> WindowsVersionHistory:
+    return WindowsVersionHistory(
         "https://api.github.test",
         "https://raw.github.test",
         token,

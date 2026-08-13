@@ -1,185 +1,227 @@
-(** JSON-facing records served by the Arkwaifu HTTP module. *)
+(** Domain records and encoders for public web responses. *)
 
-(** Metadata of one PNG object stored outside the SQLite database. *)
-type object_metadata = {
-  object_key : string;
-  byte_size : int64;
-  width : int;
-  height : int;
+type image_metadata = {
+  object_key : string;  (** Bucket-relative object key. *)
+  byte_size : int64;  (** Object size in bytes. *)
+  width : int;  (** Image width in pixels. *)
+  height : int;  (** Image height in pixels. *)
 }
+(** Metadata for one Portable Network Graphics (PNG) object in object storage.
+*)
 
-(** One final art and its composition object. *)
 type art = {
-  id : string;
-  category : string;
-  image : object_metadata;
-  source_art_ids : string list;
+  id : string;  (** Logical artwork identifier within [category]. *)
+  category : string;  (** Storage and routing category. *)
+  image : image_metadata;  (** Composed PNG object. *)
+  source_art_ids : string list;  (** Source layers in composition order. *)
 }
+(** One composed artwork and its source-layer identifiers. *)
 
-(** One retained character layer and its source object. *)
 type source_art = {
-  id : string;
-  character_id : string;
-  role : string;
-  variant : string;
-  image : object_metadata;
+  id : string;  (** Logical source-layer identifier. *)
+  character_id : string;  (** Upstream character identifier. *)
+  role : string;  (** Layer role such as [body], [face], or [whole_body]. *)
+  variant : string;  (** Upstream layer variant. *)
+  image : image_metadata;  (** Source PNG object. *)
 }
+(** One retained source layer used to compose character artwork. *)
 
-(** One art indexed by [arts] but absent from every story and gallery. *)
-type unclassified_art = {
-  id : string;
-  category : string;
-  composition_object_key : string;
+type unreferenced_art = {
+  id : string;  (** Logical artwork identifier within [category]. *)
+  category : string;  (** Storage and routing category. *)
+  composition_object_key : string;  (** Composed PNG object key. *)
 }
+(** One composed artwork referenced by neither a story nor a gallery. *)
 
-(** One picture or character referenced by a story. The composition key is
-    present only when the logical reference resolves against [arts]. *)
-type art_reference = {
-  art_id : string;
-  kind : string;
-  category : string;
-  title : string option;
-  subtitle : string option;
-  names : string list;
+type story_art_reference = {
+  art_id : string;  (** Logical artwork identifier within [category]. *)
+  kind : string;  (** Upstream reference kind, [picture] or [character]. *)
+  category : string;  (** Storage and routing category. *)
+  title : string option;  (** Optional localized title. *)
+  subtitle : string option;  (** Optional localized subtitle. *)
+  names : string list;  (** Localized character names in source order. *)
   composition_object_key : string option;
+      (** Composed PNG key, or [None] when the artwork is unavailable. *)
 }
+(** One story artwork reference. *)
 
-(** One localized story and its ordered art references. *)
 type story = {
-  id : string;
-  group_id : string;
-  tag : string;
-  tag_text : string;
-  code : string;
-  name : string;
-  info : string;
-  art_references : art_reference list;
+  id : string;  (** Logical story identifier within [group_id]. *)
+  group_id : string;  (** Parent story-group identifier. *)
+  tag : string;  (** Position tag: [before], [after], or [interlude]. *)
+  tag_text : string;  (** Localized position label. *)
+  code : string;  (** Localized display code. *)
+  name : string;  (** Localized story name. *)
+  info : string;  (** Localized story description. *)
+  art_references : story_art_reference list;  (** References in source order. *)
 }
+(** One localized story with ordered artwork references. *)
 
-(** A summary of one ordered story group. [group_type] is one of [main_story],
-    [major_event], [minor_event], [operator_record], [integrated_strategies],
-    [reclamation_algorithm], or [others], as enforced by the updater-owned
-    SQLite schema. [integrated_strategies] denotes official ending stories
-    grouped by topic. [reclamation_algorithm] groups only stories with art
-    references. *)
 type story_group = {
-  id : string;
-  name : string;
+  id : string;  (** Logical group identifier. *)
+  name : string;  (** Localized group name. *)
   group_type : string;
+      (** One of [main_story], [major_event], [minor_event], [operator_record],
+          [integrated_strategies], [reclamation_algorithm], or [others]. *)
 }
+(** One ordered story group. *)
 
-(** A story list row with up to three stable, usable card backgrounds. The
-    representative is the first preview for backward compatibility. *)
 type story_summary = {
   story : story;
-  representative_art_reference : art_reference option;
-  preview_art_references : art_reference list;
+      (** Story metadata with an empty internal [art_references] list. *)
+  representative_art_reference : story_art_reference option;
+      (** First preview, or [None] when no preview is available. *)
+  preview_art_references : story_art_reference list;
+      (** Up to three available card backgrounds in stable ranked order. *)
 }
+(** One story prepared for a group listing. *)
 
-(** A story-group list row with up to three stable, usable card backgrounds. The
-    representative is the first preview for backward compatibility. *)
 type story_group_summary = {
-  group : story_group;
-  representative_art_reference : art_reference option;
-  preview_art_references : art_reference list;
+  group : story_group;  (** Group metadata. *)
+  representative_art_reference : story_art_reference option;
+      (** First preview, or [None] when no preview is available. *)
+  preview_art_references : story_art_reference list;
+      (** Up to three available card backgrounds in stable ranked order. *)
 }
+(** One story group prepared for an index listing. *)
 
-(** One group, its previews, and every available art reference in it. *)
 type story_group_detail = {
-  group : story_group;
-  representative_art_reference : art_reference option;
-  preview_art_references : art_reference list;
-  art_references : art_reference list;
+  group : story_group;  (** Group metadata. *)
+  representative_art_reference : story_art_reference option;
+      (** First preview, or [None] when no preview is available. *)
+  preview_art_references : story_art_reference list;
+      (** Up to three available card backgrounds in stable ranked order. *)
+  art_references : story_art_reference list;
+      (** Available references in stored order, deduplicated by category and ID.
+      *)
 }
+(** One story group with artwork referenced by its stories. *)
 
-(** One ordered category-qualified art entry in a gallery. The composition key
-    is absent when the logical reference does not resolve against [arts]. *)
 type gallery_entry = {
-  id : string;
-  position : int;
-  name : string;
-  description : string;
-  art_id : string;
-  category : string;
+  id : string;  (** Logical entry identifier within its gallery. *)
+  position : int;  (** Nonnegative stored position. *)
+  name : string;  (** Localized entry name. *)
+  description : string;  (** Localized entry description. *)
+  art_id : string;  (** Referenced artwork identifier within [category]. *)
+  category : string;  (** Referenced artwork category. *)
   composition_object_key : string option;
+      (** Composed PNG key, or [None] when the artwork is unavailable. *)
 }
+(** One ordered gallery entry. *)
 
-(** One localized gallery. Summaries contain an empty [entries] list. *)
 type gallery = {
-  id : string;
-  name : string;
-  description : string;
-  entries : gallery_entry list;
+  id : string;  (** Logical gallery identifier. *)
+  name : string;  (** Localized gallery name. *)
+  description : string;  (** Localized gallery description. *)
+  entries : gallery_entry list;  (** Entries in stored position order. *)
 }
+(** One localized gallery. *)
 
-(** One gallery list row with up to three available composition keys used to
-    derive direct thumbnail object-store URLs. *)
 type gallery_summary = {
-  gallery : gallery;
+  gallery : gallery;  (** Gallery metadata with an empty [entries] list. *)
   preview_composition_object_keys : string list;
+      (** Up to three available composition keys in stable ranked order. *)
 }
+(** One gallery prepared for an index listing. *)
 
-(** One available character variant related to the selected art. *)
 type art_sibling = {
-  art_id : string;
-  names : string list;
-  composition_object_key : string;
+  art_id : string;  (** Related artwork identifier. *)
+  names : string list;  (** Deduplicated localized names in source order. *)
+  composition_object_key : string;  (** Composed PNG object key. *)
 }
+(** One available character variant related to selected artwork. *)
 
-(** One localized story occurrence of an art. *)
 type art_occurrence = {
-  group_id : string;
-  group_name : string;
-  group_type : string;
-  story_id : string;
-  story_name : string;
-  story_code : string;
-  story_tag_text : string;
+  group_id : string;  (** Parent group identifier. *)
+  group_name : string;  (** Localized parent group name. *)
+  group_type : string;  (** Parent group navigation category. *)
+  story_id : string;  (** Story identifier. *)
+  story_name : string;  (** Localized story name. *)
+  story_code : string;  (** Localized story code. *)
+  story_tag_text : string;  (** Localized story-position label. *)
 }
+(** One localized story occurrence of selected artwork. *)
 
-(** Localized names, related character variants, and story occurrences for an
-    available art. *)
 type art_context = {
-  names : string list;
-  siblings : art_sibling list;
-  occurrences : art_occurrence list;
+  names : string list;  (** Deduplicated names in first-occurrence order. *)
+  siblings : art_sibling list;  (** Related character variants by artwork ID. *)
+  occurrences : art_occurrence list;  (** Distinct stories in stored order. *)
 }
+(** Localized context for one available artwork. *)
 
-(** Build the public URL of an object key, escaping every path segment. *)
 val content_url : object_base_url:string -> string -> string
+(** [content_url ~object_base_url object_key] builds a public object URL. It
+    removes one trailing slash from the base and percent-encodes each key path
+    segment. *)
 
-(** Encode one final art record. *)
 val art_json : object_base_url:string -> art -> Yojson.Safe.t
+(** [art_json ~object_base_url art] encodes composed-art metadata, its direct
+    PNG URL, its direct thumbnail URL, and source-layer IDs.
 
-(** Encode one original source art record. *)
+    @raise Invalid_argument
+      if the composition object key cannot identify its thumbnail. *)
+
 val source_art_json : object_base_url:string -> source_art -> Yojson.Safe.t
+(** [source_art_json ~object_base_url art] encodes source-layer metadata and its
+    direct PNG URL. *)
 
-(** Encode one compact unclassified-art card. *)
-val unclassified_art_json :
-  object_base_url:string -> unclassified_art -> Yojson.Safe.t
+val unreferenced_art_json :
+  object_base_url:string -> unreferenced_art -> Yojson.Safe.t
+(** [unreferenced_art_json ~object_base_url art] encodes a compact artwork card
+    with a direct thumbnail URL.
 
-(** Encode one story with all art references. *)
+    @raise Invalid_argument
+      if the composition object key cannot identify its thumbnail. *)
+
 val story_json : object_base_url:string -> story -> Yojson.Safe.t
+(** [story_json ~object_base_url story] encodes story metadata and every ordered
+    artwork reference. Unavailable references have a null thumbnail URL.
 
-(** Encode one story list row. [artReferences] is present and empty because
-    summary queries do not load detail references. *)
+    @raise Invalid_argument
+      if an available composition object key cannot identify its thumbnail. *)
+
 val story_summary_json :
   object_base_url:string -> story_summary -> Yojson.Safe.t
+(** [story_summary_json ~object_base_url summary] encodes story metadata and
+    previews. It includes an empty [artReferences] list for compatibility.
 
-(** Encode one story-group list row. *)
+    @raise Invalid_argument
+      if an available composition object key cannot identify its thumbnail. *)
+
 val story_group_summary_json :
   object_base_url:string -> story_group_summary -> Yojson.Safe.t
+(** [story_group_summary_json ~object_base_url summary] encodes group metadata
+    and previews.
 
-(** Encode one story group with all available, deduplicated art references. *)
+    @raise Invalid_argument
+      if an available composition object key cannot identify its thumbnail. *)
+
 val story_group_detail_json :
   object_base_url:string -> story_group_detail -> Yojson.Safe.t
+(** [story_group_detail_json ~object_base_url detail] encodes group metadata,
+    previews, and all available deduplicated artwork references.
 
-(** Encode one gallery with its entries. *)
+    @raise Invalid_argument
+      if an available composition object key cannot identify its thumbnail. *)
+
 val gallery_json : object_base_url:string -> gallery -> Yojson.Safe.t
+(** [gallery_json ~object_base_url gallery] encodes gallery metadata and every
+    ordered entry. Unavailable entries have a null thumbnail URL.
 
-(** Encode one gallery summary with direct thumbnail preview URLs. *)
+    @raise Invalid_argument
+      if an available composition object key cannot identify its thumbnail. *)
+
 val gallery_summary_json :
   object_base_url:string -> gallery_summary -> Yojson.Safe.t
+(** [gallery_summary_json ~object_base_url summary] encodes gallery metadata and
+    direct preview thumbnail URLs.
 
-(** Encode localized context for one art. *)
+    @raise Invalid_argument
+      if a composition object key cannot identify its thumbnail. *)
+
 val art_context_json : object_base_url:string -> art_context -> Yojson.Safe.t
+(** [art_context_json ~object_base_url context] encodes localized names,
+    character siblings, and story occurrences with direct sibling thumbnails.
+
+    @raise Invalid_argument
+      if a sibling composition object key cannot identify its thumbnail. *)

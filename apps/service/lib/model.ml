@@ -1,4 +1,4 @@
-type object_metadata = {
+type image_metadata = {
   object_key : string;
   byte_size : int64;
   width : int;
@@ -8,7 +8,7 @@ type object_metadata = {
 type art = {
   id : string;
   category : string;
-  image : object_metadata;
+  image : image_metadata;
   source_art_ids : string list;
 }
 
@@ -17,16 +17,16 @@ type source_art = {
   character_id : string;
   role : string;
   variant : string;
-  image : object_metadata;
+  image : image_metadata;
 }
 
-type unclassified_art = {
+type unreferenced_art = {
   id : string;
   category : string;
   composition_object_key : string;
 }
 
-type art_reference = {
+type story_art_reference = {
   art_id : string;
   kind : string;
   category : string;
@@ -44,32 +44,28 @@ type story = {
   code : string;
   name : string;
   info : string;
-  art_references : art_reference list;
+  art_references : story_art_reference list;
 }
 
-type story_group = {
-  id : string;
-  name : string;
-  group_type : string;
-}
+type story_group = { id : string; name : string; group_type : string }
 
 type story_summary = {
   story : story;
-  representative_art_reference : art_reference option;
-  preview_art_references : art_reference list;
+  representative_art_reference : story_art_reference option;
+  preview_art_references : story_art_reference list;
 }
 
 type story_group_summary = {
   group : story_group;
-  representative_art_reference : art_reference option;
-  preview_art_references : art_reference list;
+  representative_art_reference : story_art_reference option;
+  preview_art_references : story_art_reference list;
 }
 
 type story_group_detail = {
   group : story_group;
-  representative_art_reference : art_reference option;
-  preview_art_references : art_reference list;
-  art_references : art_reference list;
+  representative_art_reference : story_art_reference option;
+  preview_art_references : story_art_reference list;
+  art_references : story_art_reference list;
 }
 
 type gallery_entry = {
@@ -144,7 +140,7 @@ let thumbnail_content_url ~object_base_url object_key =
 let option_string = function None -> `Null | Some value -> `String value
 let string_list values = `List (List.map (fun value -> `String value) values)
 
-let object_json ~object_base_url (image : object_metadata) =
+let image_metadata_json ~object_base_url (image : image_metadata) =
   `Assoc
     [
       ("byteSize", `Intlit (Int64.to_string image.byte_size));
@@ -160,7 +156,7 @@ let art_json ~object_base_url (art : art) =
       ("category", `String art.category);
       ( "thumbnailContentUrl",
         `String (thumbnail_content_url ~object_base_url art.image.object_key) );
-      ("image", object_json ~object_base_url art.image);
+      ("image", image_metadata_json ~object_base_url art.image);
       ("sourceArtIDs", string_list art.source_art_ids);
     ]
 
@@ -171,10 +167,10 @@ let source_art_json ~object_base_url (source : source_art) =
       ("characterID", `String source.character_id);
       ("role", `String source.role);
       ("variant", `String source.variant);
-      ("image", object_json ~object_base_url source.image);
+      ("image", image_metadata_json ~object_base_url source.image);
     ]
 
-let unclassified_art_json ~object_base_url (art : unclassified_art) =
+let unreferenced_art_json ~object_base_url (art : unreferenced_art) =
   `Assoc
     [
       ("id", `String art.id);
@@ -189,7 +185,8 @@ let option_thumbnail_content_url ~object_base_url = function
   | Some object_key ->
       `String (thumbnail_content_url ~object_base_url object_key)
 
-let reference_json ~object_base_url (reference : art_reference) =
+let story_art_reference_json ~object_base_url (reference : story_art_reference)
+    =
   `Assoc
     [
       ("artID", `String reference.art_id);
@@ -203,12 +200,12 @@ let reference_json ~object_base_url (reference : art_reference) =
           reference.composition_object_key );
     ]
 
-let option_reference ~object_base_url = function
+let option_story_art_reference ~object_base_url = function
   | None -> `Null
-  | Some reference -> reference_json ~object_base_url reference
+  | Some reference -> story_art_reference_json ~object_base_url reference
 
-let reference_list ~object_base_url references =
-  `List (List.map (reference_json ~object_base_url) references)
+let story_art_reference_list ~object_base_url references =
+  `List (List.map (story_art_reference_json ~object_base_url) references)
 
 let story_fields ~object_base_url (story : story) =
   [
@@ -219,7 +216,8 @@ let story_fields ~object_base_url (story : story) =
     ("code", `String story.code);
     ("name", `String story.name);
     ("info", `String story.info);
-    ("artReferences", reference_list ~object_base_url story.art_references);
+    ( "artReferences",
+      story_art_reference_list ~object_base_url story.art_references );
   ]
 
 let story_json ~object_base_url story =
@@ -230,10 +228,11 @@ let story_summary_json ~object_base_url (summary : story_summary) =
     (story_fields ~object_base_url summary.story
     @ [
         ( "representativeArtReference",
-          option_reference ~object_base_url summary.representative_art_reference
-        );
+          option_story_art_reference ~object_base_url
+            summary.representative_art_reference );
         ( "previewArtReferences",
-          reference_list ~object_base_url summary.preview_art_references );
+          story_art_reference_list ~object_base_url
+            summary.preview_art_references );
       ])
 
 let story_group_fields (group : story_group) =
@@ -248,10 +247,11 @@ let story_group_summary_json ~object_base_url (summary : story_group_summary) =
     (story_group_fields summary.group
     @ [
         ( "representativeArtReference",
-          option_reference ~object_base_url summary.representative_art_reference
-        );
+          option_story_art_reference ~object_base_url
+            summary.representative_art_reference );
         ( "previewArtReferences",
-          reference_list ~object_base_url summary.preview_art_references );
+          story_art_reference_list ~object_base_url
+            summary.preview_art_references );
       ])
 
 let story_group_detail_json ~object_base_url (detail : story_group_detail) =
@@ -259,11 +259,13 @@ let story_group_detail_json ~object_base_url (detail : story_group_detail) =
     (story_group_fields detail.group
     @ [
         ( "representativeArtReference",
-          option_reference ~object_base_url detail.representative_art_reference
-        );
+          option_story_art_reference ~object_base_url
+            detail.representative_art_reference );
         ( "previewArtReferences",
-          reference_list ~object_base_url detail.preview_art_references );
-        ("artReferences", reference_list ~object_base_url detail.art_references);
+          story_art_reference_list ~object_base_url
+            detail.preview_art_references );
+        ( "artReferences",
+          story_art_reference_list ~object_base_url detail.art_references );
       ])
 
 let gallery_entry_json ~object_base_url (entry : gallery_entry) =

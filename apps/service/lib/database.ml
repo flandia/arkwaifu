@@ -2,10 +2,7 @@
 
 open Lwt.Infix
 
-type error =
-  [ `Not_found
-  | `Unavailable of string
-  ]
+type error = [ `Not_found | `Unavailable of string ]
 
 type t = {
   close : unit -> unit Lwt.t;
@@ -13,7 +10,7 @@ type t = {
   health : unit -> (unit, error) result Lwt.t;
   art : string -> string -> (Model.art, error) result Lwt.t;
   source_art : string -> (Model.source_art, error) result Lwt.t;
-  unclassified_arts : unit -> (Model.unclassified_art list, error) result Lwt.t;
+  unreferenced_arts : unit -> (Model.unreferenced_art list, error) result Lwt.t;
   art_context :
     string -> string -> string -> (Model.art_context, error) result Lwt.t;
   story_groups : string -> (Model.story_group_summary list, error) result Lwt.t;
@@ -26,10 +23,10 @@ type t = {
   gallery : string -> string -> (Model.gallery, error) result Lwt.t;
 }
 
-let unique_references references =
+let unique_story_art_references references =
   let seen = Hashtbl.create (List.length references) in
   List.filter
-    (fun (reference : Model.art_reference) ->
+    (fun (reference : Model.story_art_reference) ->
       let key = (reference.category, reference.art_id) in
       if Hashtbl.mem seen key then false
       else (
@@ -64,7 +61,7 @@ let stable_score seed value =
   in
   Int64.rem score 2_147_483_647L
 
-let representative_reference = function
+let representative_story_art_reference = function
   | reference :: _ -> Some reference
   | [] -> None
 
@@ -136,7 +133,7 @@ module Query = struct
         WHERE source_art_id = ?
       |}
 
-  let unclassified_arts =
+  let unreferenced_arts =
     let row = t2 string (t2 string string) in
     (unit ->* row)
       {|
@@ -224,7 +221,7 @@ module Query = struct
                  reference.position
       |}
 
-  let optional_reference =
+  let optional_story_art_reference =
     t2 (option string)
       (t2 (option string)
          (t2 (option string)
@@ -232,7 +229,7 @@ module Query = struct
                (t2 (option string) (t2 (option string) (option string))))))
 
   let story_groups =
-    let row = t2 string (t2 string (t2 string optional_reference)) in
+    let row = t2 string (t2 string (t2 string optional_story_art_reference)) in
     (t2 string string ->* row)
       {|
         WITH candidate_references AS (
@@ -259,7 +256,7 @@ module Query = struct
           FROM candidate_references
           WHERE duplicate_rank = 1
           GROUP BY category, art_id
-        ), unique_references AS (
+        ), unique_story_art_references AS (
           SELECT reference.*, rarity.rarity_count,
                  MAX(CASE reference.category WHEN 'image' THEN 1 ELSE 0 END)
                    OVER (PARTITION BY group_id) AS has_image,
@@ -293,7 +290,7 @@ module Query = struct
                    ORDER BY rarity_count, shuffle_score, art_id, story_position,
                             reference_position
                  ) AS rank
-          FROM unique_references
+          FROM unique_story_art_references
           WHERE (has_image = 1 AND category = 'image')
              OR (has_image = 0 AND category = 'background')
         )
@@ -313,7 +310,9 @@ module Query = struct
       t2 string
         (t2 string
            (t2 string
-              (t2 string (t2 string (t2 string (t2 string optional_reference))))))
+              (t2 string
+                 (t2 string
+                    (t2 string (t2 string optional_story_art_reference))))))
     in
     (t2 (t2 string string) (t2 string (t2 string string)) ->* row)
       {|
@@ -340,7 +339,7 @@ module Query = struct
           FROM story_art_references
           WHERE locale = ? AND category IN ('image', 'background')
           GROUP BY category, art_id
-        ), unique_references AS (
+        ), unique_story_art_references AS (
           SELECT reference.*, rarity.rarity_count,
                  MAX(CASE reference.category WHEN 'image' THEN 1 ELSE 0 END)
                    OVER (PARTITION BY story_id) AS has_image,
@@ -373,7 +372,7 @@ module Query = struct
                    PARTITION BY story_id
                    ORDER BY rarity_count, shuffle_score, art_id, position
                  ) AS rank
-          FROM unique_references
+          FROM unique_story_art_references
           WHERE (has_image = 1 AND category = 'image')
              OR (has_image = 0 AND category = 'background')
         )
@@ -397,7 +396,7 @@ module Query = struct
       |}
 
   let story_group =
-    let row = t2 string (t2 string (t2 string optional_reference)) in
+    let row = t2 string (t2 string (t2 string optional_story_art_reference)) in
     (t2 (t2 string string) (t2 string string) ->* row)
       {|
         WITH group_references AS (
@@ -596,8 +595,8 @@ let sqlite_with_pool_observer ~on_acquire path =
                   image = { object_key; byte_size; width; height };
                 }
       in
-      let unclassified_arts () =
-        use (fun (module Db) -> Db.collect_list Query.unclassified_arts ())
+      let unreferenced_arts () =
+        use (fun (module Db) -> Db.collect_list Query.unreferenced_arts ())
         >|= Result.map (fun rows ->
             rows
             |> List.map (fun (category, (id, composition_object_key)) ->
@@ -612,7 +611,7 @@ let sqlite_with_pool_observer ~on_acquire path =
               | `String value -> Some value
               | _ -> None)
       in
-      let reference_from_columns
+      let story_art_reference_from_columns
           (art_id, (kind, (category, (title, (subtitle, (names, object_key))))))
           =
         match (art_id, kind, category) with
@@ -718,7 +717,7 @@ let sqlite_with_pool_observer ~on_acquire path =
           | (next_id, (_, (_, reference))) :: rest when String.equal id next_id
             ->
               let references =
-                match reference_from_columns reference with
+                match story_art_reference_from_columns reference with
                 | Some reference -> reference :: references
                 | None -> references
               in
@@ -729,20 +728,20 @@ let sqlite_with_pool_observer ~on_acquire path =
           | [] -> List.rev summaries
           | (id, (name, (group_type, reference))) :: rest ->
               let initial =
-                match reference_from_columns reference with
+                match story_art_reference_from_columns reference with
                 | Some reference -> [ reference ]
                 | None -> []
               in
               let references, remaining = gather id initial rest in
               let preview_art_references =
-                references |> unique_references |> List.take 3
+                references |> unique_story_art_references |> List.take 3
               in
               let summary =
                 Model.
                   {
                     group = { id; name; group_type };
                     representative_art_reference =
-                      representative_reference preview_art_references;
+                      representative_story_art_reference preview_art_references;
                     preview_art_references;
                   }
               in
@@ -775,7 +774,7 @@ let sqlite_with_pool_observer ~on_acquire path =
               | (next_id, (_, (_, (_, (_, (_, (_, reference))))))) :: rest
                 when String.equal id next_id ->
                   let references =
-                    match reference_from_columns reference with
+                    match story_art_reference_from_columns reference with
                     | Some reference -> reference :: references
                     | None -> references
                   in
@@ -789,13 +788,13 @@ let sqlite_with_pool_observer ~on_acquire path =
                     (tag, (tag_text, (code, (name, (info, reference))))) ) )
                 :: rest ->
                   let initial =
-                    match reference_from_columns reference with
+                    match story_art_reference_from_columns reference with
                     | Some reference -> [ reference ]
                     | None -> []
                   in
                   let references, remaining = gather id initial rest in
                   let preview_art_references =
-                    references |> unique_references |> List.take 3
+                    references |> unique_story_art_references |> List.take 3
                   in
                   let summary =
                     Model.
@@ -812,7 +811,8 @@ let sqlite_with_pool_observer ~on_acquire path =
                             art_references = [];
                           };
                         representative_art_reference =
-                          representative_reference preview_art_references;
+                          representative_story_art_reference
+                            preview_art_references;
                         preview_art_references;
                       }
                   in
@@ -842,15 +842,15 @@ let sqlite_with_pool_observer ~on_acquire path =
             let art_references =
               rows
               |> List.filter_map (fun (_, (_, (_, reference))) ->
-                  reference_from_columns reference)
-              |> unique_references
+                  story_art_reference_from_columns reference)
+              |> unique_story_art_references
             in
             Ok
               Model.
                 {
                   group = { id; name; group_type };
                   representative_art_reference =
-                    representative_reference preview_art_references;
+                    representative_story_art_reference preview_art_references;
                   preview_art_references;
                   art_references;
                 }
@@ -866,7 +866,7 @@ let sqlite_with_pool_observer ~on_acquire path =
             let art_references =
               List.filter_map
                 (fun (_, (_, (_, (_, (_, (_, reference)))))) ->
-                  reference_from_columns reference)
+                  story_art_reference_from_columns reference)
                 rows
             in
             Ok
@@ -969,7 +969,7 @@ let sqlite_with_pool_observer ~on_acquire path =
           health;
           art;
           source_art;
-          unclassified_arts;
+          unreferenced_arts;
           art_context;
           story_groups;
           stories_by_group;
@@ -1004,16 +1004,10 @@ let clean_database_cache path =
            || String.ends_with ~suffix:".sqlite3.part" name)
       then remove_if_exists (Filename.concat path name))
 
-type generation = {
-  database : t;
-  path : string;
-}
+type generation = { database : t; path : string }
 
 type fetch_result =
-  [ `Not_modified
-  | `Fetched of string option
-  | `Failed of string
-  ]
+  [ `Not_modified | `Fetched of string option | `Failed of string ]
 
 let http_fetch ~url ~etag ~destination =
   let headers =
@@ -1160,8 +1154,8 @@ let start_live ~fetch ~cache_dir ~download_timeout_seconds =
                 with_current (fun value -> value.art category id));
             source_art =
               (fun id -> with_current (fun value -> value.source_art id));
-            unclassified_arts =
-              (fun () -> with_current (fun value -> value.unclassified_arts ()));
+            unreferenced_arts =
+              (fun () -> with_current (fun value -> value.unreferenced_arts ()));
             art_context =
               (fun locale category id ->
                 with_current (fun value -> value.art_context locale category id));
@@ -1186,7 +1180,13 @@ let start_live ~fetch ~cache_dir ~download_timeout_seconds =
           }
         in
         Lwt.return (Ok (database, state))
-  with Sys_error error -> Lwt.return (Error error)
+  with
+  | Sys_error error -> Lwt.return (Error error)
+  | Unix.Unix_error (error, operation, argument) ->
+      Lwt.return
+        (Error
+           (Printf.sprintf "%s(%S): %s" operation argument
+              (Unix.error_message error)))
 
 let live ~url ~cache_dir ~poll_seconds ~download_timeout_seconds =
   let fetch = http_fetch ~url in
@@ -1230,12 +1230,7 @@ let live ~url ~cache_dir ~poll_seconds ~download_timeout_seconds =
 
 module For_test = struct
   type nonrec fetch_result = fetch_result
-
-  type refresh_result =
-    [ `Not_modified
-    | `Replaced
-    | `Failed of string
-    ]
+  type refresh_result = [ `Not_modified | `Replaced | `Failed of string ]
 
   type controlled_live = {
     database : t;
@@ -1259,7 +1254,7 @@ let close (database : t) = database.close ()
 let health (database : t) = database.health ()
 let art (database : t) category id = database.art category id
 let source_art (database : t) id = database.source_art id
-let unclassified_arts (database : t) = database.unclassified_arts ()
+let unreferenced_arts (database : t) = database.unreferenced_arts ()
 
 let art_context (database : t) locale category id =
   database.art_context locale category id

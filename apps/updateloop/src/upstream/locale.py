@@ -201,13 +201,10 @@ def _version_id(payload: object, context: str) -> str:
     return version
 
 
-class LiveLocaleBuilder:
-    """Resolve a snapshot and parse its available story and gallery data.
+class UpstreamLocaleBuilder:
+    """Resolve one shared upstream snapshot and parse its locale data.
 
-    A repository commit is not part of the publication identity. The locale's
-    embedded resource version is the only version recorded by the updater. One
-    builder belongs to one update run and owns the all-server branch snapshot
-    shared by every requested locale in that run.
+    The updater records each locale's embedded resource version, not the repository commit. One builder owns the all-server snapshot for one update run.
     """
 
     def __init__(
@@ -218,6 +215,7 @@ class LiveLocaleBuilder:
         transport: httpx.AsyncBaseTransport | None = None,
         cache: UpstreamCache | None = None,
     ) -> None:
+        """Configure locale snapshot access and optional persistent caching."""
         self._api_url = github_api_url.rstrip("/")
         self._token = github_token or None
         self._transport = transport

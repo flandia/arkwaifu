@@ -14,6 +14,7 @@ const requests = new LRUCache<string, Promise<unknown>>({
   ttl: 5 * 60_000,
 });
 
+/** A request or response-validation failure from the archive service. */
 export class ApiError extends Error {
   constructor(
     message: string,
@@ -69,6 +70,7 @@ export function cachedRequest<T>(key: string, load: () => Promise<T>): Promise<T
   return request;
 }
 
+/** Clears all fulfilled, pending, and rejected API requests from the client cache. */
 export function clearApiCache(): void {
   requests.clear();
 }

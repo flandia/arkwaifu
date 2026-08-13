@@ -138,11 +138,11 @@ def _canonical_path(path: Path) -> str:
 class UpstreamCache:
     """Store validated upstream files and completed trees under one version.
 
-    The cache owns materialization and replacement; callers own the producer,
-    validator, and format fingerprint for their data.
+    The cache materializes and replaces entries. Callers define each producer, validator, and format fingerprint.
     """
 
     def __init__(self, root: Path) -> None:
+        """Confine all cache entries below ``root``."""
         self._root = root.resolve()
         self._locks: dict[Path, asyncio.Lock] = {}
 

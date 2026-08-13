@@ -1,6 +1,6 @@
 import { use } from "react";
 import { useParams } from "react-router";
-import { getStoryIndexData, type StoryGroupSummary } from "../../api";
+import { getStoryGroupsByType, type StoryGroupSummary } from "../../api";
 import { useUi } from "../../i18n";
 import { requiredLocale, requiredSection, useStorySections } from "../../navigation";
 import {
@@ -21,7 +21,7 @@ export function StoryIndexPage() {
   const locale = requiredLocale(params.locale);
   const section = requiredSection(params.section);
   const details = useStorySections()[section];
-  const groups = use(getStoryIndexData(locale, details.type));
+  const groups = use(getStoryGroupsByType(locale, details.type));
   const index = useCollectionIndex(groups, groupSearchValues);
 
   return (

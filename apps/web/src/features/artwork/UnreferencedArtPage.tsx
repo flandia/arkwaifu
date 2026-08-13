@@ -1,17 +1,17 @@
 import { use } from "react";
 import { useLocation, useParams } from "react-router";
-import { getUnclassifiedArts } from "../../api";
+import { getUnreferencedArts } from "../../api";
 import { useUi, useUiLanguage } from "../../i18n";
 import { requiredLocale } from "../../navigation";
 import { ArchivePage, EmptyState, PageHeader } from "../../shared/Page";
 import { ArtworkCollection } from "./ArtworkCollection";
 
-export function UnclassifiedPage() {
+export function UnreferencedArtPage() {
   const { t } = useUi();
   const { language } = useUiLanguage();
   const locale = requiredLocale(useParams().locale);
   const location = useLocation();
-  const arts = use(getUnclassifiedArts());
+  const arts = use(getUnreferencedArts());
   const artworks = arts.map((art) => ({
     artID: art.id,
     category: art.category,
@@ -19,23 +19,23 @@ export function UnclassifiedPage() {
   }));
 
   return (
-    <ArchivePage title={t("unclassified.title")}>
+    <ArchivePage title={t("unreferenced.title")}>
       <PageHeader
-        description={t("unclassified.description")}
-        eyebrow={t("unclassified.eyebrow")}
-        meta={<span>{t("unclassified.artworkCount", { count: arts.length })}</span>}
-        title={t("unclassified.title")}
+        description={t("unreferenced.description")}
+        eyebrow={t("unreferenced.eyebrow")}
+        meta={<span>{t("unreferenced.artworkCount", { count: arts.length })}</span>}
+        title={t("unreferenced.title")}
       />
       {artworks.length ? (
         <ArtworkCollection
           artworks={artworks}
-          eyebrow={t("unclassified.assetCategory")}
+          eyebrow={t("unreferenced.assetCategory")}
           from={`${location.pathname}${location.search}`}
           language={language}
           locale={locale}
         />
       ) : (
-        <EmptyState title={t("unclassified.empty")}>{t("unclassified.emptyHint")}</EmptyState>
+        <EmptyState title={t("unreferenced.empty")}>{t("unreferenced.emptyHint")}</EmptyState>
       )}
     </ArchivePage>
   );

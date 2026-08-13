@@ -27,6 +27,7 @@ class ExtractionError(RuntimeError):
     """Report every bundle that failed during one extraction operation."""
 
     def __init__(self, failures: list[tuple[Path, str]]) -> None:
+        """Create one error that reports every failed bundle."""
         self.failures = failures
         detail = "; ".join(f"{path}: {message}" for path, message in failures)
         super().__init__(f"failed to extract {len(failures)} bundle(s): {detail}")
@@ -44,10 +45,7 @@ def normalize_container_path(container: str | PurePosixPath) -> PurePosixPath:
 def mono_behaviour_name(obj: MonoBehaviour, type_tree=None) -> str:
     """Get a useful class name even when UnityPy cannot resolve MonoScript.
 
-    New Arknights character bundles can refer to a shared MonoScript CAB that
-    is not included in the individual bundle. The serialized MonoBehaviour
-    data is still usable; the sprite hub's type-tree shape is enough to recover
-    the names the art scanner expects.
+    Some character bundles reference a shared MonoScript CAB that they do not include. The sprite hub's serialized type-tree shape still identifies the names required by the art scanner.
     """
 
     try:
@@ -188,9 +186,7 @@ def _extract_one(source: Path, destination: Path) -> None:
 def extract_assets(sources: list[Path], destination: Path, workers: int | None = None) -> None:
     """Extract all bundle files and report their failures together.
 
-    ``workers=1`` keeps extraction in the calling process. Other values use a
-    process pool because Unity decoding and PNG export are CPU- and memory-heavy.
-    Each process handles only one bundle before it is replaced.
+    Set ``workers=1`` to extract in the calling process. Other values use a process pool, and each child handles one bundle before replacement.
     """
 
     files = sorted(

@@ -111,11 +111,11 @@ export function SiteNavigation({
             to={`/${locale}/galleries`}
           />
           <NavItem
-            active={pathname === `/${locale}/unclassified`}
+            active={pathname === `/${locale}/unreferenced`}
             index="09"
-            label={t("navigation.unclassified")}
+            label={t("navigation.unreferenced")}
             onNavigate={onNavigate}
-            to={`/${locale}/unclassified`}
+            to={`/${locale}/unreferenced`}
           />
         </ul>
 

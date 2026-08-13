@@ -1,26 +1,36 @@
-export { getArt, getArtContext, getArtData, getLegacyArtCategories, getSourceArt } from "./artwork";
+/**
+ * Internal API-client surface for web routes and feature components.
+ *
+ * This barrel exposes archive requests, their response models, and shared response utilities. Transport and cache implementation details stay private to this directory.
+ */
+export {
+  getArt,
+  getArtContext,
+  getArtWithSources,
+  getLegacyArtCategories,
+  getSourceArt,
+} from "./artwork";
 export { ApiError, clearApiCache } from "./client";
-export { getGalleries, getGallery, getGalleryData } from "./galleries";
-export { getHomeData } from "./home";
+export { getGalleries, getGallery } from "./galleries";
+export { getHomeCollections } from "./home";
 export {
   getStoryGroup,
-  getStoryGroupData,
+  getStoryGroupWithStories,
   getStoriesByGroup,
   getStory,
-  getStoryData,
   getStoryGroups,
-  getStoryIndexData,
+  getStoryGroupsByType,
 } from "./stories";
-export { getUnclassifiedArts } from "./unclassified";
+export { getUnreferencedArts } from "./unreferenced";
 export {
   localeNames,
   type ArtCategory,
   type ArtContext,
   type ArtDetail,
   type ArtOccurrence,
-  type ArtReference,
+  type StoryArtReference,
   type ArtSibling,
-  type ArtSummary,
+  type UnreferencedArt,
   type GalleryDetail,
   type GalleryEntry,
   type GallerySummary,
@@ -33,4 +43,4 @@ export {
   type StoryGroupType,
   type StorySummary,
 } from "./types";
-export { artTransitionName, formatBytes, uniqueArtReferences } from "./utils";
+export { artTransitionName, formatBytes, uniqueStoryArtReferences } from "./utils";

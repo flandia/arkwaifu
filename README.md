@@ -1,80 +1,25 @@
-<!--suppress ALL -->
-<img src="assets/arkwaifu_phantom@0.25x.png" alt="logo" align="right" height="224" width="224"/>
+<img src="assets/arkwaifu_phantom@0.25x.png" alt="Arkwaifu Phantom logo" align="right" height="224" width="224"/>
 
-# Arkwaifu (arkwaifu)
+# Arkwaifu
 
-![](https://img.shields.io/github/license/flandia/arkwaifu?style=flat-square)
-![](https://img.shields.io/github/v/release/flandia/arkwaifu?style=flat-square)
+![License](https://img.shields.io/github/license/flandia/arkwaifu?style=flat-square)
+![Release](https://img.shields.io/github/v/release/flandia/arkwaifu?style=flat-square)
 
-![](https://img.shields.io/github/actions/workflow/status/flandia/arkwaifu/docker-image-service.yml?style=flat-square&label=build%3A%20service)
-![](https://img.shields.io/github/actions/workflow/status/flandia/arkwaifu/docker-image-updateloop.yml?style=flat-square&label=build%3A%20updateloop)
-![](https://img.shields.io/github/actions/workflow/status/flandia/arkwaifu/docker-image-web.yml?style=flat-square&label=build%3A%20web)
-![](https://img.shields.io/website?style=flat-square&url=https%3A%2F%2Farkwaifu.cc%2F)
+![Service](https://img.shields.io/github/actions/workflow/status/flandia/arkwaifu/docker-image-service.yml?style=flat-square&label=build%3A%20service)
+![Updateloop](https://img.shields.io/github/actions/workflow/status/flandia/arkwaifu/docker-image-updateloop.yml?style=flat-square&label=build%3A%20updateloop)
+![Web](https://img.shields.io/github/actions/workflow/status/flandia/arkwaifu/docker-image-web.yml?style=flat-square&label=build%3A%20web)
+![Status](https://img.shields.io/website?style=flat-square&url=https%3A%2F%2Farkwaifu.cc%2F)
 
-Arkwaifu is a website which arranges and provides artwork and localized story
-metadata extracted from Arknights.
+Arkwaifu archives artwork and story metadata from Arknights. 
 
-This branch is a breaking rewrite. A Python 3.14 updateloop publishes native
-PNG artwork and one SQLite database to S3-compatible storage, and an OCaml 5.5
-Dream service provides the HTTP API. A React 19 and React Router frontend
-presents the archive and provides client-side story and gallery filtering.
-Global server-side search remains deferred. The previous frontend is retained
-in its [historical repository](https://github.com/flandia/arkwaifu-frontend).
-
-🎉 Arkwaifu v2 has released! Check it at [arkwaifu.cc](https://arkwaifu.cc/)!
+We are happy to announce that Arkwaifu v2 has launched! Browse it at [arkwaifu.cc](https://arkwaifu.cc/).
 
 ## Features
 
-- Art and all supported locales can be updated automatically.
-- Final PNG compositions and original character body, face, and whole-body
-  layers are retained.
-- Cards use updater-generated WebP thumbnails while detail views retain the
-  full PNG compositions.
-- Story and gallery metadata is available in CN, EN, JP, KR, and TW.
-- The responsive React frontend supports localized archive browsing and
-  client-side index filtering.
+Arkwaifu supports these workflows:
 
-## Available Arts
-
-Arts that appear in in-game stories are available, including **images**,
-**backgrounds**, **items**, and **characters**. The examples below use the v1
-website interface; the rewrite is intentionally not API-compatible.
-
-### Images
-
-Images are the exquisite artworks that appear when some special events in the stories happen.
-
-<img src="https://arkwaifu.cc/api/v1/arts/32_i18/variants/origin/content" width="800"/>
-
-### Backgrounds
-
-Backgrounds are the artworks that always appear during dialogue between characters.
-
-<img src="https://arkwaifu.cc/api/v1/arts/bg_courtyard/variants/origin/content" width="800"/>
-
-### Items
-
-Items are illustrations of objects that appear in stories.
-
-### Characters
-
-Characters are the artworks that represent characters who appear during
-dialogue. The rewrite retains both the final composition and its original
-source layers.
-
-<img src="https://arkwaifu.cc/api/v1/arts/char_250_phantom_1%233%241/variants/origin/content" width="800"/>
-
-## Roadmap
-
-- [x] Switchable language.
-- [x] Switchable archive locale.
-- [x] A new frontend.
-- [ ] Add global server-side search.
-
-## Development
-
-See the [updateloop documentation](apps/updateloop/README.md), [service
-documentation](apps/service/README.md), and [web documentation](apps/web/README.md).
+- Update artwork from Arknights game (Windows for higher resolution) automatically.
+- Archive artwork by AVG metadata from CN, EN, JP, KR, and TW servers.
 
 ## Acknowledgements
 

@@ -1,254 +1,87 @@
-# Arkwaifu service
+# Run the Arkwaifu service
 
-This package is the OCaml 5.5 Dream read service. It downloads the fixed
-`arkwaifu.sqlite3` object, checks its schema version, opens a local read-only
-SQLite generation through Caqti, and serves it until a newer valid generation
-is available. It never downloads game data, writes database rows, processes
-images, or needs updater/S3 credentials.
+This package runs the OCaml 5.5 Dream read service. It downloads the published `arkwaifu.sqlite3`, validates schema version 2, and serves one local read-only generation through Caqti. See the [HTTP API reference](API.md) for the complete web contract.
 
-## HTTP interface
+## Understand the service boundary
 
-| Method and path | Result |
-| --- | --- |
-| `GET /health` | Current local SQLite connectivity |
-| `GET /api/arts/:category/:id` | Selected composition metadata with direct composition and thumbnail object-store URLs |
-| `GET /api/source-arts/:id` | Original body, face, or whole-body layer metadata with a direct object-store URL |
-| `GET /api/unclassified-arts` | Compact cards for indexed art unused by any story or gallery |
-| `GET /api/:locale/arts/:category/:id/context` | Localized names, related character variants, and every story occurrence of an available art |
-| `GET /api/:locale/story-groups` | Ordered story groups with rotating-card preview references |
-| `GET /api/:locale/story-groups/:id` | One group with previews and all available, deduplicated `artReferences` |
-| `GET /api/:locale/story-groups/:id/stories` | Ordered story summaries with rotating-card previews; `artReferences` remains empty |
-| `GET /api/:locale/stories/:id` | Story metadata and ordered art references |
-| `GET /api/:locale/galleries` | Gallery summaries with rotating thumbnail backdrops |
-| `GET /api/:locale/galleries/:id` | Gallery and ordered entries |
+The service reads published data and returns JavaScript Object Notation (JSON) metadata. It does not download game data, write database rows, process images, or require updater and object-store credentials.
 
-Locales are explicit and case-insensitive: `CN`, `EN`, `JP`, `KR`, and `TW`.
-Unknown resources and locales return `404`. A database/schema failure returns a
-small `503` response without exposing local paths or connection details.
-An existing story group with no stories returns `200` with an empty JSON list.
-Its group-detail route also returns `200`, with a `null`
-`representativeArtReference`, an empty `previewArtReferences` list, and an empty
-`artReferences` list. Missing groups return `404` from both routes.
-All responses allow public cross-origin reads with
-`Access-Control-Allow-Origin: *`. `OPTIONS` requests return `204` and advertise
-the supported `GET, OPTIONS` methods.
+The service returns direct public Uniform Resource Locators (URLs) for images and thumbnails. It has no image content or redirect endpoints, so browsers fetch image bytes from the bucket or content delivery network (CDN).
 
-The unclassified-art list is global rather than localized. It computes the set
-difference directly from the current database: an `arts` row is included only
-when its exact `(category, art_id)` identity appears in neither
-`story_art_references` nor `gallery_entries` for any locale. Rows are ordered by
-`image`, `background`, `item`, then `character`, and by ID within each category.
-Each row contains only `id`, `category`, and `thumbnailContentUrl`; the existing
-art-detail route supplies full image metadata when a card is opened. No
-classification table, copied row, schema migration, or locale-specific duplicate
-is introduced. An archive with no such art returns `200` and `[]`.
+## Configure the process
 
-Every story-group payload exposes one of the schema-defined `type` values:
+Set `ARKWAIFU_OBJECT_BASE_URL` before starting the service. The remaining settings have deployment defaults:
 
-- `main_story`
-- `major_event`
-- `minor_event`
-- `operator_record`
-- `integrated_strategies`
-- `reclamation_algorithm`
-- `others`
+- **`ARKWAIFU_OBJECT_BASE_URL`**: Required absolute HTTP or HTTPS public bucket or CDN base URL used to construct image links, such as `https://objects.example/arkwaifu`
+- **`ARKWAIFU_DATABASE_URL`**: Absolute HTTP or HTTPS database download URL; defaults to `<ARKWAIFU_OBJECT_BASE_URL>/arkwaifu.sqlite3`
+- **`ARKWAIFU_DATABASE_CACHE_DIR`**: Writable process-private generation directory; defaults to `/var/lib/arkwaifu/database`
+- **`ARKWAIFU_DATABASE_POLL_SECONDS`**: Positive polling interval in seconds; defaults to `30`
+- **`ARKWAIFU_DATABASE_DOWNLOAD_TIMEOUT_SECONDS`**: Positive timeout for one complete database transfer in seconds; defaults to `600`
+- **`ARKWAIFU_INTERFACE`**: Listen address; defaults to `0.0.0.0`
+- **`ARKWAIFU_PORT`**: Listen port from 1 through 65,535; defaults to `8080`
 
-These are parallel categories. In particular, `integrated_strategies` contains
-official Integrated Strategies ending stories grouped by topic.
-`reclamation_algorithm` contains only Reclamation Algorithm stories with at
-least one art reference. `others` contains the remaining eligible non-`[uc]`
-story scripts grouped by source directory. That direct scan intentionally also
-exposes tutorial and control scripts. Integrated Strategies monthly-squad
-scripts are excluded because they contain no indexed AVG art, and `[uc]`
-companion files remain story descriptions rather than separate stories. The
-singular `other` value is not part of the schema.
+The service must read the database URL without S3 credentials unless your deployment supplies an authenticated HTTP intermediary. Configure database responses with `Cache-Control: no-cache`, and preserve ETag headers for conditional polling.
 
-Story-group and story-summary card backgrounds use this shape:
+## Refresh the database safely
 
-```json
-{
-  "representativeArtReference": {
-    "artID": "avg_1",
-    "kind": "picture",
-    "category": "image",
-    "title": null,
-    "subtitle": null,
-    "names": [],
-    "thumbnailContentUrl": "https://objects.example/arkwaifu/ART/v1/thumbnail/image/avg_1.webp"
-  },
-  "previewArtReferences": [
-    {
-      "artID": "avg_1",
-      "kind": "picture",
-      "category": "image",
-      "title": null,
-      "subtitle": null,
-      "names": [],
-      "thumbnailContentUrl": "https://objects.example/arkwaifu/ART/v1/thumbnail/image/avg_1.webp"
-    }
-  ]
-}
-```
+Startup fails closed so the service never accepts requests without a valid database. The startup sequence is:
 
-`previewArtReferences` contains at most three references in a stable,
-pseudorandom-looking order seeded by the group or story ID. It contains only
-references that resolve against `arts`. When at least one `image` is available,
-the list contains illustrations only; otherwise it falls back to backgrounds.
-The frontend rotates through this list. `representativeArtReference` remains for
-backward compatibility and is always the first preview, or `null` when the list
-is empty.
-
-Gallery summaries similarly include a compact
-`previewThumbnailContentUrls` array with at most three direct object-store
-thumbnail URLs. Available `image` entries are preferred; `background` entries
-are used only when a gallery has no available illustration. Selection is stable
-and pseudorandom-looking per gallery. The single gallery-index query joins
-entries and art, so producing previews does not add per-gallery queries.
-
-Illustration previews prefer art used by fewer distinct story groups (for group
-cards) or stories (for stage cards). The stable shuffle only breaks rarity
-ties. Background fallback uses the same ranking.
-
-The art-context route returns deduplicated localized `names`, every distinct
-localized story `occurrence`, and `siblings` for character art. A sibling is an
-available character whose identifier has the same exact prefix before `#`; its
-payload includes localized names and a direct `thumbnailContentUrl`. Other art
-categories return an empty sibling list.
-
-Every art-reference payload includes a nullable direct `thumbnailContentUrl`.
-The group-detail `artReferences` list contains every resolvable reference across
-the group's stories, preserves story/reference order, and deduplicates by
-`category` plus `artID`. Story-detail references and gallery entries are
-preserved even when unresolved, in which case `thumbnailContentUrl` is `null`.
-This is populated by the existing SQL joins, without per-reference queries.
-
-These fields are derived from the existing schema-version 2 relationship
-`story_groups -> stories -> story_art_references`, with `arts` used as the
-availability check. They add no table, column, materialized aggregate, or schema
-migration.
-
-The service exposes object-store locations through metadata and has no image
-content or redirect endpoints, keeping it out of the image data path. Thumbnail
-URLs point directly at the updater-published object-store key, derived during
-JSON serialization from the joined composition key without another database
-column: `ART/<resVersion>/thumbnail/<category>/<name>.webp`.
-The former `/api/arts/:category/:id/content`,
-`/api/arts/:category/:id/thumbnail/content`, and
-`/api/source-arts/:id/content` paths are not routed and return `404`.
-
-Before deploying a frontend that uses these URLs against an archive created
-before thumbnails were introduced, run the one-time historical backfill:
-
-```console
-uv run updateloop run art --complete
-```
-
-Deploy the service after the backfill and before the frontend. Normal future
-art runs publish thumbnails for their changed winners automatically.
-
-Configure the bucket or CDN for public reads; original PNG objects are
-published as `image/png` under
-`ART/<resVersion>/<variant>/<category>/<name>.png`, with
-`Cache-Control: public, max-age=31536000, immutable`. The version is the
-snapshot which contributed that create-only object. One current database can
-therefore reference several historical version prefixes. Public art metadata
-includes object location, byte size, and dimensions, but no redundant object
-variant or PNG SHA. The path uses `composition` for final art and `source` for
-retained character layers; the route already determines which kind is returned.
-
-## Database refresh lifecycle
-
-Startup is fail-closed:
-
-1. Download `arkwaifu.sqlite3` into
-   `ARKWAIFU_DATABASE_CACHE_DIR` using a unique `.part` file.
-2. Rename the completed download locally.
+1. Download `arkwaifu.sqlite3` into `ARKWAIFU_DATABASE_CACHE_DIR` with a unique `.part` filename.
+2. Rename the completed download.
 3. Open SQLite with `write=false` and `create=false`.
 4. Require schema version 2.
-5. Start Dream only after that generation is healthy.
+5. Start Dream after the generation passes its schema check.
 
-The service then polls at `ARKWAIFU_DATABASE_POLL_SECONDS`, sending the last ETag
-as `If-None-Match`. HTTP `304` keeps the existing generation. A changed file is
-downloaded and schema-checked before it replaces the current local
-generation; the previous pool is drained and its file removed afterward. A
-download, HTTP, open, or schema failure is logged and the last valid
-generation continues serving. A failure on the initial download
-prevents startup because there is no known-good in-memory generation yet.
-The complete request and body stream are bounded by
-`ARKWAIFU_DATABASE_DOWNLOAD_TIMEOUT_SECONDS`.
+The service polls at `ARKWAIFU_DATABASE_POLL_SECONDS` and sends the last entity tag (ETag) as `If-None-Match`. Hypertext Transfer Protocol (HTTP) 304 preserves the current generation. For a changed object, the service downloads and validates the new file before switching readers.
 
-Each service process owns its own local database copy and refresh loop. The
-cache directory is process-private; do not share it between service processes.
-There is no shared database connection or coordination between instances.
-Rolling the fixed object back to a previous S3 version produces another ETag
-change, so instances adopt the restored file after their next successful poll.
+A successful refresh drains the previous connection pool before removing its file. A download, HTTP, SQLite, or schema failure leaves the last valid generation serving. `ARKWAIFU_DATABASE_DOWNLOAD_TIMEOUT_SECONDS` bounds the complete request and response-body stream.
 
-The database is monolithic. A locale-only production-schema measurement was
-234 MiB raw, and the complete database with art metadata is larger. Every
-process transfers the whole file at startup and after any published change,
-including a one-locale change. Allow room for both the current and incoming
-generation during refresh. PostgreSQL connection pools and `COPY` tuning do not
-apply.
+Each service process owns its cache directory and refresh loop. Do not share a cache directory between processes. A rolling deployment gives each process an independent current generation.
 
-## Configuration
+The database is monolithic, so each startup and published change transfers the complete file. Reserve space for the current and incoming generations during refresh.
 
-- `ARKWAIFU_OBJECT_BASE_URL` — required public bucket or CDN base URL used to
-  construct PNG links, for example `https://objects.example/arkwaifu`.
-- `ARKWAIFU_DATABASE_URL` — database download URL; defaults to
-  `<ARKWAIFU_OBJECT_BASE_URL>/arkwaifu.sqlite3`.
-- `ARKWAIFU_DATABASE_CACHE_DIR` — writable local generation directory; defaults
-  to `/var/lib/arkwaifu/database`.
-- `ARKWAIFU_DATABASE_POLL_SECONDS` — positive polling interval; defaults to
-  `30`.
-- `ARKWAIFU_DATABASE_DOWNLOAD_TIMEOUT_SECONDS` — positive timeout for one full
-  database HTTP transfer; defaults to `600`.
-- `ARKWAIFU_INTERFACE` — listen address; defaults to `0.0.0.0`.
-- `ARKWAIFU_PORT` — listen port; defaults to `8080`.
+## Prepare historical thumbnails
 
-The database and PNG URLs must be readable by the service without S3 credentials
-unless the deployment supplies an authenticated HTTP intermediary. Serve the
-database with revalidation (`Cache-Control: no-cache`) and preserve ETag headers
-for efficient conditional polling.
+Archives published before thumbnail support need one backfill before the frontend can use direct thumbnail URLs. From the repository root, run the updater command, then deploy the service before the frontend:
 
-## Development
+```console
+uv run --project apps/updateloop updateloop run art --complete
+```
 
-OCaml does not need to be installed on the host. Build and run tests in the
-pinned OCaml 5.5 image:
+Future art updates publish thumbnails for changed compositions. Thumbnail keys follow `ART/<resVersion>/thumbnail/<category>/<name>.webp`.
+
+## Build and test the service
+
+The Docker build pins OCaml 5.5 and runs the reader tests. Build the test stage and runtime image with:
 
 ```console
 docker build --target build -t arkwaifu-service-build:dev apps/service
 docker build -t arkwaifu-service:dev apps/service
 ```
 
-CI also reruns the reader suite against the updater's sole production schema
-through a named build context, without copying that SQL into this package:
+The contract-test target reruns the reader suite against the updater-owned production schema. Supply that schema as a named build context:
 
-```console
-docker buildx build --target contract-test --build-context database-schema=apps/updateloop/src -f apps/service/Dockerfile apps/service
+```bash
+docker buildx build --target contract-test \
+  --build-context database-schema=apps/updateloop/src \
+  -f apps/service/Dockerfile apps/service
 ```
 
-Start MinIO, run the Python updater once to publish `arkwaifu.sqlite3`, then run
-the service profile:
+For a native opam switch, install the dependencies from `arkwaifu_service.opam`. Then run `dune runtest` and `dune exec arkwaifu-service`.
+
+## Run the local stack
+
+Start MinIO, publish `arkwaifu.sqlite3` with the updater, and start the service profile. These commands start the dependencies and verify the health route:
 
 ```console
 docker compose -f infra/compose.yaml up -d minio minio-init
+uv run --project apps/updateloop --env-file infra/dev.env.example updateloop run
 docker compose -f infra/compose.yaml --profile service up -d --build
 curl http://127.0.0.1:58080/health
 ```
 
-For a native opam switch, install the locked dependency set from
-`arkwaifu_service.opam`, then run `dune runtest` and
-`dune exec arkwaifu-service`.
+## Maintain the persistence boundary
 
-## Persistence seam
+The updater-owned SQLite schema is the writer and reader contract. The `Database` module hides SQLite queries, conditional downloads, schema checks, and generation replacement from HTTP handlers. Tests use temporary SQLite databases through the same reader.
 
-The SQLite schema shipped by the updater is the writer/reader contract. The
-service's `Database` module is the persistence seam: HTTP handlers ask it for
-domain records, while its live adapter hides SQLite queries, conditional
-downloads, schema checks, and generation replacement. Tests use temporary
-SQLite databases through that same reader. Dream remains limited to routing
-and JSON responses.
-
-There are no release tables, staged rows, active pointers, or PostgreSQL
-settings. `unit_versions` contains only each unit's `resVersion`; HTTP reads use
-the rows in the one current database generation.
+The design has no release tables, staged rows, active pointers, or PostgreSQL settings. `unit_versions` stores each unit’s `resVersion`, and HTTP queries read the current local generation.

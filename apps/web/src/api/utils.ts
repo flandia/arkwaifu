@@ -1,6 +1,7 @@
-import type { ArtCategory, ArtReference } from "./types";
+import type { ArtCategory, StoryArtReference } from "./types";
 
-export function uniqueArtReferences(references: ArtReference[]): ArtReference[] {
+/** Keeps the first reference for each category and artwork identifier pair. */
+export function uniqueStoryArtReferences(references: StoryArtReference[]): StoryArtReference[] {
   const seen = new Set<string>();
   return references.filter((reference) => {
     const key = `${reference.category}:${reference.artID}`;
@@ -10,6 +11,7 @@ export function uniqueArtReferences(references: ArtReference[]): ArtReference[] 
   });
 }
 
+/** Returns a stable Cascading Style Sheets (CSS) view-transition name for one artwork. */
 export function artTransitionName(category: ArtCategory, artID: string): string {
   let hash = 2166136261;
   const value = `${category}:${artID}`;
@@ -20,6 +22,7 @@ export function artTransitionName(category: ArtCategory, artID: string): string 
   return `art-${(hash >>> 0).toString(36)}`;
 }
 
+/** Formats a byte count with binary units and locale-aware digits. */
 export function formatBytes(bytes: number, locale = "en"): string {
   if (bytes < 1024) return `${new Intl.NumberFormat(locale).format(bytes)}\u00a0B`;
   const units = ["KiB", "MiB", "GiB"];

@@ -13,7 +13,7 @@ import pytest
 from arkwaifu_updateloop.domain import LocaleManifest
 from arkwaifu_updateloop.upstream import UpstreamCache
 from arkwaifu_updateloop.upstream import locale as locale_upstream
-from arkwaifu_updateloop.upstream.locale import LiveLocaleBuilder
+from arkwaifu_updateloop.upstream.locale import UpstreamLocaleBuilder
 
 _MISSING_STORY_PATH = "gamedata/story/activities/retired/opening.txt"
 
@@ -325,7 +325,7 @@ async def test_locale_builder_uses_master_version_id_and_reuses_cached_archive(
         raise AssertionError("locale adapter must not call manifest.validate")
 
     monkeypatch.setattr(LocaleManifest, "validate", unexpected_validate, raising=False)
-    builder = LiveLocaleBuilder(
+    builder = UpstreamLocaleBuilder(
         transport=httpx.MockTransport(respond),
         cache=UpstreamCache(tmp_path / ".cache"),
     )
@@ -360,7 +360,7 @@ async def test_locale_builder_reextracts_a_corrupt_cached_locale(tmp_path: Path)
         raise AssertionError(f"unexpected request: {request.url}")
 
     cache = UpstreamCache(tmp_path / ".cache")
-    builder = LiveLocaleBuilder(
+    builder = UpstreamLocaleBuilder(
         transport=httpx.MockTransport(respond),
         cache=cache,
     )
@@ -413,7 +413,7 @@ async def test_one_run_scoped_locale_builder_caches_one_all_server_archive(tmp_p
             }
         )
     )
-    builder = LiveLocaleBuilder(transport=transport, cache=cache)
+    builder = UpstreamLocaleBuilder(transport=transport, cache=cache)
     en_version, jp_version = await asyncio.gather(
         builder.detect_version("EN"),
         builder.detect_version("JP"),
@@ -463,7 +463,7 @@ async def test_locale_builder_recovers_latest_existing_story_and_caches_it(
         raise AssertionError(f"unexpected request: {request.url}")
 
     cache = UpstreamCache(tmp_path / ".cache")
-    builder = LiveLocaleBuilder(
+    builder = UpstreamLocaleBuilder(
         transport=httpx.MockTransport(respond),
         cache=cache,
     )
@@ -480,7 +480,7 @@ async def test_locale_builder_recovers_latest_existing_story_and_caches_it(
     assert not history_directory.exists()
 
     repository.rename(tmp_path / "history-now-unavailable")
-    cached_builder = LiveLocaleBuilder(
+    cached_builder = UpstreamLocaleBuilder(
         transport=httpx.MockTransport(respond),
         cache=cache,
     )
@@ -535,7 +535,7 @@ async def test_locale_builder_uses_the_first_history_source_containing_the_story
             return httpx.Response(200, content=archive)
         raise AssertionError(f"unexpected request: {request.url}")
 
-    builder = LiveLocaleBuilder(transport=httpx.MockTransport(respond))
+    builder = UpstreamLocaleBuilder(transport=httpx.MockTransport(respond))
     manifest = await builder.build("EN", "data-version", None, False)
 
     assert [
@@ -571,14 +571,14 @@ async def test_concurrent_locales_share_one_history_clone(tmp_path, monkeypatch)
         },
     )
     clone_calls = 0
-    clone_repository = LiveLocaleBuilder._clone_history_repository
+    clone_repository = UpstreamLocaleBuilder._clone_history_repository
 
     async def counted_clone(self, repository_url, branch, destination):
         nonlocal clone_calls
         clone_calls += 1
         return await clone_repository(self, repository_url, branch, destination)
 
-    monkeypatch.setattr(LiveLocaleBuilder, "_clone_history_repository", counted_clone)
+    monkeypatch.setattr(UpstreamLocaleBuilder, "_clone_history_repository", counted_clone)
     archive = _archive(
         {
             "en": ("en-version", _missing_story_files()),
@@ -591,7 +591,7 @@ async def test_concurrent_locales_share_one_history_clone(tmp_path, monkeypatch)
             return httpx.Response(200, content=archive)
         raise AssertionError(f"unexpected request: {request.url}")
 
-    builder = LiveLocaleBuilder(transport=httpx.MockTransport(respond))
+    builder = UpstreamLocaleBuilder(transport=httpx.MockTransport(respond))
     try:
         en, jp = await asyncio.gather(
             builder.build("EN", "en-version", None, False),
@@ -623,7 +623,7 @@ async def test_uncached_builder_releases_its_run_scoped_archive():
             return httpx.Response(200, content=archive)
         return httpx.Response(404)
 
-    builder = LiveLocaleBuilder(transport=httpx.MockTransport(respond))
+    builder = UpstreamLocaleBuilder(transport=httpx.MockTransport(respond))
     version = await builder.detect_version("EN")
     await builder.build("EN", version, None, False)
     archive_path = await builder._archive()
@@ -643,7 +643,7 @@ async def test_version_detection_supports_tw():
         assert request.url.params["ref"] == "master"
         return httpx.Response(200, json={"versionId": "tw-version"})
 
-    builder = LiveLocaleBuilder(transport=httpx.MockTransport(respond))
+    builder = UpstreamLocaleBuilder(transport=httpx.MockTransport(respond))
 
     assert await builder.detect_version("TW") == "tw-version"
 
@@ -653,7 +653,7 @@ async def test_version_detection_rejects_missing_version_id():
     async def respond(_request: httpx.Request) -> httpx.Response:
         return httpx.Response(200, json={"version": "wrong-field"})
 
-    builder = LiveLocaleBuilder(transport=httpx.MockTransport(respond))
+    builder = UpstreamLocaleBuilder(transport=httpx.MockTransport(respond))
 
     with pytest.raises(TypeError, match="versionId"):
         await builder.detect_version("CN")
@@ -675,7 +675,7 @@ async def test_build_rejects_master_snapshot_that_raced_detected_version():
             return httpx.Response(200, content=archive)
         return httpx.Response(404)
 
-    builder = LiveLocaleBuilder(transport=httpx.MockTransport(respond))
+    builder = UpstreamLocaleBuilder(transport=httpx.MockTransport(respond))
     detected = await builder.detect_version("CN")
 
     with pytest.raises(RuntimeError, match="changed from version-1 to version-2"):
@@ -704,7 +704,7 @@ def test_extract_rejects_unsafe_local_paths(tmp_path: Path, member: str):
         archive.writestr(info, "outside")
 
     with pytest.raises(ValueError, match="unsafe game-data archive member"):
-        LiveLocaleBuilder._extract(archive_path, tmp_path / "output", "en")
+        UpstreamLocaleBuilder._extract(archive_path, tmp_path / "output", "en")
 
 
 @pytest.mark.parametrize(

@@ -1,6 +1,6 @@
 import { use } from "react";
 import { useParams } from "react-router";
-import { getHomeData, type ArtCategory } from "../api";
+import { getHomeCollections, type ArtCategory } from "../api";
 import { useUi } from "../i18n";
 import {
   requiredLocale,
@@ -54,7 +54,7 @@ export function HomePage() {
   const locale = requiredLocale(useParams().locale);
   const localizedSections = useStorySections();
   const labelCategory = useCategoryLabel();
-  const [groups, galleries] = use(getHomeData(locale));
+  const [groups, galleries] = use(getHomeCollections(locale));
 
   const counts = Object.fromEntries(
     Object.entries(storySections).map(([slug, section]) => [

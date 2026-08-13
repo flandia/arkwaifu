@@ -51,8 +51,8 @@ const StoryGroupPage = lazy(async () => ({
 const StoryIndexPage = lazy(async () => ({
   default: (await import("./features/stories/StoryIndexPage")).StoryIndexPage,
 }));
-const UnclassifiedPage = lazy(async () => ({
-  default: (await import("./features/artwork/UnclassifiedPage")).UnclassifiedPage,
+const UnreferencedArtPage = lazy(async () => ({
+  default: (await import("./features/artwork/UnreferencedArtPage")).UnreferencedArtPage,
 }));
 
 function preferredLocale(): Locale {
@@ -118,6 +118,11 @@ function LegacyGalleryRedirect() {
   return (
     <Navigate replace to={`/${preferredLocale()}/galleries/${encodeURIComponent(galleryID)}`} />
   );
+}
+
+function LegacyUnclassifiedRedirect() {
+  const locale = useParams().locale as Locale;
+  return <Navigate replace to={`/${locale}/unreferenced`} />;
 }
 
 function LegacyGroupRedirect() {
@@ -271,7 +276,8 @@ export default function App() {
         <Route element={<StoryDetailPage />} path="stories/:section/:groupID/:storyID" />
         <Route element={<GalleriesPage />} path="galleries" />
         <Route element={<GalleryDetailPage />} path="galleries/:galleryID" />
-        <Route element={<UnclassifiedPage />} path="unclassified" />
+        <Route element={<UnreferencedArtPage />} path="unreferenced" />
+        <Route element={<LegacyUnclassifiedRedirect />} path="unclassified" />
         <Route element={<ArtDetailPage />} path="art/:category/:artID" />
         <Route element={<AboutPage />} path="about" />
         <Route element={<LegacyGroupRedirect />} path="legacy/group/:id" />

@@ -19,8 +19,8 @@ from .config import Settings
 from .domain import ArtManifest, LocaleManifest, LocaleUnit
 from .object_store import S3ObjectStore
 from .updater import Updater, UpdateRequest, UpdateUnit
-from .upstream import LiveArtBuilder, LiveLocaleBuilder, UpstreamCache
-from .upstream.art_history import LiveWindowsVersionHistory
+from .upstream import UpstreamArtBuilder, UpstreamCache, UpstreamLocaleBuilder
+from .upstream.art_history import WindowsVersionHistory
 
 _ALL_UNITS: tuple[UpdateUnit, ...] = ("art", "CN", "EN", "JP", "KR", "TW")
 _STRUCTURED_LOG_FIELDS = (
@@ -130,7 +130,7 @@ async def _prepare_art(
     *,
     complete: bool = False,
 ) -> UpdateRequest:
-    builder = LiveArtBuilder(
+    builder = UpstreamArtBuilder(
         version_url=settings.art_version_url,
         asset_base_url=settings.art_asset_base_url,
         download_workers=settings.download_workers,
@@ -140,7 +140,7 @@ async def _prepare_art(
     res_version = await builder.detect_version()
 
     if complete:
-        history = LiveWindowsVersionHistory(
+        history = WindowsVersionHistory(
             github_api_url=settings.github_api_url,
             github_raw_url="https://raw.githubusercontent.com",
             github_token=settings.github_token,
@@ -162,8 +162,8 @@ async def _prepare_art(
 def _locale_builder(
     settings: Settings,
     cache: UpstreamCache,
-) -> LiveLocaleBuilder:
-    return LiveLocaleBuilder(
+) -> UpstreamLocaleBuilder:
+    return UpstreamLocaleBuilder(
         github_api_url=settings.github_api_url,
         github_token=settings.github_token,
         cache=cache,
@@ -171,7 +171,7 @@ def _locale_builder(
 
 
 async def _prepare_locale(
-    builder: LiveLocaleBuilder,
+    builder: UpstreamLocaleBuilder,
     unit: LocaleUnit,
 ) -> UpdateRequest:
     res_version = await builder.detect_version(unit)

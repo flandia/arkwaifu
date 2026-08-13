@@ -43,11 +43,9 @@ _THUMBNAIL_WORKERS = os.cpu_count() or 1
 
 @dataclass(frozen=True, slots=True)
 class UpdateRequest:
-    """Describe one requested dataset and the callback which prepares it.
+    """Describe one requested dataset and the callback that prepares it.
 
-    ``complete`` is the art-only historical backfill policy. It makes an
-    already-current request build without pretending that the operator forced
-    an ordinary same-version update.
+    Set ``complete`` for an art-only historical backfill, including when the published database already records the requested version.
     """
 
     unit: UpdateUnit
@@ -155,10 +153,11 @@ def art_object_key(
 class Updater:
     """Keep the remote Arkwaifu database and its art objects up-to-date."""
 
-    def __init__(self, remote: ObjectStore, *, upload_workers: int = 16) -> None:
+    def __init__(self, object_store: ObjectStore, *, upload_workers: int = 16) -> None:
+        """Configure publication through one object store."""
         if upload_workers <= 0:
             raise ValueError("upload workers must be positive")
-        self._remote = remote
+        self._object_store = object_store
         self._upload_workers = upload_workers
 
     async def run(
@@ -187,7 +186,7 @@ class Updater:
 
         with tempfile.TemporaryDirectory(prefix="arkwaifu-database-") as temporary:
             database_path = Path(temporary) / "arkwaifu.sqlite3"
-            await await_owned(self._remote.pull_database(database_path))
+            await await_owned(self._object_store.pull_database(database_path))
             database_changed = await await_owned(
                 asyncio.to_thread(initialize_or_validate, database_path)
             )
@@ -202,7 +201,7 @@ class Updater:
             ]
             if not changed_requests:
                 if database_changed:
-                    await await_owned(self._remote.push_database(database_path))
+                    await await_owned(self._object_store.push_database(database_path))
                 return tuple(
                     UpdateResult(request.unit, request.res_version, "unchanged")
                     for request in requests
@@ -284,7 +283,7 @@ class Updater:
             )
             publish_started = time.perf_counter()
             try:
-                await await_owned(self._remote.push_database(database_path))
+                await await_owned(self._object_store.push_database(database_path))
             except Exception:
                 if art_manifest is not None:
                     _log_art_action(
@@ -406,7 +405,7 @@ class Updater:
                     return
                 started = time.perf_counter()
                 try:
-                    await self._remote.put_png(key, artifact)
+                    await self._object_store.put_png(key, artifact)
                 except Exception as error:  # noqa: BLE001 - adapter errors are opaque
                     if version is not None:
                         _log_art_action(
@@ -499,7 +498,7 @@ class Updater:
                     )
                 started = time.perf_counter()
                 try:
-                    await self._remote.put_thumbnail(key, thumbnail)
+                    await self._object_store.put_thumbnail(key, thumbnail)
                 except Exception as error:  # noqa: BLE001 - adapter errors are opaque
                     if version is not None:
                         _log_art_action(

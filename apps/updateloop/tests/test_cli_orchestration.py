@@ -163,7 +163,7 @@ async def test_prepare_art_exposes_one_batch_build(monkeypatch, tmp_path: Path):
             assert (upstream_version, active_version, force) == ("art-v1", None, False)
             return resource
 
-    monkeypatch.setattr(cli, "LiveArtBuilder", Builder)
+    monkeypatch.setattr(cli, "UpstreamArtBuilder", Builder)
     settings = SimpleNamespace(
         art_version_url="https://version.example",
         art_asset_base_url="https://assets.example",
@@ -201,8 +201,8 @@ async def test_prepare_complete_art_uses_history_builder_once(monkeypatch, tmp_p
             assert current == "art-v3"
             return ("art-v1", "art-v2", "art-v3")
 
-    monkeypatch.setattr(cli, "LiveArtBuilder", Builder)
-    monkeypatch.setattr(cli, "LiveWindowsVersionHistory", History)
+    monkeypatch.setattr(cli, "UpstreamArtBuilder", Builder)
+    monkeypatch.setattr(cli, "WindowsVersionHistory", History)
     settings = SimpleNamespace(
         art_version_url="https://version.example",
         art_asset_base_url="https://assets.example",

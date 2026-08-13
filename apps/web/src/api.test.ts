@@ -9,10 +9,10 @@ import {
   getStoriesByGroup,
   getStory,
   getStoryGroup,
-  getStoryGroupData,
-  getUnclassifiedArts,
-  uniqueArtReferences,
-  type ArtReference,
+  getStoryGroupWithStories,
+  getUnreferencedArts,
+  uniqueStoryArtReferences,
+  type StoryArtReference,
   type StoryDetail,
   type StoryGroupDetail,
   type StorySummary,
@@ -25,7 +25,7 @@ function apiUrl(path: string): string {
   return `${configuredApiBaseUrl}${path}`;
 }
 
-const reference: ArtReference = {
+const reference: StoryArtReference = {
   artID: "char_220_grani#5$1",
   kind: "character",
   category: "character",
@@ -72,7 +72,7 @@ describe("archive helpers", () => {
 
   it("deduplicates qualified art identities while preserving first occurrence", () => {
     const sameIDOtherCategory = { ...reference, category: "image" as const };
-    expect(uniqueArtReferences([reference, reference, sameIDOtherCategory])).toEqual([
+    expect(uniqueStoryArtReferences([reference, reference, sameIDOtherCategory])).toEqual([
       reference,
       sameIDOtherCategory,
     ]);
@@ -225,7 +225,7 @@ describe("archive API client", () => {
     );
   });
 
-  it("loads the global unclassified artwork index once", async () => {
+  it("loads the global unreferenced artwork index once", async () => {
     const summaries = [
       {
         id: "untracked",
@@ -235,13 +235,13 @@ describe("archive API client", () => {
     ];
     const fetch = spyOn(globalThis, "fetch").mockResolvedValue(jsonResponse(summaries));
 
-    const first = getUnclassifiedArts();
-    const second = getUnclassifiedArts();
+    const first = getUnreferencedArts();
+    const second = getUnreferencedArts();
 
     expect(first).toBe(second);
     expect(await first).toEqual(summaries);
     expect(fetch).toHaveBeenCalledTimes(1);
-    expect(fetch.mock.calls[0]?.[0]).toBe(apiUrl("/api/unclassified-arts"));
+    expect(fetch.mock.calls[0]?.[0]).toBe(apiUrl("/api/unreferenced-arts"));
   });
 
   it("retains a missing group-page request instead of retrying during Suspense renders", async () => {
@@ -249,12 +249,12 @@ describe("archive API client", () => {
       jsonResponse({ error: "not_found" }, 404),
     );
 
-    const first = getStoryGroupData("CN", "missing");
-    const second = getStoryGroupData("CN", "missing");
+    const first = getStoryGroupWithStories("CN", "missing");
+    const second = getStoryGroupWithStories("CN", "missing");
     expect(first).toBe(second);
     const error = await first.catch((reason: unknown) => reason);
     expect(error).toEqual(expect.objectContaining({ name: "ApiError", status: 404 }));
     expect(fetch).toHaveBeenCalledTimes(2);
-    expect(getStoryGroupData("CN", "missing")).toBe(first);
+    expect(getStoryGroupWithStories("CN", "missing")).toBe(first);
   });
 });

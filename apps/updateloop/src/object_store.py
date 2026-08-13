@@ -55,11 +55,9 @@ class ObjectStore(Protocol):
 
 
 class S3ObjectStore:
-    """Store database and art objects in one S3-compatible bucket.
+    """Store the database and art objects in one versioned S3-compatible bucket.
 
-    The bucket must have versioning enabled before this adapter is used.
-    Versioning retains overwritten databases; the updater deliberately does
-    not manage bucket policy or lifecycle.
+    The updater leaves bucket policy and lifecycle management to the operator.
     """
 
     def __init__(
@@ -72,6 +70,7 @@ class S3ObjectStore:
         endpoint_url: str | None = None,
         path_style: bool = False,
     ) -> None:
+        """Configure access to one S3-compatible bucket."""
         self._bucket = bucket
         self._client = boto3.client(
             "s3",
@@ -182,6 +181,7 @@ class MemoryObjectStore:
     """Store database and art bytes in memory for deterministic updater tests."""
 
     def __init__(self) -> None:
+        """Create an empty in-memory object store."""
         self.database: bytes | None = None
         self.objects: dict[str, bytes] = {}
 

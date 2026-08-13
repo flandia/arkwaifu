@@ -1,6 +1,6 @@
 import { use } from "react";
 import { useLocation, useParams } from "react-router";
-import { ApiError, getStoryData, getStoryGroups } from "../../api";
+import { ApiError, getStory, getStoryGroups, uniqueStoryArtReferences } from "../../api";
 import { useUi } from "../../i18n";
 import {
   localeLanguageTag,
@@ -18,9 +18,10 @@ export function StoryDetailPage() {
   const section = requiredSection(params.section);
   const groupID = params.groupID ?? "";
   const storyID = params.storyID ?? "";
-  const storyRequest = getStoryData(locale, storyID);
+  const storyRequest = getStory(locale, storyID);
   const groupsRequest = getStoryGroups(locale);
-  const [story, artReferences] = use(storyRequest);
+  const story = use(storyRequest);
+  const artReferences = uniqueStoryArtReferences(story.artReferences);
   const group = use(groupsRequest).find((value) => value.id === groupID);
   if (story.groupID !== groupID || !group || sectionForType(group.type) !== section) {
     throw new ApiError(t("errors.wrongStoryGroup"), 404);

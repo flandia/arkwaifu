@@ -1,4 +1,5 @@
-(** Dream routes for art collections, localized stories, galleries, and health. *)
+(** Dream routes for art collections, localized stories, galleries, and health.
+*)
 
 open Lwt.Infix
 
@@ -13,8 +14,14 @@ let database_error = function
       Dream.log "database unavailable: %s" message;
       error_json `Service_Unavailable "service_unavailable"
 
+let encode_response encode value =
+  try Ok (encode value) with Invalid_argument message -> Error message
+
 let respond encode = function
-  | Ok value -> json (encode value)
+  | Ok value -> (
+      match encode_response encode value with
+      | Ok encoded -> json encoded
+      | Error message -> database_error (`Unavailable message))
   | Error error -> database_error error
 
 let locales = [ "CN"; "EN"; "JP"; "KR"; "TW" ]
@@ -31,7 +38,8 @@ let with_locale request callback =
 let add_public_read_headers response =
   Dream.set_header response "Access-Control-Allow-Origin" "*";
   Dream.set_header response "Access-Control-Allow-Methods" "GET, OPTIONS";
-  Dream.set_header response "Access-Control-Allow-Headers" "Accept, Content-Type";
+  Dream.set_header response "Access-Control-Allow-Headers"
+    "Accept, Content-Type";
   Dream.set_header response "Access-Control-Max-Age" "86400";
   response
 
@@ -43,67 +51,71 @@ let public_read_cors inner_handler request =
 
 let routes ~database ~object_base_url =
   let art request =
-    Database.art database (Dream.param request "category") (Dream.param request "id")
+    Database.art database
+      (Dream.param request "category")
+      (Dream.param request "id")
     >>= respond (Model.art_json ~object_base_url)
   in
   let source_art request =
     Database.source_art database (Dream.param request "id")
     >>= respond (Model.source_art_json ~object_base_url)
   in
+  let unreferenced_arts _ =
+    Database.unreferenced_arts database
+    >>= respond (fun arts ->
+        `List (List.map (Model.unreferenced_art_json ~object_base_url) arts))
+  in
   public_read_cors
   @@ Dream.router
        [
-      Dream.get "/health" (fun _ ->
-          Database.health database
-          >>= respond (fun () -> `Assoc [ ("status", `String "ok") ]));
-      Dream.get "/api/arts/:category/:id" art;
-      Dream.get "/api/source-arts/:id" source_art;
-      Dream.get "/api/unclassified-arts" (fun _ ->
-          Database.unclassified_arts database
-          >>= respond (fun arts ->
-                  `List
-                    (List.map
-                       (Model.unclassified_art_json ~object_base_url)
-                       arts)));
-      Dream.get "/api/:locale/arts/:category/:id/context" (fun request ->
-          with_locale request (fun locale ->
-              Database.art_context database locale
-                (Dream.param request "category") (Dream.param request "id")
-              >>= respond (Model.art_context_json ~object_base_url)));
-      Dream.get "/api/:locale/story-groups" (fun request ->
-          with_locale request (fun locale ->
-              Database.story_groups database locale
-              >>= respond (fun groups ->
-                      `List
-                        (List.map
-                           (Model.story_group_summary_json ~object_base_url)
-                           groups))));
-      Dream.get "/api/:locale/story-groups/:id" (fun request ->
-          with_locale request (fun locale ->
-              Database.story_group database locale (Dream.param request "id")
-              >>= respond (Model.story_group_detail_json ~object_base_url)));
-      Dream.get "/api/:locale/story-groups/:id/stories" (fun request ->
-          with_locale request (fun locale ->
-              Database.stories_by_group database locale (Dream.param request "id")
-              >>= respond (fun stories ->
-                      `List
-                        (List.map
-                           (Model.story_summary_json ~object_base_url)
-                           stories))));
-      Dream.get "/api/:locale/stories/:id" (fun request ->
-          with_locale request (fun locale ->
-              Database.story database locale (Dream.param request "id")
-              >>= respond (Model.story_json ~object_base_url)));
-      Dream.get "/api/:locale/galleries" (fun request ->
-          with_locale request (fun locale ->
-              Database.galleries database locale
-              >>= respond (fun galleries ->
-                      `List
-                        (List.map
-                           (Model.gallery_summary_json ~object_base_url)
-                           galleries))));
-      Dream.get "/api/:locale/galleries/:id" (fun request ->
-          with_locale request (fun locale ->
-              Database.gallery database locale (Dream.param request "id")
-              >>= respond (Model.gallery_json ~object_base_url)));
+         Dream.get "/health" (fun _ ->
+             Database.health database
+             >>= respond (fun () -> `Assoc [ ("status", `String "ok") ]));
+         Dream.get "/api/arts/:category/:id" art;
+         Dream.get "/api/source-arts/:id" source_art;
+         Dream.get "/api/unreferenced-arts" unreferenced_arts;
+         Dream.get "/api/unclassified-arts" unreferenced_arts;
+         Dream.get "/api/:locale/arts/:category/:id/context" (fun request ->
+             with_locale request (fun locale ->
+                 Database.art_context database locale
+                   (Dream.param request "category")
+                   (Dream.param request "id")
+                 >>= respond (Model.art_context_json ~object_base_url)));
+         Dream.get "/api/:locale/story-groups" (fun request ->
+             with_locale request (fun locale ->
+                 Database.story_groups database locale
+                 >>= respond (fun groups ->
+                     `List
+                       (List.map
+                          (Model.story_group_summary_json ~object_base_url)
+                          groups))));
+         Dream.get "/api/:locale/story-groups/:id" (fun request ->
+             with_locale request (fun locale ->
+                 Database.story_group database locale (Dream.param request "id")
+                 >>= respond (Model.story_group_detail_json ~object_base_url)));
+         Dream.get "/api/:locale/story-groups/:id/stories" (fun request ->
+             with_locale request (fun locale ->
+                 Database.stories_by_group database locale
+                   (Dream.param request "id")
+                 >>= respond (fun stories ->
+                     `List
+                       (List.map
+                          (Model.story_summary_json ~object_base_url)
+                          stories))));
+         Dream.get "/api/:locale/stories/:id" (fun request ->
+             with_locale request (fun locale ->
+                 Database.story database locale (Dream.param request "id")
+                 >>= respond (Model.story_json ~object_base_url)));
+         Dream.get "/api/:locale/galleries" (fun request ->
+             with_locale request (fun locale ->
+                 Database.galleries database locale
+                 >>= respond (fun galleries ->
+                     `List
+                       (List.map
+                          (Model.gallery_summary_json ~object_base_url)
+                          galleries))));
+         Dream.get "/api/:locale/galleries/:id" (fun request ->
+             with_locale request (fun locale ->
+                 Database.gallery database locale (Dream.param request "id")
+                 >>= respond (Model.gallery_json ~object_base_url)));
        ]

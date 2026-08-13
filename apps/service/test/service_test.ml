@@ -81,6 +81,70 @@ let test_content_url_escapes_encoded_key () =
     (Model.content_url ~object_base_url:"https://objects.example/bucket/"
        "art/source/id%3Avariant/hash.png")
 
+let with_environment variables callback =
+  let previous =
+    List.map (fun (name, _) -> (name, Sys.getenv_opt name)) variables
+  in
+  List.iter (fun (name, value) -> Unix.putenv name value) variables;
+  Fun.protect
+    ~finally:(fun () ->
+      List.iter
+        (fun (name, value) ->
+          match value with
+          | Some value -> Unix.putenv name value
+          | None -> Unix.unsetenv name)
+        previous)
+    callback
+
+let test_config_urls () =
+  with_environment
+    [
+      ("ARKWAIFU_OBJECT_BASE_URL", "https://objects.example/bucket");
+      ("ARKWAIFU_DATABASE_URL", "http://database.example/arkwaifu.sqlite3");
+      ("ARKWAIFU_DATABASE_CACHE_DIR", "database-cache");
+      ("ARKWAIFU_DATABASE_POLL_SECONDS", "30");
+      ("ARKWAIFU_DATABASE_DOWNLOAD_TIMEOUT_SECONDS", "600");
+      ("ARKWAIFU_INTERFACE", "127.0.0.1");
+      ("ARKWAIFU_PORT", "8080");
+    ]
+  @@ fun () ->
+  let config =
+    match Config.load () with
+    | Ok value -> value
+    | Error error -> Alcotest.failf "valid URLs were rejected: %s" error
+  in
+  Alcotest.(check string)
+    "database URL" "http://database.example/arkwaifu.sqlite3"
+    (Uri.to_string config.database_url);
+  Unix.unsetenv "ARKWAIFU_DATABASE_URL";
+  let default_config =
+    match Config.load () with
+    | Ok value -> value
+    | Error error ->
+        Alcotest.failf "default database URL was rejected: %s" error
+  in
+  Alcotest.(check string)
+    "default database URL" "https://objects.example/bucket/arkwaifu.sqlite3"
+    (Uri.to_string default_config.database_url);
+  Unix.putenv "ARKWAIFU_DATABASE_URL" "";
+  Alcotest.(check bool)
+    "empty database URL is rejected" true
+    (Result.is_error (Config.load ()));
+  Unix.putenv "ARKWAIFU_DATABASE_URL" "ftp://database.example/archive.sqlite3";
+  Alcotest.(check bool)
+    "non-HTTP database URL is rejected" true
+    (Result.is_error (Config.load ()));
+  Unix.putenv "ARKWAIFU_DATABASE_URL"
+    "https://database.example/arkwaifu.sqlite3";
+  Unix.putenv "ARKWAIFU_OBJECT_BASE_URL" "file:///objects";
+  Alcotest.(check bool)
+    "non-HTTP object base URL is rejected" true
+    (Result.is_error (Config.load ()));
+  Unix.putenv "ARKWAIFU_OBJECT_BASE_URL" "";
+  Alcotest.(check bool)
+    "empty object base URL is rejected" true
+    (Result.is_error (Config.load ()))
+
 (* This is a reader fixture, not a copy of the updater-owned production schema. *)
 let reader_fixture_schema =
   {|
@@ -298,16 +362,16 @@ let create_sqlite_fixture ?(after = "") path =
       if not (String.equal after "") then
         Sqlite3.Rc.check (Sqlite3.exec database after))
 
-let with_sqlite_fixture callback =
+let with_sqlite_fixture ?after callback =
   let path = Filename.temp_file "arkwaifu-service-test-" ".sqlite3" in
   Fun.protect
     ~finally:(fun () -> try Sys.remove path with Sys_error _ -> ())
     (fun () ->
-      create_sqlite_fixture path;
+      create_sqlite_fixture ?after path;
       callback path)
 
-let with_sqlite_database callback =
-  with_sqlite_fixture (fun path ->
+let with_sqlite_database ?after callback =
+  with_sqlite_fixture ?after (fun path ->
       match Database.sqlite path with
       | Ok database ->
           Fun.protect
@@ -354,16 +418,16 @@ let test_sqlite_database () =
       Alcotest.(check string) "source role" "body" source.role;
       Alcotest.(check int) "source width" 11 source.image.width;
 
-      let unclassified =
-        Lwt_main.run (Database.unclassified_arts database)
-        |> require_ok "unclassified art"
+      let unreferenced =
+        Lwt_main.run (Database.unreferenced_arts database)
+        |> require_ok "unreferenced art"
       in
       Alcotest.(check (list (pair string string)))
-        "unclassified art excludes story and gallery references in every locale"
+        "unreferenced art excludes story and gallery references in every locale"
         [ ("character", "eventual#1$1") ]
         (List.map
-           (fun (art : Model.unclassified_art) -> (art.category, art.id))
-           unclassified);
+           (fun (art : Model.unreferenced_art) -> (art.category, art.id))
+           unreferenced);
 
       let groups =
         Lwt_main.run (Database.story_groups database "CN")
@@ -410,7 +474,8 @@ let test_sqlite_database () =
         (match groups with
         | { preview_art_references; _ } :: _ ->
             List.map
-              (fun (reference : Model.art_reference) -> reference.category)
+              (fun (reference : Model.story_art_reference) ->
+                reference.category)
               preview_art_references
         | _ -> []);
       Alcotest.(check bool)
@@ -419,7 +484,7 @@ let test_sqlite_database () =
         | { preview_art_references; _ } :: _ ->
             not
               (List.exists
-                 (fun (reference : Model.art_reference) ->
+                 (fun (reference : Model.story_art_reference) ->
                    String.equal reference.art_id "illustration")
                  preview_art_references)
         | _ -> false);
@@ -460,7 +525,7 @@ let test_sqlite_database () =
         | summary :: _ ->
             not
               (List.exists
-                 (fun (reference : Model.art_reference) ->
+                 (fun (reference : Model.story_art_reference) ->
                    String.equal reference.art_id "illustration")
                  summary.preview_art_references)
         | [] -> false);
@@ -485,18 +550,18 @@ let test_sqlite_database () =
         "group detail art IDs"
         [ "background"; "illustration"; "alternate"; "third"; "fourth" ]
         (List.map
-           (fun (reference : Model.art_reference) -> reference.art_id)
+           (fun (reference : Model.story_art_reference) -> reference.art_id)
            group_detail.art_references);
       Alcotest.(check (list string))
         "group detail uses the rarity-ranked index previews"
         (match groups with
         | summary :: _ ->
             List.map
-              (fun (reference : Model.art_reference) -> reference.art_id)
+              (fun (reference : Model.story_art_reference) -> reference.art_id)
               summary.preview_art_references
         | [] -> [])
         (List.map
-           (fun (reference : Model.art_reference) -> reference.art_id)
+           (fun (reference : Model.story_art_reference) -> reference.art_id)
            group_detail.preview_art_references);
       Alcotest.(check bool)
         "empty group detail" true
@@ -772,6 +837,23 @@ let test_live_database_refresh () =
                 "close cleans current generation" []
                 (cache_generations cache_dir)))
 
+let test_live_cache_directory_error () =
+  let parent_file = Filename.temp_file "arkwaifu-service-test-" ".file" in
+  Fun.protect
+    ~finally:(fun () -> try Sys.remove parent_file with Sys_error _ -> ())
+    (fun () ->
+      let fetch ~etag:_ ~destination:_ =
+        Lwt.return (`Failed "unexpected fetch")
+      in
+      let result =
+        Lwt_main.run
+          (Database.For_test.live ~fetch
+             ~cache_dir:(Filename.concat parent_file "database")
+             ~download_timeout_seconds:5.)
+      in
+      Alcotest.(check bool)
+        "cache-directory Unix error is returned" true (Result.is_error result))
+
 let test_http_story_listing_and_cors () =
   with_sqlite_database @@ fun database ->
   let handler =
@@ -915,32 +997,43 @@ let test_http_story_listing_and_cors () =
     "https://objects.example/bucket/ART/art-v1/source/character/source.png"
     (source_metadata_json |> member "image" |> member "contentUrl" |> to_string);
 
-  let unclassified =
+  let unreferenced =
+    Dream.test handler
+      (Dream.request ~method_:`GET ~target:"/api/unreferenced-arts" "")
+  in
+  Alcotest.(check int)
+    "unreferenced art status" 200
+    (Dream.status unreferenced |> Dream.status_to_int);
+  let unreferenced_json =
+    Lwt_main.run (Dream.body unreferenced) |> Yojson.Safe.from_string |> to_list
+  in
+  Alcotest.(check int) "one unreferenced art" 1 (List.length unreferenced_json);
+  let unreferenced_art = List.hd unreferenced_json in
+  Alcotest.(check string)
+    "unreferenced ID" "eventual#1$1"
+    (unreferenced_art |> member "id" |> to_string);
+  Alcotest.(check string)
+    "unreferenced category" "character"
+    (unreferenced_art |> member "category" |> to_string);
+  Alcotest.(check string)
+    "unreferenced direct thumbnail URL"
+    "https://objects.example/bucket/ART/art-v1/thumbnail/character/eventual%231$1.webp"
+    (unreferenced_art |> member "thumbnailContentUrl" |> to_string);
+  Alcotest.(check (list string))
+    "unreferenced payload stays compact"
+    [ "id"; "category"; "thumbnailContentUrl" ]
+    (unreferenced_art |> to_assoc |> List.map fst);
+  let legacy_unclassified =
     Dream.test handler
       (Dream.request ~method_:`GET ~target:"/api/unclassified-arts" "")
   in
   Alcotest.(check int)
-    "unclassified art status" 200
-    (Dream.status unclassified |> Dream.status_to_int);
-  let unclassified_json =
-    Lwt_main.run (Dream.body unclassified) |> Yojson.Safe.from_string |> to_list
-  in
-  Alcotest.(check int) "one unclassified art" 1 (List.length unclassified_json);
-  let unclassified_art = List.hd unclassified_json in
+    "legacy unclassified route status" 200
+    (Dream.status legacy_unclassified |> Dream.status_to_int);
   Alcotest.(check string)
-    "unclassified ID" "eventual#1$1"
-    (unclassified_art |> member "id" |> to_string);
-  Alcotest.(check string)
-    "unclassified category" "character"
-    (unclassified_art |> member "category" |> to_string);
-  Alcotest.(check string)
-    "unclassified direct thumbnail URL"
-    "https://objects.example/bucket/ART/art-v1/thumbnail/character/eventual%231$1.webp"
-    (unclassified_art |> member "thumbnailContentUrl" |> to_string);
-  Alcotest.(check (list string))
-    "unclassified payload stays compact"
-    [ "id"; "category"; "thumbnailContentUrl" ]
-    (unclassified_art |> to_assoc |> List.map fst);
+    "legacy route returns the canonical payload"
+    (Yojson.Safe.to_string (`List unreferenced_json))
+    (Lwt_main.run (Dream.body legacy_unclassified));
 
   List.iter
     (fun (label, target) ->
@@ -1124,9 +1217,33 @@ let test_http_story_listing_and_cors () =
     "preflight methods" (Some "GET, OPTIONS")
     (Dream.header preflight "Access-Control-Allow-Methods")
 
+let test_http_invalid_composition_key () =
+  with_sqlite_database
+    ~after:
+      "UPDATE arts SET object_key = 'malformed.png' WHERE category = \
+       'character' AND art_id = 'event'"
+  @@ fun database ->
+  let handler =
+    Http.routes ~database ~object_base_url:"https://objects.example/bucket"
+  in
+  let response =
+    Dream.test handler
+      (Dream.request ~method_:`GET ~target:"/api/arts/character/event" "")
+  in
+  Alcotest.(check int)
+    "invalid composition key status" 503
+    (Dream.status response |> Dream.status_to_int);
+  Alcotest.(check string)
+    "invalid composition key body" {|{"error":"service_unavailable"}|}
+    (Lwt_main.run (Dream.body response));
+  Alcotest.(check (option string))
+    "invalid composition key CORS" (Some "*")
+    (Dream.header response "Access-Control-Allow-Origin")
+
 let () =
   Alcotest.run "arkwaifu-service"
     [
+      ("config", [ Alcotest.test_case "HTTP URLs" `Quick test_config_urls ]);
       ( "model",
         [
           Alcotest.test_case "art JSON" `Quick test_art_json;
@@ -1143,10 +1260,14 @@ let () =
             test_story_group_during_generation_replacement;
           Alcotest.test_case "live refresh lifecycle" `Quick
             test_live_database_refresh;
+          Alcotest.test_case "cache directory error" `Quick
+            test_live_cache_directory_error;
         ] );
       ( "http",
         [
           Alcotest.test_case "story listing and CORS" `Quick
             test_http_story_listing_and_cors;
+          Alcotest.test_case "invalid composition key" `Quick
+            test_http_invalid_composition_key;
         ] );
     ]

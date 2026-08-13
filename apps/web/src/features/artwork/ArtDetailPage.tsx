@@ -5,7 +5,7 @@ import {
   artTransitionName,
   formatBytes,
   getArtContext,
-  getArtData,
+  getArtWithSources,
   type ArtDetail,
   type ArtCategory,
 } from "../../api";
@@ -43,7 +43,7 @@ export function ArtDetailPage() {
   if (!isArtCategory(params.category)) throw new ApiError(t("errors.missingArtCategory"), 404);
   const category = params.category;
   const artID = params.artID ?? "";
-  const artRequest = getArtData(category, artID);
+  const artRequest = getArtWithSources(category, artID);
   const contextRequest = getArtContext(locale, category, artID);
   const [art, sources] = use(artRequest);
   const context = use(contextRequest);

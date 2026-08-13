@@ -26,7 +26,7 @@ from arkwaifu_updateloop.domain import (
 from arkwaifu_updateloop.upstream import UpstreamCache
 from arkwaifu_updateloop.upstream import art as art_module
 from arkwaifu_updateloop.upstream.art import (
-    LiveArtBuilder,
+    UpstreamArtBuilder,
     _bundle_md5,
     _extract_and_render_art_resource,
     _ProcessingStageError,
@@ -65,7 +65,7 @@ def test_worker_counts_must_be_positive(
     tmp_path: Path,
 ):
     with pytest.raises(ValueError, match=message):
-        LiveArtBuilder(
+        UpstreamArtBuilder(
             version_url="https://example.test/version",
             asset_base_url="https://example.test/assets",
             cache=UpstreamCache(tmp_path / ".cache"),
@@ -76,7 +76,7 @@ def test_worker_counts_must_be_positive(
 
 def test_art_builder_requires_a_cache_workspace():
     with pytest.raises(TypeError, match="cache"):
-        LiveArtBuilder(
+        UpstreamArtBuilder(
             version_url="https://example.test/version",
             asset_base_url="https://example.test/assets",
         )
@@ -160,7 +160,7 @@ async def test_complete_history_is_additive_and_latest_identity_wins(
         "v3": ArtManifest("v3", (same_id_other_category,), ()),
     }
     calls = []
-    builder = LiveArtBuilder(
+    builder = UpstreamArtBuilder(
         version_url="https://example.test/version",
         asset_base_url="https://example.test/assets",
         cache=UpstreamCache(tmp_path / ".cache"),
@@ -229,7 +229,7 @@ async def test_cold_fetched_stage_retries_a_corrupt_wrapper(
         requests += 1
         return httpx.Response(200, content=corrupt_wrapper if requests == 1 else valid_wrapper)
 
-    builder = LiveArtBuilder(
+    builder = UpstreamArtBuilder(
         version_url="https://example.test/version",
         asset_base_url="https://example.test/assets",
         cache=UpstreamCache(tmp_path / ".cache"),
@@ -263,12 +263,12 @@ async def test_cold_fetched_stage_retries_a_corrupt_wrapper(
         / "fetched"
         / "wrapper.dat"
     )
-    LiveArtBuilder._validate_bundle(cached_wrapper, resource)
+    UpstreamArtBuilder._validate_bundle(cached_wrapper, resource)
 
 
 @pytest.mark.asyncio
 async def test_current_gallery_image_bundles_are_selected(tmp_path: Path):
-    builder = LiveArtBuilder(
+    builder = UpstreamArtBuilder(
         version_url="https://example.test/version",
         asset_base_url="https://x",
         cache=UpstreamCache(tmp_path / ".cache"),
@@ -319,7 +319,7 @@ async def test_resource_processing_starts_while_another_download_is_in_flight(
             processing_started.set()
         _empty_render(extracted, rendered, upstream_version)
 
-    builder = LiveArtBuilder(
+    builder = UpstreamArtBuilder(
         version_url="https://example.test/version",
         asset_base_url="https://example.test/assets",
         cache=UpstreamCache(tmp_path / ".cache"),
@@ -384,7 +384,7 @@ async def test_resource_processing_concurrency_is_bounded(
             active -= 1
 
     monkeypatch.setattr(cache, "directory", directory)
-    builder = LiveArtBuilder(
+    builder = UpstreamArtBuilder(
         version_url="https://example.test/version",
         asset_base_url="https://example.test/assets",
         cache=cache,
@@ -434,7 +434,7 @@ async def test_build_returns_promoted_file_backed_paths_in_cache_workspace(
         )
         extracted.mkdir(parents=True, exist_ok=True)
 
-    builder = LiveArtBuilder(
+    builder = UpstreamArtBuilder(
         version_url="https://example.test/version",
         asset_base_url="https://example.test/assets",
         cache=UpstreamCache(tmp_path / ".cache"),
@@ -503,7 +503,7 @@ async def test_staged_cache_retains_inputs_and_render_only_reuses_extracted_tree
         assert (extracted / "unity-export.txt").read_text(encoding="utf-8") == "uncomposed"
         write_art_manifest(ArtManifest(upstream_version, (), ()), rendered)
 
-    builder = LiveArtBuilder(
+    builder = UpstreamArtBuilder(
         version_url="https://example.test/version",
         asset_base_url="https://example.test/assets",
         extraction_workers=1,

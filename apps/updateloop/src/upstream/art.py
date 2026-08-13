@@ -248,11 +248,10 @@ def _stage_fingerprint(stage: str, resource: _Resource) -> str:
     )
 
 
-class LiveArtBuilder:
+class UpstreamArtBuilder:
     """Fetch and build an art delta for one detected upstream version.
 
-    Unless forced, only bundles whose name or published MD5 changed since the
-    published version are processed. The existing database retains unchanged art.
+    Unless forced, the builder processes only bundles whose name or published MD5 changed. The published database retains unchanged art.
     """
 
     def __init__(
@@ -264,6 +263,7 @@ class LiveArtBuilder:
         download_workers: int = 16,
         extraction_workers: int | None = None,
     ) -> None:
+        """Configure Windows art downloads, caching, and processing limits."""
         if download_workers <= 0:
             raise ValueError("download_workers must be positive")
         if extraction_workers is not None and extraction_workers <= 0:
@@ -706,7 +706,7 @@ class LiveArtBuilder:
         """Validate a completed ``fetched`` cache stage."""
 
         wrapper = path / "wrapper.dat"
-        LiveArtBuilder._validate_bundle(wrapper, resource)
+        UpstreamArtBuilder._validate_bundle(wrapper, resource)
         return wrapper
 
     @staticmethod
