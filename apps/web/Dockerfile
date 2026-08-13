@@ -10,6 +10,7 @@ COPY public ./public
 COPY src ./src
 
 ARG VITE_API_BASE_URL
+ARG VITE_GA_MEASUREMENT_ID
 RUN bun run build
 
 FROM scratch AS artifact

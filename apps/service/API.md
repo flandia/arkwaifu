@@ -1,6 +1,6 @@
 # Use the Arkwaifu HTTP API
 
-The Arkwaifu Hypertext Transfer Protocol (HTTP) application programming interface (API) exposes read-only JavaScript Object Notation (JSON) metadata. It covers composed artwork, source layers, localized stories, and galleries. This reference defines every route, response shape, ordering guarantee, error, cross-origin policy, and direct object Uniform Resource Locator (URL).
+The Arkwaifu Hypertext Transfer Protocol (HTTP) application programming interface (API) exposes read-only JavaScript Object Notation (JSON) metadata and the public text sitemap. It covers composed artwork, source layers, localized stories, and galleries. This reference defines every route, response shape, ordering guarantee, error, cross-origin policy, and direct object Uniform Resource Locator (URL).
 
 ## Send API requests
 
@@ -11,7 +11,7 @@ All routes accept `GET`. Every response includes public cross-origin resource sh
 - `Access-Control-Allow-Headers: Accept, Content-Type`
 - `Access-Control-Max-Age: 86400`
 
-An `OPTIONS` request returns HTTP 204 without a body before path routing. Successful and application-error JSON responses use `application/json`. Missing resources and unsupported locales return HTTP 404 with `{"error":"not_found"}`. Database failures return HTTP 503 with `{"error":"service_unavailable"}` and do not expose local paths or connection details.
+An `OPTIONS` request returns HTTP 204 without a body before path routing. Successful and application-error JSON responses use `application/json`; the sitemap uses UTF-8 `text/plain`. Missing resources and unsupported locales return HTTP 404 with `{"error":"not_found"}`. Database failures return HTTP 503 with `{"error":"service_unavailable"}` and do not expose local paths or connection details.
 
 An unmatched path or unsupported method returns the Dream router’s HTTP 404 response. Clients should not depend on a JSON body for that router-level response.
 
@@ -37,6 +37,14 @@ Percent-encode reserved characters in path parameters. Collection routes return 
 
 A failed SQLite check returns the standard HTTP 503 error body.
 
+## Read the sitemap
+
+`GET /sitemap.txt` renders a text sitemap from the current SQLite generation.
+It contains absolute canonical `https://arkwaifu.cc` URLs for the five locale
+homes, all story-section indexes and story groups, all gallery indexes and
+galleries, and the canonical CN About and Unreferenced Artwork pages. Database
+refreshes are reflected on the next request; no static web rebuild is needed.
+
 ## Read artwork
 
 Artwork routes identify a composition by its exact `category` and `id`. Categories include `image`, `background`, `item`, and `character`.
@@ -46,7 +54,6 @@ Artwork routes identify a composition by its exact `category` and `id`. Categori
 | `GET /api/arts/:category/:id` | Composed artwork |
 | `GET /api/source-arts/:id` | Source artwork |
 | `GET /api/unreferenced-arts` | Unreferenced artwork array |
-| `GET /api/unclassified-arts` | Deprecated compatibility alias for `/api/unreferenced-arts` with an identical unreferenced artwork array |
 | `GET /api/:locale/arts/:category/:id/context` | Artwork context |
 
 The composed-art response includes `id`, `category`, `thumbnailContentUrl`, `image`, and `sourceArtIDs`. Source artwork identifiers follow composition order. The `image` object includes `byteSize`, `width`, `height`, and `contentUrl`. Sizes use bytes, and dimensions use pixels.

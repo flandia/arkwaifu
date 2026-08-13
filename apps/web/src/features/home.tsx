@@ -64,7 +64,7 @@ export function HomePage() {
   ) as Record<StorySection, number>;
 
   return (
-    <ArchivePage title={t("home.pageTitle")}>
+    <ArchivePage description={t("home.description")} title={t("home.pageTitle")}>
       <section className="grid min-h-[min(44rem,calc(100vh-9rem))] border-[3px] border-ink bg-surface min-[56rem]:grid-cols-[minmax(0,1.35fr)_minmax(16rem,0.65fr)]">
         <div className="self-center p-[clamp(2rem,6vw,6rem)]">
           <Eyebrow>{t("home.eyebrow", { locale })}</Eyebrow>

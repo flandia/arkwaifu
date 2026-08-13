@@ -3,13 +3,7 @@
  *
  * This barrel exposes archive requests, their response models, and shared response utilities. Transport and cache implementation details stay private to this directory.
  */
-export {
-  getArt,
-  getArtContext,
-  getArtWithSources,
-  getLegacyArtCategories,
-  getSourceArt,
-} from "./artwork";
+export { getArt, getArtContext, getArtWithSources, getSourceArt } from "./artwork";
 export { ApiError, clearApiCache } from "./client";
 export { getGalleries, getGallery } from "./galleries";
 export { getHomeCollections } from "./home";

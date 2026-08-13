@@ -107,7 +107,7 @@ export function ArtworkCard({
   ) : (
     <ImageFallback />
   );
-  const destination = `/${locale}/art/${category}/${encodeURIComponent(id)}?${new URLSearchParams({ from })}`;
+  const destination = `/${locale}/art/${category}/${encodeURIComponent(id)}`;
 
   return (
     <article className="flex min-w-0 flex-col border-2 border-ink bg-surface [contain-intrinsic-size:auto_30rem] [content-visibility:auto]">
@@ -117,6 +117,7 @@ export function ArtworkCard({
           "checkerboard group relative grid place-items-center overflow-hidden border-b-2 border-ink",
           ratioClasses[category],
         )}
+        state={{ from }}
         to={destination}
         transition="forward"
       >

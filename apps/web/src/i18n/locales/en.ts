@@ -211,14 +211,9 @@ export const en = {
       "The archive could not load this record. Check the service connection, then try again.",
     tryAgain: "Try Again",
     returnOverview: "Return Home",
-    legacyArtwork: "Legacy Artwork",
-    chooseCategory: "Choose an Art Category",
-    ambiguousLegacyArt: "This legacy URL matches more than one qualified archive record.",
-    missingStoryGroup: "That story group does not exist in this locale.",
     wrongStorySection: "That story group does not belong to this section.",
     wrongStoryGroup: "That story does not belong to this story group.",
     missingArtCategory: "That art category does not exist.",
-    missingArtwork: "That artwork does not exist.",
   },
 } as const;
 

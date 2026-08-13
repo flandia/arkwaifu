@@ -210,13 +210,8 @@ export const zhCN = {
     unavailableMessage: "无法载入此档案。请检查服务连接后重试。",
     tryAgain: "重试",
     returnOverview: "返回首页",
-    legacyArtwork: "旧版美术资源",
-    chooseCategory: "选择美术资源类别",
-    ambiguousLegacyArt: "此旧版链接对应多个符合条件的档案记录。",
-    missingStoryGroup: "该剧情组在当前档案语言中不存在。",
     wrongStorySection: "该剧情组不属于此剧情分类。",
     wrongStoryGroup: "该剧情不属于此剧情组。",
     missingArtCategory: "该美术资源类别不存在。",
-    missingArtwork: "该美术资源不存在。",
   },
 } as const satisfies TranslationResource;

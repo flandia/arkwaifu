@@ -1,5 +1,5 @@
 import { use, ViewTransition } from "react";
-import { useParams, useSearchParams } from "react-router";
+import { useLocation, useParams } from "react-router";
 import {
   ApiError,
   artTransitionName,
@@ -47,16 +47,19 @@ export function ArtDetailPage() {
   const contextRequest = getArtContext(locale, category, artID);
   const [art, sources] = use(artRequest);
   const context = use(contextRequest);
-  const [searchParams] = useSearchParams();
-  const from = searchParams.get("from");
-  const backTo =
-    typeof from === "string" && from.startsWith(`/${locale}/`) ? from : `/${locale}/galleries`;
+  const location = useLocation();
+  const from = typeof location.state?.from === "string" ? location.state.from : undefined;
+  const backTo = from?.startsWith(`/${locale}/`) ? from : `/${locale}/galleries`;
   const categoryName = labelCategory(art.category);
   const names = [...new Set(context.names.map((name) => name.trim()).filter(Boolean))];
   const title = names[0] || t("art.artwork", { category: categoryName });
 
   return (
-    <ArchivePage title={names[0] || art.id}>
+    <ArchivePage
+      description={`${title} · ${categoryName} · ${art.id}`}
+      image={art.thumbnailContentUrl}
+      title={names[0] || art.id}
+    >
       <BackLink to={backTo}>{t("art.backToCollection")}</BackLink>
       <PageHeader
         description={names.length > 1 ? names.slice(1).join(" · ") : undefined}

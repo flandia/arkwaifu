@@ -1,12 +1,38 @@
 import { useEffect, type ReactNode } from "react";
+import { useLocation } from "react-router";
 import { useUi } from "../i18n";
 import { PageTransition, TransitionLink } from "../navigation";
+import { applyPageMetadata, canonicalUrl } from "../seo";
 import { Eyebrow } from "./ui";
 
-export function ArchivePage({ children, title }: { children: ReactNode; title: string }) {
+export function ArchivePage({
+  canonicalPath,
+  children,
+  description,
+  image,
+  noIndex = false,
+  title,
+}: {
+  canonicalPath?: string;
+  children: ReactNode;
+  description: string;
+  image?: string;
+  noIndex?: boolean;
+  title: string;
+}) {
+  const { pathname } = useLocation();
+  const pageCanonicalUrl = canonicalUrl(canonicalPath ?? pathname);
+  const pageTitle = `Arkwaifu | ${title}`;
+
   useEffect(() => {
-    document.title = `Arkwaifu | ${title}`;
-  }, [title]);
+    applyPageMetadata({
+      canonicalUrl: pageCanonicalUrl,
+      description,
+      image,
+      noIndex,
+      title: pageTitle,
+    });
+  }, [description, image, noIndex, pageCanonicalUrl, pageTitle]);
 
   return <PageTransition>{children}</PageTransition>;
 }

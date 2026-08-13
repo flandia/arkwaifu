@@ -11,7 +11,7 @@ export function NotFoundPage({ title, children }: { title?: string; children?: R
   const locale = isLocale(params.locale) ? params.locale : "CN";
   const resolvedTitle = title ?? t("errors.notFound");
   return (
-    <ArchivePage title={resolvedTitle}>
+    <ArchivePage description={t("errors.notFoundMessage")} noIndex title={resolvedTitle}>
       <section className="relative min-h-[60vh] overflow-hidden pt-[clamp(3rem,8vw,7rem)]">
         <p
           className="absolute top-0 right-0 -z-10 m-0 font-display text-[clamp(10rem,30vw,30rem)] leading-[0.8] text-brand-soft"

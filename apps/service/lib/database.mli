@@ -11,6 +11,13 @@ type t
     Localized queries require the exact uppercase locale [CN], [EN], [JP], [KR],
     or [TW]. This module does not normalize locale values. *)
 
+type sitemap_data = {
+  story_groups : (string * string * string) list;
+      (** [(locale, group_id, group_type)] rows. *)
+  galleries : (string * string) list;  (** [(locale, gallery_id)] rows. *)
+}
+(** The minimal archive index needed to render the public sitemap. *)
+
 val sqlite : string -> (t, string) result
 (** [sqlite path] opens [path] through a read-only Caqti pool.
 
@@ -80,6 +87,10 @@ val close : t -> unit Lwt.t
 val health : t -> (unit, error) result Lwt.t
 (** [health database] checks that the current SQLite generation can execute a
     query. It returns [`Unavailable _] when the check fails. *)
+
+val sitemap_data : t -> (sitemap_data, error) result Lwt.t
+(** [sitemap_data database] reads every story-group and gallery identity from
+    one current database generation. *)
 
 val art : t -> string -> string -> (Model.art, error) result Lwt.t
 (** [art database category id] returns one composed artwork identified by the

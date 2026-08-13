@@ -294,7 +294,8 @@ let sqlite_rows =
        'integrated_strategies', 4),
       ('CN', 'reclamation-algorithm', 'Reclamation Algorithm',
        'reclamation_algorithm', 5),
-      ('CN', 'empty', 'Empty group', 'others', 6);
+      ('CN', 'empty', 'Empty group', 'others', 6),
+      ('EN', 'encoded:组/100%', 'Encoded group', 'others', 0);
     INSERT INTO stories
       VALUES ('CN', 'story', 'group', 'before', 'Before', 'S1', 'Story', 'Info', 0);
     INSERT INTO stories
@@ -1023,18 +1024,44 @@ let test_http_story_listing_and_cors () =
     "unreferenced payload stays compact"
     [ "id"; "category"; "thumbnailContentUrl" ]
     (unreferenced_art |> to_assoc |> List.map fst);
-  let legacy_unclassified =
+
+  let sitemap =
     Dream.test handler
-      (Dream.request ~method_:`GET ~target:"/api/unclassified-arts" "")
+      (Dream.request ~method_:`GET ~target:"/sitemap.txt" "")
   in
   Alcotest.(check int)
-    "legacy unclassified route status" 200
-    (Dream.status legacy_unclassified |> Dream.status_to_int);
-  Alcotest.(check string)
-    "legacy route returns the canonical payload"
-    (Yojson.Safe.to_string (`List unreferenced_json))
-    (Lwt_main.run (Dream.body legacy_unclassified));
-
+    "sitemap status" 200 (Dream.status sitemap |> Dream.status_to_int);
+  Alcotest.(check (option string))
+    "sitemap content type" (Some "text/plain; charset=utf-8")
+    (Dream.header sitemap "Content-Type");
+  Alcotest.(check (option string))
+    "sitemap CORS" (Some "*")
+    (Dream.header sitemap "Access-Control-Allow-Origin");
+  let sitemap_urls =
+    Lwt_main.run (Dream.body sitemap) |> String.split_on_char '\n'
+    |> List.filter (fun value -> not (String.equal value ""))
+  in
+  Alcotest.(check int) "sitemap URL count" 58 (List.length sitemap_urls);
+  Alcotest.(check int)
+    "sitemap URLs are unique" 58
+    (sitemap_urls |> List.sort_uniq String.compare |> List.length);
+  List.iter
+    (fun url ->
+      Alcotest.(check bool)
+        ("sitemap contains " ^ url) true
+        (List.mem url sitemap_urls))
+    [
+      "https://arkwaifu.cc/CN";
+      "https://arkwaifu.cc/CN/stories/main/group";
+      "https://arkwaifu.cc/CN/stories/integrated-strategies/integrated-strategies";
+      "https://arkwaifu.cc/CN/stories/reclamation-algorithm/reclamation-algorithm";
+      "https://arkwaifu.cc/CN/stories/others/empty";
+      "https://arkwaifu.cc/EN/stories/others/encoded%3A%E7%BB%84%2F100%25";
+      "https://arkwaifu.cc/EN/galleries/foreign-gallery";
+      "https://arkwaifu.cc/TW/galleries";
+      "https://arkwaifu.cc/CN/about";
+      "https://arkwaifu.cc/CN/unreferenced";
+    ];
   List.iter
     (fun (label, target) ->
       let removed_route =

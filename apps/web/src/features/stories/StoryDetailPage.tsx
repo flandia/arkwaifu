@@ -30,7 +30,14 @@ export function StoryDetailPage() {
   const language = localeLanguageTag(locale);
 
   return (
-    <ArchivePage title={story.name || story.code}>
+    <ArchivePage
+      description={story.info || t("story.stageDescription")}
+      image={
+        artReferences.find((reference) => reference.thumbnailContentUrl)?.thumbnailContentUrl ??
+        undefined
+      }
+      title={story.name || story.code || t("story.untitledStage")}
+    >
       <BackLink to={`/${locale}/stories/${section}/${encodeURIComponent(groupID)}`}>
         {t("story.backToGroup")}
       </BackLink>

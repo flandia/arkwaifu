@@ -29,7 +29,11 @@ export function StoryGroupPage() {
   const sectionTitle = useStorySections()[section].title;
 
   return (
-    <ArchivePage title={group.name}>
+    <ArchivePage
+      description={`${group.name} · ${sectionTitle} · ${t("story.stageDescription")}`}
+      image={group.representativeArtReference?.thumbnailContentUrl ?? undefined}
+      title={group.name}
+    >
       <BackLink to={`/${locale}/stories/${section}`}>
         {t("story.backToSection", { section: sectionTitle })}
       </BackLink>

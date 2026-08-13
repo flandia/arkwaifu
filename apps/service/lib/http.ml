@@ -26,6 +26,62 @@ let respond encode = function
 
 let locales = [ "CN"; "EN"; "JP"; "KR"; "TW" ]
 
+let story_sections =
+  [
+    ("main_story", "main");
+    ("major_event", "events");
+    ("minor_event", "vignettes");
+    ("operator_record", "records");
+    ("integrated_strategies", "integrated-strategies");
+    ("reclamation_algorithm", "reclamation-algorithm");
+    ("others", "others");
+  ]
+
+let story_section group_type =
+  match List.assoc_opt group_type story_sections with
+  | Some value -> value
+  | None -> invalid_arg ("unknown story group type: " ^ group_type)
+
+let sitemap_text (data : Database.sitemap_data) =
+  let origin = "https://arkwaifu.cc" in
+  (* Match encodeURIComponent, which the web client uses for one route segment. *)
+  let encode =
+    Uri.pct_encode ~component:(`Custom (`Path, "", "$&+,;=:@"))
+  in
+  let locale_paths =
+    locales
+    |> List.concat_map (fun locale ->
+        (origin ^ "/" ^ locale)
+        :: (List.map
+              (fun (_, section) ->
+                Printf.sprintf "%s/%s/stories/%s" origin locale section)
+              story_sections
+           @ [ Printf.sprintf "%s/%s/galleries" origin locale ]))
+  in
+  let story_paths =
+    List.map
+      (fun (locale, id, group_type) ->
+        Printf.sprintf "%s/%s/stories/%s/%s" origin locale
+          (story_section group_type) (encode id))
+      data.story_groups
+  in
+  let gallery_paths =
+    List.map
+      (fun (locale, id) ->
+        Printf.sprintf "%s/%s/galleries/%s" origin locale (encode id))
+      data.galleries
+  in
+  let paths =
+    List.sort_uniq String.compare
+      ([ origin ^ "/CN/about"; origin ^ "/CN/unreferenced" ]
+      @ locale_paths @ story_paths @ gallery_paths)
+  in
+  if List.length paths > 50_000 then invalid_arg "sitemap exceeds 50,000 URLs";
+  let body = String.concat "\n" paths ^ "\n" in
+  if String.length body > 52_428_800 then
+    invalid_arg "sitemap exceeds 50 MiB";
+  body
+
 let locale request =
   let value = String.uppercase_ascii (Dream.param request "locale") in
   if List.mem value locales then Ok value else Error `Not_found
@@ -65,16 +121,27 @@ let routes ~database ~object_base_url =
     >>= respond (fun arts ->
         `List (List.map (Model.unreferenced_art_json ~object_base_url) arts))
   in
+  let sitemap _ =
+    Database.sitemap_data database >>= function
+    | Error error -> database_error error
+    | Ok data -> (
+        match encode_response sitemap_text data with
+        | Error message -> database_error (`Unavailable message)
+        | Ok body ->
+            Dream.respond
+              ~headers:[ ("Content-Type", "text/plain; charset=utf-8") ]
+              body)
+  in
   public_read_cors
   @@ Dream.router
        [
          Dream.get "/health" (fun _ ->
              Database.health database
              >>= respond (fun () -> `Assoc [ ("status", `String "ok") ]));
+         Dream.get "/sitemap.txt" sitemap;
          Dream.get "/api/arts/:category/:id" art;
          Dream.get "/api/source-arts/:id" source_art;
          Dream.get "/api/unreferenced-arts" unreferenced_arts;
-         Dream.get "/api/unclassified-arts" unreferenced_arts;
          Dream.get "/api/:locale/arts/:category/:id/context" (fun request ->
              with_locale request (fun locale ->
                  Database.art_context database locale

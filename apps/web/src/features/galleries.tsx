@@ -24,7 +24,7 @@ export function GalleriesPage() {
   const language = localeLanguageTag(locale);
 
   return (
-    <ArchivePage title={t("gallery.title")}>
+    <ArchivePage description={t("home.galleryDescription")} title={t("gallery.title")}>
       <PageHeader
         eyebrow={t("gallery.indexEyebrow")}
         meta={<span>{t("common.locale", { locale })}</span>}
@@ -116,7 +116,11 @@ export function GalleryDetailPage() {
   }
 
   return (
-    <ArchivePage title={gallery.name}>
+    <ArchivePage
+      description={gallery.description || t("gallery.detailDescription")}
+      image={entries.find((entry) => entry.thumbnailContentUrl)?.thumbnailContentUrl ?? undefined}
+      title={gallery.name || t("gallery.untitled")}
+    >
       <BackLink to={`/${locale}/galleries`}>{t("gallery.back")}</BackLink>
       <PageHeader
         description={gallery.description || t("gallery.detailDescription")}

@@ -8,6 +8,8 @@ The service reads published data and returns JavaScript Object Notation (JSON) m
 
 The service returns direct public Uniform Resource Locators (URLs) for images and thumbnails. It has no image content or redirect endpoints, so browsers fetch image bytes from the bucket or content delivery network (CDN).
 
+`GET /sitemap.txt` renders the website's text sitemap from the current SQLite generation. The main website's `robots.txt` may reference this cross-origin URL; a successful database refresh updates subsequent sitemap responses without a web rebuild.
+
 ## Configure the process
 
 Set `ARKWAIFU_OBJECT_BASE_URL` before starting the service. The remaining settings have deployment defaults:

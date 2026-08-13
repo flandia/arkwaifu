@@ -23,6 +23,32 @@ VITE_API_BASE_URL=http://127.0.0.1:58080
 
 Vite embeds this value at build time. Changing the deployed service origin requires a new build. The app renders object-storage addresses from API metadata: cards use `thumbnailContentUrl`, while detail views and source layers use `image.contentUrl`.
 
+### Configure Google Analytics
+
+Set the Google Analytics 4 (GA4) web-stream measurement identifier at build time:
+
+```dotenv
+VITE_GA_MEASUREMENT_ID=G-XXXXXXXXXX
+```
+
+To obtain the identifier, create or select a GA4 property in Google Analytics, open **Admin → Data collection and modification → Data Streams**, and create a Web stream for `https://arkwaifu.cc`. Copy its **Measurement ID**, which starts with `G-`, into the deployment variable above.
+
+`index.html` contains Google's standard `gtag.js` snippet. Under the stream's **Enhanced measurement → Page views → Show advanced settings**, keep **Page changes based on browser history events** enabled so React Router navigation is counted. The app does not contain a separate analytics adapter and does not use Google Tag Manager.
+
+Rebuild and deploy after setting the variable, then navigate between several routes and verify the resulting `page_view` events in GA4 DebugView or Realtime.
+
+The measurement identifier is public configuration, not a secret. Enabling the tag does not replace the site's privacy obligations: the operator remains responsible for an appropriate privacy disclosure, consent handling where required, and ensuring that route or event data contains no personally identifiable information.
+
+### Sitemap
+
+The read service generates `https://api.arkwaifu.cc/sitemap.txt` from its current SQLite generation. The web app keeps only `public/robots.txt`, which advertises that URL. Archive updates therefore appear in the sitemap after the service refreshes its database; they do not require regenerating or redeploying the static website.
+
+The sitemap covers every locale home, story-section index, story-group page, gallery index, and gallery page, plus the canonical CN copies of About and Unreferenced Artwork. It deliberately omits individual stories and artworks, query URLs, and legacy or redirect-only routes. It is a crawl hint, not an indexing rule; use page metadata such as `noindex` when a page must not appear in search results.
+
+Each successful route publishes one absolute canonical URL without its query string, fragment, or trailing slash. Locale-specific pages are self-referential; the locale-independent About and Unreferenced Artwork pages use their CN paths as canonical. Redirect-only and missing routes are not sitemap entries. Do not add a fixed canonical to `index.html`: that file is the catch-all document for every route and would incorrectly make every page canonical to the same URL.
+
+The static catch-all has one remaining limitation: the host returns `index.html` with HTTP status `200` before the client knows whether a route exists. The client marks missing records `noindex`, but that is not a real HTTP `404` response and can still be reported as a soft 404. Correct status codes require routing at the server or edge rather than additional client metadata.
+
 ### Run the verification suite
 
 Run the same lint, formatting, test, and build gates used during development:
@@ -47,4 +73,10 @@ App Platform builds the committed Dockerfile and extracts the static files from 
 
 Set `VITE_API_BASE_URL` as a build-time variable when the deployment uses a non-production service. The Dockerfile passes it to Vite through a build argument. Keep `index.html` as the catch-all document so direct visits to React Router paths load the app.
 
-Deploy the matching service before this web build. The client calls the canonical `/api/unreferenced-arts` route; the service keeps `/api/unclassified-arts` only for older clients.
+Set `VITE_GA_MEASUREMENT_ID` as another build-time variable to enable GA4 in production. The Dockerfile passes it through a separate build argument; changing either Vite variable requires a new build.
+
+When DigitalOcean App Platform builds this Dockerfile from the repository, open the app's **Settings**, select the web component, edit **Environment Variables**, and add `VITE_GA_MEASUREMENT_ID` with **Build Time** scope. Save and redeploy the component. If App Platform deploys the prebuilt GHCR image instead, the value must be set as the GitHub Actions repository variable `VITE_GA_MEASUREMENT_ID` before that image is built; a DigitalOcean runtime variable cannot change an already compiled Vite bundle.
+
+Deploy the service version that exposes `/sitemap.txt` before deploying this web build. After that, normal database publications update the sitemap through the service's existing refresh flow.
+
+After deployment, submit `https://api.arkwaifu.cc/sitemap.txt` in Google Search Console and inspect representative rendered routes there. Search Console reports discovery, crawling, canonical selection, and indexing; GA4 reports visitor activity. Configuring one does not configure or validate the other.

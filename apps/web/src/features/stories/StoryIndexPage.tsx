@@ -25,7 +25,7 @@ export function StoryIndexPage() {
   const index = useCollectionIndex(groups, groupSearchValues);
 
   return (
-    <ArchivePage title={details.title}>
+    <ArchivePage description={`${details.title} · ${t("home.description")}`} title={details.title}>
       <PageHeader
         eyebrow={t("story.indexEyebrow", { index: details.index })}
         meta={<span>{t("common.locale", { locale })}</span>}

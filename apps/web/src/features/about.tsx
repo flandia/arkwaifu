@@ -9,7 +9,11 @@ export function AboutPage() {
   const locale = requiredLocale(useParams().locale);
 
   return (
-    <ArchivePage title={t("about.title")}>
+    <ArchivePage
+      canonicalPath="/CN/about"
+      description={t("about.description")}
+      title={t("about.title")}
+    >
       <PageHeader
         description={t("about.description")}
         eyebrow={t("about.eyebrow")}

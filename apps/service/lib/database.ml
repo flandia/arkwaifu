@@ -4,10 +4,16 @@ open Lwt.Infix
 
 type error = [ `Not_found | `Unavailable of string ]
 
+type sitemap_data = {
+  story_groups : (string * string * string) list;
+  galleries : (string * string) list;
+}
+
 type t = {
   close : unit -> unit Lwt.t;
   check : unit -> (unit, error) result Lwt.t;
   health : unit -> (unit, error) result Lwt.t;
+  sitemap_data : unit -> (sitemap_data, error) result Lwt.t;
   art : string -> string -> (Model.art, error) result Lwt.t;
   source_art : string -> (Model.source_art, error) result Lwt.t;
   unreferenced_arts : unit -> (Model.unreferenced_art list, error) result Lwt.t;
@@ -105,6 +111,20 @@ module Query = struct
 
   let schema_version = (unit ->! int) "PRAGMA user_version"
   let ping = (unit ->! int) "SELECT 1"
+
+  let sitemap_story_groups =
+    (unit ->* t2 string (t2 string string))
+      {|
+        SELECT locale, group_id, group_type
+        FROM story_groups
+      |}
+
+  let sitemap_galleries =
+    (unit ->* t2 string string)
+      {|
+        SELECT locale, gallery_id
+        FROM galleries
+      |}
 
   let art =
     let row =
@@ -595,6 +615,22 @@ let sqlite_with_pool_observer ~on_acquire path =
                   image = { object_key; byte_size; width; height };
                 }
       in
+      let sitemap_data () =
+        use (fun (module Db) ->
+            Db.collect_list Query.sitemap_story_groups () >>= function
+            | Error error -> Lwt.return (Error error)
+            | Ok story_group_rows ->
+                Db.collect_list Query.sitemap_galleries ()
+                >|= Result.map (fun gallery_rows ->
+                    {
+                      story_groups =
+                        List.map
+                          (fun (locale, (id, group_type)) ->
+                            (locale, id, group_type))
+                          story_group_rows;
+                      galleries = gallery_rows;
+                    }))
+      in
       let unreferenced_arts () =
         use (fun (module Db) -> Db.collect_list Query.unreferenced_arts ())
         >|= Result.map (fun rows ->
@@ -967,6 +1003,7 @@ let sqlite_with_pool_observer ~on_acquire path =
           close = idempotent_close (fun () -> Caqti_lwt_unix.Pool.drain pool);
           check;
           health;
+          sitemap_data;
           art;
           source_art;
           unreferenced_arts;
@@ -1149,6 +1186,8 @@ let start_live ~fetch ~cache_dir ~download_timeout_seconds =
             close;
             check = (fun () -> with_current (fun value -> value.check ()));
             health = (fun () -> with_current (fun value -> value.health ()));
+            sitemap_data =
+              (fun () -> with_current (fun value -> value.sitemap_data ()));
             art =
               (fun category id ->
                 with_current (fun value -> value.art category id));
@@ -1252,6 +1291,7 @@ end
 
 let close (database : t) = database.close ()
 let health (database : t) = database.health ()
+let sitemap_data (database : t) = database.sitemap_data ()
 let art (database : t) category id = database.art category id
 let source_art (database : t) id = database.source_art id
 let unreferenced_arts (database : t) = database.unreferenced_arts ()

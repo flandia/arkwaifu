@@ -19,7 +19,12 @@ export function UnreferencedArtPage() {
   }));
 
   return (
-    <ArchivePage title={t("unreferenced.title")}>
+    <ArchivePage
+      canonicalPath="/CN/unreferenced"
+      description={t("unreferenced.description")}
+      image={arts[0]?.thumbnailContentUrl}
+      title={t("unreferenced.title")}
+    >
       <PageHeader
         description={t("unreferenced.description")}
         eyebrow={t("unreferenced.eyebrow")}
