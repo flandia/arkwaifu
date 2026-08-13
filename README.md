@@ -12,7 +12,7 @@
 
 Arkwaifu archives artwork and story metadata from Arknights. 
 
-We are happy to announce that Arkwaifu v2 has launched! Browse it at [arkwaifu.cc](https://arkwaifu.cc/).
+We are happy to announce that Arkwaifu v2 has launched! Browse it at [arkwaifu.cc](https://arkwaifu.cc/). A CN mirror is also available at [cn.arkwaifu.cc](https://cn.arkwaifu.cc/) (although connectivity is not guaranteed).
 
 ## Features
 
