@@ -1,12 +1,21 @@
 import { LRUCache } from "lru-cache";
 
 const productionApiBaseUrl = "https://api.arkwaifu.cc";
+const chinaMirrorApiBaseUrl = "https://api.cn.arkwaifu.cc";
 
-export function resolveApiBaseUrl(configuredApiBaseUrl: string | undefined): string {
-  return (configuredApiBaseUrl?.trim() || productionApiBaseUrl).replace(/\/+$/, "");
+export function resolveApiBaseUrl(
+  configuredApiBaseUrl: string | undefined,
+  hostname?: string,
+): string {
+  const defaultApiBaseUrl =
+    hostname === "cn.arkwaifu.cc" ? chinaMirrorApiBaseUrl : productionApiBaseUrl;
+  return (configuredApiBaseUrl?.trim() || defaultApiBaseUrl).replace(/\/+$/, "");
 }
 
-const apiBaseUrl = resolveApiBaseUrl(import.meta.env.VITE_API_BASE_URL);
+const apiBaseUrl = resolveApiBaseUrl(
+  import.meta.env.VITE_API_BASE_URL,
+  typeof window === "undefined" ? undefined : window.location.hostname,
+);
 const requestTimeoutMs = 15_000;
 
 const requests = new LRUCache<string, Promise<unknown>>({

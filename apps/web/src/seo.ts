@@ -1,5 +1,9 @@
 const siteOrigin = "https://arkwaifu.cc";
 
+export function isSearchMirror(hostname: string): boolean {
+  return hostname === "cn.arkwaifu.cc";
+}
+
 export function canonicalUrl(path: string): string {
   const pathname = (path.split(/[?#]/, 1)[0] || "/").replace(/^\/*/, "/");
   const normalizedPath = pathname === "/" ? pathname : pathname.replace(/\/+$/, "");
@@ -30,6 +34,7 @@ interface PageMetadata {
 }
 
 export function applyPageMetadata(metadata: PageMetadata): void {
+  const blockIndex = metadata.noIndex || isSearchMirror(window.location.hostname);
   document.title = metadata.title;
 
   if (metadata.noIndex) {
@@ -45,7 +50,7 @@ export function applyPageMetadata(metadata: PageMetadata): void {
   }
 
   upsertMeta("name", "description", metadata.description);
-  optionalMeta("name", "robots", metadata.noIndex ? "noindex,follow" : undefined);
+  optionalMeta("name", "robots", blockIndex ? "noindex,follow" : undefined);
   upsertMeta("property", "og:site_name", "Arkwaifu");
   upsertMeta("property", "og:type", "website");
   upsertMeta("property", "og:title", metadata.title);

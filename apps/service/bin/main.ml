@@ -21,4 +21,5 @@ let () =
   in
   Dream.run ~interface:config.interface ~port:config.port
   @@ Dream.logger
-  @@ Arkwaifu_service.Http.routes ~database ~object_base_url:config.object_base_url
+  @@ Arkwaifu_service.Http.routes ?china_object_base_url:config.china_object_base_url
+       ~database ~object_base_url:config.object_base_url

@@ -65,7 +65,8 @@ afterEach(() => {
 describe("archive helpers", () => {
   it("defaults API requests to production and normalizes configured overrides", () => {
     expect(resolveApiBaseUrl(undefined)).toBe("https://api.arkwaifu.cc");
-    expect(resolveApiBaseUrl(" https://preview.example.test/root/// ")).toBe(
+    expect(resolveApiBaseUrl(undefined, "cn.arkwaifu.cc")).toBe("https://api.cn.arkwaifu.cc");
+    expect(resolveApiBaseUrl(" https://preview.example.test/root/// ", "cn.arkwaifu.cc")).toBe(
       "https://preview.example.test/root",
     );
   });

@@ -15,6 +15,7 @@ The service returns direct public Uniform Resource Locators (URLs) for images an
 Set `ARKWAIFU_OBJECT_BASE_URL` before starting the service. The remaining settings have deployment defaults:
 
 - **`ARKWAIFU_OBJECT_BASE_URL`**: Required absolute HTTP or HTTPS public bucket or CDN base URL used to construct image links, such as `https://objects.example/arkwaifu`
+- **`ARKWAIFU_CN_OBJECT_BASE_URL`**: Optional public object base URL for the China mirror, such as `https://assets.cn.arkwaifu.cc`
 - **`ARKWAIFU_DATABASE_URL`**: Absolute HTTP or HTTPS database download URL; defaults to `<ARKWAIFU_OBJECT_BASE_URL>/arkwaifu.sqlite3`
 - **`ARKWAIFU_DATABASE_CACHE_DIR`**: Writable process-private generation directory; defaults to `/var/lib/arkwaifu/database`
 - **`ARKWAIFU_DATABASE_POLL_SECONDS`**: Positive polling interval in seconds; defaults to `30`
@@ -23,6 +24,13 @@ Set `ARKWAIFU_OBJECT_BASE_URL` before starting the service. The remaining settin
 - **`ARKWAIFU_PORT`**: Listen port from 1 through 65,535; defaults to `8080`
 
 The service must read the database URL without S3 credentials unless your deployment supplies an authenticated HTTP intermediary. Configure database responses with `Cache-Control: no-cache`, and preserve ETag headers for conditional polling.
+
+When `ARKWAIFU_CN_OBJECT_BASE_URL` is set, the service uses it only for a
+request whose exact `X-Forwarded-Host` value is `api.cn.arkwaifu.cc`. Configure
+ESA to overwrite that header on requests from the API mirror. Direct requests
+to `api.arkwaifu.cc`, missing headers, and every other header value continue to
+use `ARKWAIFU_OBJECT_BASE_URL`. The header selects only public image URLs; it
+does not select a database or grant access to private data.
 
 ## Refresh the database safely
 

@@ -6,6 +6,7 @@ type t = {
   database_poll_seconds : float;
   database_download_timeout_seconds : float;
   object_base_url : string;
+  china_object_base_url : string option;
   interface : string;
   port : int;
 }
@@ -35,6 +36,11 @@ let http_uri name value =
     | _ -> invalid ()
   with Invalid_argument _ -> invalid ()
 
+let optional_http_url name =
+  match Sys.getenv_opt name with
+  | None | Some "" -> Ok None
+  | Some value -> Result.map (fun _ -> Some value) (http_uri name value)
+
 let load () =
   match required "ARKWAIFU_OBJECT_BASE_URL" with
   | Error error -> Error error
@@ -42,6 +48,9 @@ let load () =
       match http_uri "ARKWAIFU_OBJECT_BASE_URL" object_base_url with
       | Error error -> Error error
       | Ok _ -> (
+          match optional_http_url "ARKWAIFU_CN_OBJECT_BASE_URL" with
+          | Error error -> Error error
+          | Ok china_object_base_url ->
           let interface =
             Option.value ~default:"0.0.0.0"
               (Sys.getenv_opt "ARKWAIFU_INTERFACE")
@@ -87,6 +96,7 @@ let load () =
                       database_poll_seconds;
                       database_download_timeout_seconds;
                       object_base_url;
+                      china_object_base_url;
                       interface;
                       port;
                     })

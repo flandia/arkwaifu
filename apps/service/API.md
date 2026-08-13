@@ -62,6 +62,11 @@ The global unreferenced-art list contains compact objects with `id`, `category`,
 
 The context response contains `names`, `siblings`, and `occurrences`. Names preserve first-occurrence order without duplicates. Character siblings share the exact identifier prefix before `#` and are ordered by artwork ID. Each sibling’s names preserve their first occurrence without duplicates. Other categories return an empty sibling list. Occurrences follow stored group and story positions and contain unique stories.
 
+Direct object URLs normally use the service's configured public object origin.
+The China API mirror may return the same immutable object keys below
+`https://assets.cn.arkwaifu.cc` instead; clients must treat the returned URL as
+authoritative rather than reconstructing an object hostname.
+
 ## Interpret response fields
 
 Every object uses the fields and nullability in this table. Fields not marked nullable are always present with the listed JSON type.

@@ -100,6 +100,7 @@ let test_config_urls () =
   with_environment
     [
       ("ARKWAIFU_OBJECT_BASE_URL", "https://objects.example/bucket");
+      ("ARKWAIFU_CN_OBJECT_BASE_URL", "https://cn-objects.example/bucket");
       ("ARKWAIFU_DATABASE_URL", "http://database.example/arkwaifu.sqlite3");
       ("ARKWAIFU_DATABASE_CACHE_DIR", "database-cache");
       ("ARKWAIFU_DATABASE_POLL_SECONDS", "30");
@@ -116,6 +117,15 @@ let test_config_urls () =
   Alcotest.(check string)
     "database URL" "http://database.example/arkwaifu.sqlite3"
     (Uri.to_string config.database_url);
+  Alcotest.(check (option string))
+    "China object base URL" (Some "https://cn-objects.example/bucket")
+    config.china_object_base_url;
+  Unix.putenv "ARKWAIFU_CN_OBJECT_BASE_URL" "file:///cn-objects";
+  Alcotest.(check bool)
+    "non-HTTP China object base URL is rejected" true
+    (Result.is_error (Config.load ()));
+  Unix.putenv "ARKWAIFU_CN_OBJECT_BASE_URL"
+    "https://cn-objects.example/bucket";
   Unix.unsetenv "ARKWAIFU_DATABASE_URL";
   let default_config =
     match Config.load () with
@@ -858,7 +868,8 @@ let test_live_cache_directory_error () =
 let test_http_story_listing_and_cors () =
   with_sqlite_database @@ fun database ->
   let handler =
-    Http.routes ~database ~object_base_url:"https://objects.example/bucket"
+    Http.routes ~china_object_base_url:"https://cn-objects.example/bucket"
+      ~database ~object_base_url:"https://objects.example/bucket"
   in
   let group_index =
     Dream.test handler
@@ -867,6 +878,9 @@ let test_http_story_listing_and_cors () =
   Alcotest.(check int)
     "story group index status" 200
     (Dream.status group_index |> Dream.status_to_int);
+  Alcotest.(check (option string))
+    "object-origin cache variation" (Some "X-Forwarded-Host")
+    (Dream.header group_index "Vary");
   let open Yojson.Safe.Util in
   let group_index_json =
     Lwt_main.run (Dream.body group_index) |> Yojson.Safe.from_string |> to_list
@@ -952,6 +966,21 @@ let test_http_story_listing_and_cors () =
     "art metadata has direct thumbnail object-store URL"
     "https://objects.example/bucket/ART/art-v1/thumbnail/character/event.webp"
     (art_metadata_json |> member "thumbnailContentUrl" |> to_string);
+
+  let mirror_art_metadata =
+    Dream.test handler
+      (Dream.request ~method_:`GET
+         ~headers:[ ("X-Forwarded-Host", "api.cn.arkwaifu.cc") ]
+         ~target:"/api/arts/character/event" "")
+  in
+  let mirror_art_metadata_json =
+    Lwt_main.run (Dream.body mirror_art_metadata) |> Yojson.Safe.from_string
+  in
+  Alcotest.(check string)
+    "China mirror uses its object origin"
+    "https://cn-objects.example/bucket/ART/art-v1/composition/character/event.png"
+    (mirror_art_metadata_json |> member "image" |> member "contentUrl"
+   |> to_string);
 
   let art_context =
     Dream.test handler

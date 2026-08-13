@@ -14,6 +14,8 @@ type t = {
   object_base_url : string;
       (** Absolute HTTP or HTTPS public bucket or content delivery network base
           URL. *)
+  china_object_base_url : string option;
+      (** Optional public object base URL returned to the China mirror. *)
   interface : string;  (** Network interface passed to [Dream.run]. *)
   port : int;  (** TCP port in the inclusive range 1 through 65,535. *)
 }
@@ -27,4 +29,4 @@ val load : unit -> (t, string) result
 
     It returns [Error message] when a required value is missing, either URL is
     not absolute HTTP or HTTPS, [port] is outside 1 through 65,535, or either
-    duration is not positive. *)
+    duration is not positive. [ARKWAIFU_CN_OBJECT_BASE_URL] is optional. *)

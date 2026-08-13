@@ -15,7 +15,11 @@ Vite listens on `http://127.0.0.1:5173`.
 
 ### Configure the archive service
 
-Builds use `https://api.arkwaifu.cc` as the application programming interface (API) origin by default. Create `.env.local` to use a local or preview service:
+Builds use `https://api.arkwaifu.cc` as the application programming interface
+(API) origin by default. The same build automatically uses
+`https://api.cn.arkwaifu.cc` when loaded from `cn.arkwaifu.cc`. An explicit
+`VITE_API_BASE_URL` overrides both defaults. Create `.env.local` to use a local
+or preview service:
 
 ```dotenv
 VITE_API_BASE_URL=http://127.0.0.1:58080
@@ -47,6 +51,12 @@ The sitemap covers every locale home, story-section index, story-group page, gal
 
 Each successful route publishes one absolute canonical URL without its query string, fragment, or trailing slash. Locale-specific pages are self-referential; the locale-independent About and Unreferenced Artwork pages use their CN paths as canonical. Redirect-only and missing routes are not sitemap entries. Do not add a fixed canonical to `index.html`: that file is the catch-all document for every route and would incorrectly make every page canonical to the same URL.
 
+The China mirror keeps canonical URLs on `https://arkwaifu.cc` and adds a
+client-side `noindex,follow` directive. Also configure ESA to add the HTTP
+response header `X-Robots-Tag: noindex, follow` for `cn.arkwaifu.cc`; the edge
+header covers crawlers that do not execute the application JavaScript. Do not
+submit the mirror to Search Console or publish a mirror sitemap.
+
 The static catch-all has one remaining limitation: the host returns `index.html` with HTTP status `200` before the client knows whether a route exists. The client marks missing records `noindex`, but that is not a real HTTP `404` response and can still be reported as a soft 404. Correct status codes require routing at the server or edge rather than additional client metadata.
 
 ### Run the verification suite
@@ -73,6 +83,11 @@ App Platform builds the committed Dockerfile and extracts the static files from 
 
 Set `VITE_API_BASE_URL` as a build-time variable when the deployment uses a non-production service. The Dockerfile passes it to Vite through a build argument. Keep `index.html` as the catch-all document so direct visits to React Router paths load the app.
 
+Do not set `VITE_API_BASE_URL` for the shared production build. Leaving it
+unset lets that one artifact select `api.arkwaifu.cc` or
+`api.cn.arkwaifu.cc` from the browser hostname. A configured value is an
+intentional override and disables that automatic selection.
+
 Set `VITE_GA_MEASUREMENT_ID` as another build-time variable to enable GA4 in production. The Dockerfile passes it through a separate build argument; changing either Vite variable requires a new build.
 
 When DigitalOcean App Platform builds this Dockerfile from the repository, open the app's **Settings**, select the web component, edit **Environment Variables**, and add `VITE_GA_MEASUREMENT_ID` with **Build Time** scope. Save and redeploy the component. If App Platform deploys the prebuilt GHCR image instead, the value must be set as the GitHub Actions repository variable `VITE_GA_MEASUREMENT_ID` before that image is built; a DigitalOcean runtime variable cannot change an already compiled Vite bundle.
@@ -80,3 +95,26 @@ When DigitalOcean App Platform builds this Dockerfile from the repository, open 
 Deploy the service version that exposes `/sitemap.txt` before deploying this web build. After that, normal database publications update the sitemap through the service's existing refresh flow.
 
 After deployment, submit `https://api.arkwaifu.cc/sitemap.txt` in Google Search Console and inspect representative rendered routes there. Search Console reports discovery, crawling, canonical selection, and indexing; GA4 reports visitor activity. Configuring one does not configure or validate the other.
+
+## Operate the China mirror
+
+The production artifact supports three ESA hostnames without a separate build:
+
+- `cn.arkwaifu.cc` retrieves the static site from `arkwaifu.cc`.
+- `api.cn.arkwaifu.cc` retrieves the read API from `api.arkwaifu.cc`.
+- `assets.cn.arkwaifu.cc` retrieves public objects directly from
+  `arkwaifu.sgp1.digitaloceanspaces.com`.
+
+Set each HTTPS origin's Host header and server name indication (SNI) to its
+origin hostname. In an ESA-to-origin request-header rule for only
+`api.cn.arkwaifu.cc`, overwrite `X-Forwarded-Host` with
+`api.cn.arkwaifu.cc`. Set the service runtime variable
+`ARKWAIFU_CN_OBJECT_BASE_URL=https://assets.cn.arkwaifu.cc`.
+
+Use ESA cache rules to bypass the API host and HTML requests to the web host.
+Leave hashed JavaScript, Cascading Style Sheets (CSS), images, and WebP
+thumbnails on ESA's default static-resource policy; do not add a full-site
+cache rule. Add an ESA-to-client response-header rule for `cn.arkwaifu.cc`
+that overwrites `X-Robots-Tag` with `noindex, follow`. The application also
+emits a matching robots meta directive and keeps canonical URLs on the main
+domain. Do not add the mirror to the sitemap.
