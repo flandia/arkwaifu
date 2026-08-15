@@ -13,6 +13,36 @@ bun run dev
 
 Vite listens on `http://127.0.0.1:5173`.
 
+For the complete local archive preview, keep MinIO in Docker and run the
+remaining processes on the host. The generated archive is stored outside the
+repository at `E:\arkwaifu\dev-runtime`:
+
+```console
+Push-Location infra
+docker compose up -d minio minio-init
+Pop-Location
+```
+
+In a second terminal, serve the runtime data:
+
+```console
+Push-Location apps/web
+python -m http.server 5175 --directory E:\arkwaifu\dev-runtime
+```
+
+In a third terminal, run the service from `apps/service/` on port `5174` with
+`ARKWAIFU_DATABASE_URL=http://127.0.0.1:5175/arkwaifu.sqlite3` and
+`ARKWAIFU_OBJECT_BASE_URL=http://127.0.0.1:5175`. In a fourth terminal, run
+Vite from `apps/web/` with `VITE_API_BASE_URL=http://127.0.0.1:5174`:
+
+```console
+Push-Location apps/web
+$env:VITE_API_BASE_URL = "http://127.0.0.1:5174"
+bun run dev
+```
+
+Do not bind generated preview data into the repository.
+
 ### Configure the archive service
 
 Builds use `https://api.arkwaifu.cc` as the application programming interface
@@ -22,7 +52,7 @@ Builds use `https://api.arkwaifu.cc` as the application programming interface
 or preview service:
 
 ```dotenv
-VITE_API_BASE_URL=http://127.0.0.1:58080
+VITE_API_BASE_URL=http://127.0.0.1:5174
 ```
 
 Vite embeds this value at build time. Changing the deployed service origin requires a new build. The app renders object-storage addresses from API metadata: cards use `thumbnailContentUrl`, while detail views and source layers use `image.contentUrl`.

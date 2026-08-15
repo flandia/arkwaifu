@@ -12,6 +12,14 @@ Each application owns one part of the system:
 
 The Go v1 API and global server-side search are outside the current scope. Use v1.9.4 only as a behavioral reference for unclear frontend details. Do not copy its API or database format without a current requirement.
 
+## Run applications from their directories
+
+Never run an application command with the repository root as its working directory. Run the updater from `apps/updateloop/`, the service from `apps/service/`, and the web app from `apps/web/`. Run Docker Compose commands from `infra/`. This keeps application caches, generated files, and tool state out of the repository root; in particular, do not recreate a root-level `.cache/` directory.
+
+Docker is only for local MinIO. Start it from `infra/` with `docker compose up -d minio minio-init`; run the service, static runtime server, and Vite on the host from their respective application directories. The complete development archive lives outside the repository at `E:\arkwaifu\dev-runtime`, and must not be bind-mounted back into the repository or copied into a root-level `.dev-runtime/`.
+
+For a complete host preview, serve `E:\arkwaifu\dev-runtime` on port `5175`, configure the host service with `ARKWAIFU_DATABASE_URL=http://127.0.0.1:5175/arkwaifu.sqlite3` and `ARKWAIFU_OBJECT_BASE_URL=http://127.0.0.1:5175`, then start it on port `5174` and start Vite with `VITE_API_BASE_URL=http://127.0.0.1:5174`.
+
 Two repository paths define shared infrastructure:
 
 - `apps/updateloop/src/arkwaifu.sql`: sole SQLite schema source, embedded in the updater package
@@ -60,7 +68,7 @@ Empty locale sections, missing story text, and missing art references are expect
 
 Art comes from the official Windows client CDN. Locale data comes from the unpinned `master` branch of `ArknightsAssets/ArknightsGamedata`; its detected `versionId` becomes the locale `resVersion`.
 
-The default cache is `.cache/`. Each art resource retains four independently reusable products:
+The default cache is `.cache/` relative to the application working directory (for example, `apps/updateloop/.cache/`); never create it at the repository root. Each art resource retains four independently reusable products:
 
 1. `fetched`: downloaded CDN wrapper
 2. `unwrapped`: inner Unity bundle
@@ -96,11 +104,14 @@ uv run pytest
 Pop-Location
 
 # Local object storage
-docker compose -f infra/compose.yaml up -d minio minio-init
+Push-Location infra
+docker compose up -d minio minio-init
+Pop-Location
 
-# OCaml service without a host OCaml installation
-docker build --target build -t arkwaifu-service-build:dev apps/service
-docker compose -f infra/compose.yaml --profile service up -d --build
+# OCaml service
+Push-Location apps/service
+dune build @runtest
+Pop-Location
 
 # React frontend
 Push-Location apps/web

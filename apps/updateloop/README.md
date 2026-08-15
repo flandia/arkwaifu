@@ -77,10 +77,10 @@ Use these optional variables when their defaults do not fit the deployment:
 
 Size `ARKWAIFU_EXTRACTION_WORKERS` for both CPU capacity and peak memory.
 
-The repository includes local MinIO settings in `../../infra/dev.env.example`. Pass that file directly instead of copying it:
+The application directory includes local MinIO settings in `.env.example`. Pass that file directly instead of copying it:
 
 ```console
-uv run --env-file ../../infra/dev.env.example updateloop run
+uv run --env-file .env.example updateloop run
 ```
 
 Set `ARKWAIFU_ART_VERSION_URL` and `ARKWAIFU_ART_ASSET_BASE_URL` together when you use a compatible Windows mirror. The automatic pipeline does not extract Android assets.
@@ -91,10 +91,10 @@ Read [Upstream data and locale classification](docs/upstream-data.md) for source
 
 The updater stores reusable downloads and generated files under `.cache/` in its current working directory. It validates each cache entry before reuse and replaces corrupted entries automatically.
 
-Run from the repository root when you want the cache there:
+Run from `apps/updateloop/`; never start the updater from the repository root:
 
 ```console
-uv run --project apps/updateloop updateloop run
+uv run updateloop run
 ```
 
 Use `--no-cache` for an isolated run. The temporary cache remains available until the SQLite transaction, image uploads, and database upload finish.
@@ -120,10 +120,12 @@ uv run pytest
 
 Ordinary tests run offline and produce deterministic results. Live content-delivery network (CDN) and game-data smoke updates remain deployment checks.
 
-Start MinIO before you run the integration test:
+Start MinIO from `infra/` before you run the integration test:
 
 ```powershell
-docker compose -f ../../infra/compose.yaml up -d minio minio-init
+Push-Location ../../infra
+docker compose up -d minio minio-init
+Pop-Location
 $env:ARKWAIFU_INTEGRATION = "1"
 uv run pytest tests/integration/test_database_minio.py
 ```

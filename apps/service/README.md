@@ -52,10 +52,12 @@ The database is monolithic, so each startup and published change transfers the c
 
 ## Prepare historical thumbnails
 
-Archives published before thumbnail support need one backfill before the frontend can use direct thumbnail URLs. From the repository root, run the updater command, then deploy the service before the frontend:
+Archives published before thumbnail support need one backfill before the frontend can use direct thumbnail URLs. Run the updater from its application directory, then deploy the service before the frontend:
 
 ```console
-uv run --project apps/updateloop updateloop run art --complete
+Push-Location apps/updateloop
+uv run updateloop run art --complete
+Pop-Location
 ```
 
 Future art updates publish thumbnails for changed compositions. Thumbnail keys follow `ART/<resVersion>/thumbnail/<category>/<name>.webp`.
@@ -65,30 +67,44 @@ Future art updates publish thumbnails for changed compositions. Thumbnail keys f
 The Docker build pins OCaml 5.5 and runs the reader tests. Build the test stage and runtime image with:
 
 ```console
-docker build --target build -t arkwaifu-service-build:dev apps/service
-docker build -t arkwaifu-service:dev apps/service
+Push-Location apps/service
+docker build --target build -t arkwaifu-service-build:dev .
+docker build -t arkwaifu-service:dev .
+Pop-Location
 ```
 
 The contract-test target reruns the reader suite against the updater-owned production schema. Supply that schema as a named build context:
 
 ```bash
 docker buildx build --target contract-test \
-  --build-context database-schema=apps/updateloop/src \
-  -f apps/service/Dockerfile apps/service
+  --build-context database-schema=../updateloop/src \
+  -f Dockerfile .
 ```
 
 For a native opam switch, install the dependencies from `arkwaifu_service.opam`. Then run `dune runtest` and `dune exec arkwaifu-service`.
 
 ## Run the local stack
 
-Start MinIO, publish `arkwaifu.sqlite3` with the updater, and start the service profile. These commands start the dependencies and verify the health route:
+Start MinIO in Docker, serve the complete development archive from the host,
+and run this service natively from `apps/service/`:
 
 ```console
-docker compose -f infra/compose.yaml up -d minio minio-init
-uv run --project apps/updateloop --env-file infra/dev.env.example updateloop run
-docker compose -f infra/compose.yaml --profile service up -d --build
-curl http://127.0.0.1:58080/health
+Push-Location infra
+docker compose up -d minio minio-init
+Pop-Location
 ```
+
+In a separate terminal, after starting the host runtime server on port 5175:
+
+```console
+$env:ARKWAIFU_OBJECT_BASE_URL = "http://127.0.0.1:5175"
+$env:ARKWAIFU_DATABASE_URL = "http://127.0.0.1:5175/arkwaifu.sqlite3"
+$env:ARKWAIFU_DATABASE_CACHE_DIR = "E:\arkwaifu\dev-runtime\service-database"
+$env:ARKWAIFU_PORT = "5174"
+dune exec arkwaifu-service
+```
+
+Check `http://127.0.0.1:5174/health` from another terminal.
 
 ## Maintain the persistence boundary
 

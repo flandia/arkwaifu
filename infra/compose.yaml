@@ -32,21 +32,5 @@ services:
         mc version enable local/arkwaifu &&
         mc anonymous set download local/arkwaifu
 
-  service:
-    profiles: [service]
-    build:
-      context: ../apps/service
-    environment:
-      ARKWAIFU_OBJECT_BASE_URL: http://127.0.0.1:59000/arkwaifu
-      ARKWAIFU_DATABASE_URL: http://minio:9000/arkwaifu/arkwaifu.sqlite3
-    ports:
-      - "127.0.0.1:58080:8080"
-    volumes:
-      - service-database:/var/lib/arkwaifu/database
-    depends_on:
-      minio-init:
-        condition: service_completed_successfully
-
 volumes:
   minio-data:
-  service-database:
