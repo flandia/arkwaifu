@@ -159,6 +159,7 @@ let routes ?china_object_base_url ~database ~object_base_url =
              Database.health database
              >>= respond (fun () -> `Assoc [ ("status", `String "ok") ]));
          Dream.get "/sitemap.txt" sitemap;
+         Dream.head "/sitemap.txt" sitemap;
          Dream.get "/api/arts/:category/:id" (fun request ->
              let object_base_url = object_url request in
              Database.art database

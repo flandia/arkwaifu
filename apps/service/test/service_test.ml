@@ -381,6 +381,9 @@ let test_database_contract () =
 let response handler target =
   Dream.test handler (Dream.request ~method_:`GET ~target "")
 
+let head_response handler target =
+  Dream.test handler (Dream.request ~method_:`HEAD ~target "")
+
 let response_json response =
   Lwt_main.run (Dream.body response) |> Yojson.Safe.from_string
 
@@ -480,6 +483,12 @@ let test_http_contract () =
     ];
   let sitemap_response = response handler "/sitemap.txt" in
   let sitemap = Lwt_main.run (Dream.body sitemap_response) in
+  let sitemap_head = head_response handler "/sitemap.txt" in
+  Alcotest.(check int) "sitemap HEAD status" 200
+    (Dream.status sitemap_head |> Dream.status_to_int);
+  Alcotest.(check (option string)) "sitemap HEAD content type"
+    (Some "text/plain; charset=utf-8")
+    (Dream.header sitemap_head "Content-Type");
   Alcotest.(check bool) "sitemap has Score section" true
     (contains sitemap "/CN/scores/movement-a/section-a");
   Alcotest.(check bool) "sitemap has Archive group" true
