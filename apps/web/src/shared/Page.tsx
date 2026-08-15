@@ -11,6 +11,7 @@ export function ArchivePage({
   description,
   image,
   noIndex = false,
+  theme = "light",
   title,
 }: {
   canonicalPath?: string;
@@ -18,6 +19,7 @@ export function ArchivePage({
   description: string;
   image?: string;
   noIndex?: boolean;
+  theme?: "light" | "dark";
   title: string;
 }) {
   const { pathname } = useLocation();
@@ -34,7 +36,17 @@ export function ArchivePage({
     });
   }, [description, image, noIndex, pageCanonicalUrl, pageTitle]);
 
-  return <PageTransition>{children}</PageTransition>;
+  return (
+    <PageTransition
+      className={
+        theme === "dark"
+          ? "bg-black text-white transition-colors duration-500 ease-out motion-reduce:transition-none"
+          : "bg-paper text-ink transition-colors duration-500 ease-out motion-reduce:transition-none"
+      }
+    >
+      {children}
+    </PageTransition>
+  );
 }
 
 export function PageHeader({
@@ -78,10 +90,22 @@ export function PageHeader({
   );
 }
 
-export function BackLink({ children, to }: { children: ReactNode; to: string }) {
+export function BackLink({
+  children,
+  tone = "light",
+  to,
+}: {
+  children: ReactNode;
+  tone?: "light" | "dark";
+  to: string;
+}) {
   return (
     <TransitionLink
-      className="mb-8 inline-flex min-h-11 items-center gap-2 text-xs font-extrabold tracking-[0.04em] uppercase underline decoration-2 underline-offset-4 before:content-['←'] hover:bg-brand-soft"
+      className={
+        tone === "dark"
+          ? "mb-8 inline-flex min-h-11 items-center gap-2 text-xs font-extrabold tracking-[0.04em] text-white uppercase underline decoration-2 underline-offset-4 before:content-['←'] hover:bg-white/15"
+          : "mb-8 inline-flex min-h-11 items-center gap-2 text-xs font-extrabold tracking-[0.04em] uppercase underline decoration-2 underline-offset-4 before:content-['←'] hover:bg-brand-soft"
+      }
       to={to}
       transition="back"
     >

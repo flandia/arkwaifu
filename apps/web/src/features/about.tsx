@@ -2,7 +2,8 @@ import { useParams } from "react-router";
 import { useUi } from "../i18n";
 import { requiredLocale } from "../navigation";
 import { ArchivePage, PageHeader } from "../shared/Page";
-import { ActionLink, Eyebrow } from "../shared/ui";
+import { ActionLink } from "../shared/ui/Action";
+import { Eyebrow } from "../shared/ui/Typography";
 
 export function AboutPage() {
   const { t } = useUi();
@@ -53,11 +54,7 @@ export function AboutPage() {
             {t("about.followIndex")}
           </h2>
           <p className="mb-7 text-lg leading-relaxed text-white/80">{t("about.followBody")}</p>
-          <ActionLink
-            className="bg-surface text-ink"
-            adornment="forward"
-            to={`/${locale}/stories/main`}
-          >
+          <ActionLink className="bg-surface text-ink" adornment="forward" to={`/${locale}/scores`}>
             {t("about.openMain")}
           </ActionLink>
         </aside>

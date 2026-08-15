@@ -1,6 +1,6 @@
 # Understand publication and storage
 
-The updater converts selected upstream data into one SQLite database, immutable PNG objects, and replaceable WebP thumbnails. This reference explains its transaction boundary, object contracts, cache, and resource limits.
+The updater converts selected upstream data into one SQLite database, immutable PNG and WebM objects, and replaceable WebP thumbnails. This reference explains its transaction boundary, object contracts, cache, and resource limits.
 
 ## Follow the end-to-end publication sequence
 
@@ -9,10 +9,10 @@ The updater completes these steps in order:
 1. Detect every requested unit’s current upstream `resVersion` concurrently
 2. Download `arkwaifu.sqlite3` to a temporary directory, or create schema version 2 when the object does not exist
 3. Validate the schema version, read each published unit version, and restore the additive `story_art_references_by_art (locale, art_id)` index when necessary
-4. Build every changed manifest concurrently and retain rendered PNGs as files
-5. Assign each image an object key under `ART/<resVersion>/<variant>/<category>/`
+4. Build every changed manifest concurrently and retain rendered PNGs and Score WebMs as files
+5. Assign ordinary art keys below `ART/` and dedicated Score visual keys below `SCORE/`
 6. Apply art changes first, then replace each changed locale in one local `BEGIN IMMEDIATE` transaction
-7. Upload every referenced PNG with bounded concurrency
+7. Upload every referenced immutable PNG and WebM with bounded concurrency
 8. Generate and upload every derived thumbnail
 9. Overwrite `arkwaifu.sqlite3` with `Cache-Control: no-cache`
 
@@ -27,7 +27,7 @@ The database overwrite makes prepared metadata visible. Before that overwrite, r
 Failure behavior depends on the completed work:
 
 - A preparation or SQLite failure exposes none of the requested database changes
-- A partial PNG batch may leave unreferenced immutable objects under a new version prefix
+- A partial PNG or WebM batch may leave unreferenced immutable objects under a new version prefix
 - A partial thumbnail batch may replace thumbnails referenced by the previous database
 - A database upload failure leaves the previous object current
 - S3 bucket versioning preserves overwritten database generations for inspection and recovery
@@ -45,31 +45,44 @@ ART/<contributing-resVersion>/<variant>/<category>/<escaped-id>.png
 The `variant` identifies the stored representation:
 
 - `composition`: final consumer-facing art
-- `source`: a retained character layer before composition
+- `source`: a retained character layer or gallery composite panel
 
-Character compositions combine body and face layers. For `image`, `background`, and `item`, `composition` means the validated final PNG.
+Character compositions combine body and face layers. Gallery composites combine ordered image or background panels. For every category, `composition` means the validated final PNG.
 
-The `category` is `image`, `background`, `item`, or `character`. Source objects use `character` and retain a `body`, `face`, or `whole_body` role. The escaped identifier is one path segment, not a content hash.
+The `category` is `image`, `background`, `item`, or `character`. Character sources use `character` and retain a `body`, `face`, or `whole_body` role. Composite-panel sources preserve the parent artwork's category. The pair `(category, source_art_id)` identifies a source. The escaped identifier is one path segment, not a content hash; a slash-joined composite identifier is escaped as that one segment.
 
 The database identifies final art by both category and identifier. Equal identifiers in different categories remain independent rows and objects.
 
+## Identify Score objects
+
+Dedicated Score images and background videos use separate immutable key spaces:
+
+```text
+SCORE/<contributing-resVersion>/<asset-kind>/<escaped-id>.png
+SCORE/<contributing-resVersion>/video/<escaped-id>.webm
+```
+
+Image kinds are `icon`, `logo`, `background`, `key_visual`, `title`, `decoration`, `retro_background`, and `split`. Score metadata references `(asset_kind, asset_id)` so an equal identifier in two kinds remains unambiguous.
+
+The Windows client supplies CRI USM containers for the animated Main Theme backgrounds. The updater parses their VP9 payload, writes deterministic IVF, and losslessly remuxes it to a muted WebM through PyAV. It validates dimensions, frame rate, and packet count before publication. PNG and WebM Score keys are create-only and use the same immutable cache policy as ordinary PNGs.
+
 ## Apply incremental and complete art updates
 
-An incremental art manifest overlays records from changed bundles on the published database. Unchanged rows retain their existing object keys, including objects introduced under older versions.
+An incremental art manifest overlays ordinary art, source art, Score images, and Score videos from changed bundles on the published database. Unchanged rows retain their existing object keys, including objects introduced under older versions.
 
-A complete update processes the recorded Windows version sequence from oldest to newest. It builds the first version in full, compares each later version with its immediate predecessor, and retains the newest occurrence of each `(category, art_id)` or `source_art_id`.
+A complete update processes the recorded Windows version sequence from oldest to newest. It builds the first version in full, compares each later version with its immediate predecessor, and retains the newest occurrence of each `(category, art_id)`, `(category, source_art_id)`, `(asset_kind, asset_id)`, or `video_id`.
 
 Complete mode preserves art that disappears from later manifests. It uploads only final winners, using the version that contributed each winner. A version with no selected output needs no empty marker.
 
 The updater never discovers history by listing object prefixes. It obtains candidate versions upstream and validates each selected bundle against the official content-delivery network (CDN).
 
-## Enforce image object contracts
+## Enforce immutable object contracts
 
-PNG keys are immutable and create-only. Before upload, the S3 adapter uses `HEAD` to accept an existing object only when byte size, `image/png` content type, and immutable cache policy match.
+PNG and WebM keys are immutable and create-only. Before upload, the S3 adapter uses `HEAD` to accept an existing object only when byte size, content type, and immutable cache policy match. PNGs use `image/png`; videos use `video/webm`.
 
 The metadata check does not compare image bytes. A metadata mismatch fails the run instead of replacing the object.
 
-PNG uploads use this cache policy:
+Immutable uploads use this cache policy:
 
 ```text
 Cache-Control: public, max-age=31536000, immutable
@@ -92,7 +105,7 @@ The stages run in this order:
 1. `fetched`: download the CDN `.dat` wrapper through a bounded download slot
 2. `unwrapped`: extract the inner Unity bundle at its original relative path
 3. `extracted`: export the Unity asset tree in a process-pool worker
-4. `rendered`: compose final and source PNGs, then write a per-resource manifest
+4. `rendered`: compose final and source PNGs, remux Score videos, then write a per-resource manifest
 
 Downloads for later resources can overlap extraction and rendering for earlier resources. Locale acquisition and parsing can also run while the art pipeline is active.
 
@@ -122,7 +135,7 @@ Art cache entries use the percent-encoded upstream resource name and published M
             |   `-- <unity-exports>
             `-- rendered/
                 |-- processed/
-                |   `-- <png-files>
+                |   `-- <png-and-webm-files>
                 `-- manifest.json
 ```
 

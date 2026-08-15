@@ -1,13 +1,20 @@
 import { cachedRequest } from "./client";
+import { getArchiveKinds } from "./archives";
 import { getGalleries } from "./galleries";
-import { getStoryGroups } from "./stories";
-import type { GallerySummary, Locale, StoryGroupSummary } from "./types";
+import { getMovements } from "./scores";
+import type { ArchiveKindSummary, GallerySummary, Locale, MovementSummary } from "./types";
 
-/** Fetches the story-group and gallery collections shown on the home page. */
-export function getHomeCollections(
-  locale: Locale,
-): Promise<[StoryGroupSummary[], GallerySummary[]]> {
+export interface HomeCollections {
+  movements: MovementSummary[];
+  archives: ArchiveKindSummary[];
+  galleries: GallerySummary[];
+}
+
+/** Fetches every independent collection shown on the home page in parallel. */
+export function getHomeCollections(locale: Locale): Promise<HomeCollections> {
   return cachedRequest(`home:${locale}`, () =>
-    Promise.all([getStoryGroups(locale), getGalleries(locale)]),
+    Promise.all([getMovements(locale), getArchiveKinds(locale), getGalleries(locale)]).then(
+      ([movements, archives, galleries]) => ({ movements, archives, galleries }),
+    ),
   );
 }

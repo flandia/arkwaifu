@@ -1,6 +1,6 @@
 # Run the Arkwaifu updater
 
-The Python 3.14 updater publishes upstream Arknights art and locale data as one SQLite database plus versioned image objects in S3-compatible storage. Use this guide to run, configure, and test the updater.
+The Python 3.14 updater publishes upstream Arknights art and locale data as one SQLite database plus versioned image and Score-video objects in S3-compatible storage. Use this guide to run, configure, and test the updater.
 
 ## Choose an update command
 
@@ -41,7 +41,7 @@ The updater applies every changed unit in one local SQLite transaction, uploads 
 These rules protect the visible database:
 
 - A build or SQLite failure prevents all requested database changes from becoming visible
-- Immutable Portable Network Graphics (PNG) objects upload only after the SQLite transaction commits
+- Immutable Portable Network Graphics (PNG) and WebM objects upload only after the SQLite transaction commits
 - Derived WebP thumbnails upload before the database overwrite
 - A database upload failure leaves the previous database object current
 - S3 bucket versioning retains overwritten database generations

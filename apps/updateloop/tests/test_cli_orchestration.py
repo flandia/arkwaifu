@@ -155,6 +155,9 @@ async def test_prepare_art_exposes_one_batch_build(monkeypatch, tmp_path: Path):
     class Builder:
         def __init__(self, **kwargs) -> None:
             assert kwargs["cache"] is cache
+            assert kwargs["gallery_metadata_base_url"] == (
+                "https://raw.githubusercontent.com/ArknightsAssets/ArknightsGamedata/master/cn"
+            )
 
         async def detect_version(self):
             return "art-v1"
@@ -185,6 +188,9 @@ async def test_prepare_complete_art_uses_history_builder_once(monkeypatch, tmp_p
     class Builder:
         def __init__(self, **kwargs) -> None:
             assert kwargs["cache"] is cache
+            assert kwargs["gallery_metadata_base_url"] == (
+                "https://raw.githubusercontent.com/ArknightsAssets/ArknightsGamedata/master/cn"
+            )
 
         async def detect_version(self):
             return "art-v3"

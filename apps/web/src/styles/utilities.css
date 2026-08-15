@@ -13,6 +13,14 @@
   background-size: 1.3rem 1.3rem;
 }
 
+@utility scrollbar-none {
+  scrollbar-width: none;
+
+  &::-webkit-scrollbar {
+    display: none;
+  }
+}
+
 @keyframes card-preview-cycle-two {
   0%,
   45%,

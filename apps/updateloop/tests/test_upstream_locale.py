@@ -278,8 +278,8 @@ async def test_locale_builder_uses_master_version_id_and_reuses_cached_archive(
             "gamedata/excel/story_review_table.json": {
                 "group": {
                     "id": "group",
-                    "name": "Main",
-                    "actType": "MAIN_STORY",
+                    "name": "Event",
+                    "actType": "ACTIVITY_STORY",
                     "infoUnlockDatas": [
                         {
                             "storyId": "story",
@@ -338,7 +338,9 @@ async def test_locale_builder_uses_master_version_id_and_reuses_cached_archive(
     assert version_requests == 1
     assert manifest.unit == "EN"
     assert manifest.upstream_version == "data-version"
-    assert manifest.story_groups[0].stories[0].art_references[0].title == "Event"
+    assert manifest.archive_groups[0].stories[0].art_references[0].title == "Event"
+    assert manifest.archive_groups[0].archive_kind == "events"
+    assert manifest.archive_groups[0].story_type == "side_story"
     assert cached_manifest == manifest
     assert zip_downloads == 1
     assert (tmp_path / ".cache" / "game-data" / "archive.zip").is_file()
@@ -472,7 +474,7 @@ async def test_locale_builder_recovers_latest_existing_story_and_caches_it(
 
     assert [
         reference.art_id
-        for story in manifest.story_groups[0].stories
+        for story in manifest.archive_groups[0].stories
         for reference in story.art_references
     ] == ["opening_art"]
     assert history_directory.is_dir()
@@ -540,7 +542,7 @@ async def test_locale_builder_uses_the_first_history_source_containing_the_story
 
     assert [
         reference.art_id
-        for story in manifest.story_groups[0].stories
+        for story in manifest.archive_groups[0].stories
         for reference in story.art_references
     ] == ["yostar_art"]
     assert len(builder._history_clone_tasks) == 2
@@ -601,7 +603,7 @@ async def test_concurrent_locales_share_one_history_clone(tmp_path, monkeypatch)
         def art_ids(manifest: LocaleManifest) -> list[str]:
             return [
                 reference.art_id
-                for story in manifest.story_groups[0].stories
+                for story in manifest.archive_groups[0].stories
                 for reference in story.art_references
             ]
 

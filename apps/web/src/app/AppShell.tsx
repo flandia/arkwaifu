@@ -47,7 +47,7 @@ export function AppShell({ children }: { children: ReactNode }) {
       </a>
       <div className="min-h-screen bg-paper pt-[calc(4rem+env(safe-area-inset-top))] min-[56.001rem]:grid min-[56.001rem]:grid-cols-[20rem_minmax(0,1fr)] min-[56.001rem]:pt-0">
         <aside
-          className="sticky top-0 hidden h-screen overflow-y-auto overscroll-contain border-r-2 border-ink min-[56.001rem]:block"
+          className="scrollbar-none sticky top-0 hidden h-screen overflow-y-auto overscroll-contain border-r-2 border-ink min-[56.001rem]:block"
           style={{ viewTransitionName: "persistent-nav" }}
         >
           <SiteNavigation locale={locale} />
@@ -97,7 +97,7 @@ export function AppShell({ children }: { children: ReactNode }) {
           >
             <span aria-hidden="true">×</span>
           </button>
-          <div className="h-full overflow-y-auto overscroll-contain pb-[env(safe-area-inset-bottom)]">
+          <div className="scrollbar-none h-full overflow-y-auto overscroll-contain pb-[env(safe-area-inset-bottom)]">
             <SiteNavigation locale={locale} onNavigate={closeMenu} />
           </div>
         </dialog>

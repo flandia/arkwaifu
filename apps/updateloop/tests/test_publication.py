@@ -21,20 +21,32 @@ from arkwaifu_updateloop import object_store as remote_module
 from arkwaifu_updateloop import updater as updater_module
 from arkwaifu_updateloop.database import initialize_or_validate
 from arkwaifu_updateloop.domain import (
+    ArchiveGroup,
     ArtManifest,
     ArtRecord,
     FilePngArtifact,
-    Gallery,
-    GalleryEntry,
+    FileVideoArtifact,
+    GalleryArtwork,
+    GalleryDisplay,
+    GalleryGroup,
     LocaleManifest,
+    Movement,
+    MovementLocation,
+    MovementSection,
     PngArtifact,
+    ScoreAssetRecord,
+    ScoreVideoRecord,
     SourceArtRecord,
+    SourceArtReference,
     StoryArtReference,
-    StoryGroupRecord,
     StoryRecord,
 )
 from arkwaifu_updateloop.thumbnail import make_thumbnail
-from arkwaifu_updateloop.updater import art_object_key
+from arkwaifu_updateloop.updater import (
+    art_object_key,
+    score_asset_object_key,
+    score_video_object_key,
+)
 
 
 def art_manifest(
@@ -60,17 +72,19 @@ def art_manifest(
 def character_manifest(version: str, character_id: str) -> ArtManifest:
     source_id = f"{character_id}:body:1"
     source = SourceArtRecord(
-        source_id,
-        character_id,
-        "body",
-        "1",
-        PngArtifact.from_image(Image.new("RGBA", (2, 3), (1, 2, 3, 255))),
+        id=source_id,
+        category="character",
+        kind="character",
+        character_id=character_id,
+        role="body",
+        variant="1",
+        image=PngArtifact.from_image(Image.new("RGBA", (2, 3), (1, 2, 3, 255))),
     )
     art = ArtRecord(
-        f"{character_id}#1$1",
-        "character",
-        PngArtifact.from_image(Image.new("RGBA", (2, 3), (3, 2, 1, 255))),
-        (source_id,),
+        id=f"{character_id}#1$1",
+        category="character",
+        image=PngArtifact.from_image(Image.new("RGBA", (2, 3), (3, 2, 1, 255))),
+        source_art_references=(SourceArtReference("character", source_id),),
     )
     return ArtManifest(version, (art,), (source,))
 
@@ -82,21 +96,75 @@ def locale_manifest(
     suffix: str = "one",
     art_id: str = "event",
 ) -> LocaleManifest:
+    movement_id = f"movement_{suffix}"
+    section_id = f"section_{suffix}"
+    section_collection_id = f"movement_section:{section_id}"
     group_id = f"group_{suffix}"
+    group_collection_id = f"archive_group:{group_id}"
     story_id = f"story_{suffix}"
     gallery_id = f"gallery_{suffix}"
     return LocaleManifest(
         unit=unit,
         upstream_version=version,
-        story_groups=(
-            StoryGroupRecord(
+        movements=(
+            Movement(
+                id=movement_id,
+                position=0,
+                movement_type="continue",
+                name="Movement",
+                icon_asset_id=None,
+                logo_asset_id=None,
+                background_asset_id=None,
+                has_video=False,
+                start_time=0,
+                locations=(
+                    MovementLocation(
+                        id=f"story_set_{suffix}",
+                        position=0,
+                        location_type="story_set",
+                        sort_id=0,
+                        start_time=0,
+                        present_stage_id=None,
+                        unlock_stage_id=None,
+                        section_id=section_id,
+                        split_icon_asset_id=None,
+                        split_sub_name=None,
+                        video_id=None,
+                    ),
+                ),
+            ),
+        ),
+        movement_sections=(
+            MovementSection(
+                id=section_id,
+                collection_id=section_collection_id,
+                section_type="main_theme",
+                name="Section",
+                review_group_id=None,
+                sort_by_year=0,
+                sort_within_year=0,
+                key_visual_asset_id=None,
+                title_asset_id=None,
+                background_asset_id=None,
+                decoration_asset_id=None,
+                retro_background_asset_id=None,
+                description="",
+                has_video=False,
+                stories=(),
+            ),
+        ),
+        archive_groups=(
+            ArchiveGroup(
                 id=group_id,
+                collection_id=group_collection_id,
+                position=0,
                 name="Group",
-                group_type="major_event",
+                archive_kind="events",
+                story_type="side_story",
                 stories=(
                     StoryRecord(
                         id=story_id,
-                        group_id=group_id,
+                        collection_id=group_collection_id,
                         tag="before",
                         tag_text="Before Operation",
                         code="1",
@@ -117,11 +185,33 @@ def locale_manifest(
             ),
         ),
         galleries=(
-            Gallery(
+            GalleryGroup(
                 id=gallery_id,
+                collection_id=group_collection_id,
+                position=0,
                 name="Gallery",
                 description="Description",
-                entries=(GalleryEntry(f"entry_{suffix}", 1, "Entry", "", art_id),),
+                location_id=None,
+                displays=(
+                    GalleryDisplay(
+                        id=f"display_{suffix}",
+                        position=0,
+                        name="Entry",
+                        description="",
+                        related_story_id=story_id,
+                        related_stage_id=None,
+                        artworks=(
+                            GalleryArtwork(
+                                position=0,
+                                cg_id=f"entry_{suffix}",
+                                art_id=art_id,
+                                category="image",
+                                composite_type="none",
+                                panels=(),
+                            ),
+                        ),
+                    ),
+                ),
             ),
         ),
     )
@@ -144,6 +234,19 @@ def database_connection(remote: MemoryObjectStore, tmp_path: Path) -> sqlite3.Co
     connection.row_factory = sqlite3.Row
     connection.execute("PRAGMA foreign_keys = ON")
     return connection
+
+
+def video_artifact(tmp_path: Path, content: bytes = b"webm-fixture") -> FileVideoArtifact:
+    path = tmp_path / "score.webm"
+    path.write_bytes(content)
+    return FileVideoArtifact.from_path(
+        path,
+        width=1920,
+        height=1080,
+        frame_rate_numerator=30,
+        frame_rate_denominator=1,
+        frame_count=60,
+    )
 
 
 def test_object_key_uses_requested_art_path_and_logical_identity_without_sha():
@@ -173,6 +276,46 @@ def test_object_key_supports_art_variants(variant, expected):
             identifier="id",
         )
         == expected
+    )
+
+
+@pytest.mark.parametrize(
+    "kind",
+    [
+        "icon",
+        "logo",
+        "background",
+        "key_visual",
+        "title",
+        "decoration",
+        "retro_background",
+        "split",
+    ],
+)
+def test_score_asset_object_key_has_a_deep_kind_namespace(kind):
+    assert (
+        score_asset_object_key(
+            res_version="v 1",
+            kind=kind,
+            identifier="asset/id",
+        )
+        == f"SCORE/v%201/{kind}/asset%2Fid.png"
+    )
+
+
+@pytest.mark.parametrize("kind", ["", "video", "unknown"])
+def test_score_asset_object_key_rejects_unknown_kinds(kind):
+    with pytest.raises(ValueError, match="unknown Score asset kind"):
+        score_asset_object_key(res_version="v1", kind=kind, identifier="asset")
+
+
+def test_score_video_object_key_has_a_dedicated_namespace():
+    assert (
+        score_video_object_key(
+            res_version="v 1",
+            identifier="background/id",
+        )
+        == "SCORE/v%201/video/background%2Fid.webm"
     )
 
 
@@ -270,6 +413,97 @@ async def test_s3_remote_rejects_conflicting_immutable_png(monkeypatch):
         await remote.put_png("ART/v1/composition/image/art.png", artifact)
 
 
+async def test_s3_remote_streams_a_file_backed_score_video(monkeypatch, tmp_path):
+    class Client:
+        def __init__(self) -> None:
+            self.puts = []
+
+        def head_object(self, **_kwargs):
+            raise remote_module.ClientError(
+                {"Error": {"Code": "404"}},
+                "HeadObject",
+            )
+
+        def put_object(self, **kwargs):
+            kwargs = dict(kwargs)
+            kwargs["Body"] = kwargs["Body"].read()
+            self.puts.append(kwargs)
+
+    client = Client()
+    monkeypatch.setattr(remote_module.boto3, "client", lambda *_args, **_kwargs: client)
+    artifact = video_artifact(tmp_path)
+    remote = S3ObjectStore(
+        bucket="bucket",
+        region="region",
+        access_key_id="access",
+        secret_access_key="secret",
+    )
+
+    await remote.put_video("SCORE/v1/video/background.webm", artifact)
+
+    assert client.puts == [
+        {
+            "Bucket": "bucket",
+            "Key": "SCORE/v1/video/background.webm",
+            "Body": artifact.content,
+            "ContentLength": artifact.byte_size,
+            "ContentType": "video/webm",
+            "CacheControl": "public, max-age=31536000, immutable",
+        }
+    ]
+
+
+async def test_s3_remote_accepts_matching_immutable_score_video_without_put(
+    monkeypatch,
+    tmp_path,
+):
+    artifact = video_artifact(tmp_path)
+
+    class Client:
+        def head_object(self, **_kwargs):
+            return {
+                "ContentLength": artifact.byte_size,
+                "ContentType": "video/webm",
+                "CacheControl": "public, max-age=31536000, immutable",
+            }
+
+        def put_object(self, **_kwargs):
+            raise AssertionError("matching immutable WebM must not be replaced")
+
+    monkeypatch.setattr(remote_module.boto3, "client", lambda *_args, **_kwargs: Client())
+    remote = S3ObjectStore(
+        bucket="bucket",
+        region="region",
+        access_key_id="access",
+        secret_access_key="secret",
+    )
+
+    await remote.put_video("SCORE/v1/video/background.webm", artifact)
+
+
+async def test_s3_remote_rejects_conflicting_immutable_score_video(monkeypatch, tmp_path):
+    artifact = video_artifact(tmp_path)
+
+    class Client:
+        def head_object(self, **_kwargs):
+            return {
+                "ContentLength": artifact.byte_size + 1,
+                "ContentType": "video/webm",
+                "CacheControl": "public, max-age=31536000, immutable",
+            }
+
+    monkeypatch.setattr(remote_module.boto3, "client", lambda *_args, **_kwargs: Client())
+    remote = S3ObjectStore(
+        bucket="bucket",
+        region="region",
+        access_key_id="access",
+        secret_access_key="secret",
+    )
+
+    with pytest.raises(ValueError, match="immutable WebM object conflicts"):
+        await remote.put_video("SCORE/v1/video/background.webm", artifact)
+
+
 async def test_s3_remote_always_replaces_thumbnail_with_storage_defaults(monkeypatch):
     first = make_thumbnail(PngArtifact.from_image(Image.new("RGBA", (2, 3), (1, 2, 3, 255))))
     second = make_thumbnail(PngArtifact.from_image(Image.new("RGBA", (2, 3), (4, 5, 6, 255))))
@@ -333,6 +567,29 @@ async def test_memory_remote_does_not_replace_versioned_png():
     assert remote.objects[key] == first.content
 
 
+async def test_memory_remote_does_not_replace_versioned_score_video(tmp_path):
+    remote = MemoryObjectStore()
+    key = "SCORE/v1/video/background.webm"
+    first = video_artifact(tmp_path, b"first-video")
+    second_path = tmp_path / "second.webm"
+    second_path.write_bytes(b"second-video")
+    second = FileVideoArtifact.from_path(
+        second_path,
+        width=1920,
+        height=1080,
+        frame_rate_numerator=30,
+        frame_rate_denominator=1,
+        frame_count=60,
+    )
+
+    await remote.put_video(key, first)
+    await remote.put_video(key, first)
+    with pytest.raises(ValueError, match="immutable WebM object conflicts"):
+        await remote.put_video(key, second)
+
+    assert remote.objects[key] == first.content
+
+
 async def test_partial_first_run_creates_one_valid_database(tmp_path, caplog):
     remote = MemoryObjectStore()
     updater = Updater(remote)
@@ -368,28 +625,124 @@ async def test_art_reference_requires_matching_category_and_id(caplog):
     assert "image/shared" in caplog.text
 
 
+async def test_locale_leading_missing_score_assets_warn_and_still_publish(caplog):
+    remote = MemoryObjectStore()
+    locale = locale_manifest("EN", "en-v1")
+    movement = replace(
+        locale.movements[0],
+        icon_asset_id="missing-icon",
+        locations=(replace(locale.movements[0].locations[0], video_id="missing-video"),),
+    )
+    section = replace(
+        locale.movement_sections[0],
+        key_visual_asset_id="missing-key-visual",
+    )
+    locale = replace(
+        locale,
+        movements=(movement,),
+        movement_sections=(section,),
+    )
+
+    with caplog.at_level("WARNING", logger="arkwaifu_updateloop.incomplete_upstream"):
+        result = await Updater(remote).run([update_request(locale)])
+
+    assert result == (UpdateResult("EN", "en-v1", "updated"),)
+    assert "database references unavailable Score assets" in caplog.text
+    assert "count=3" in caplog.text
+    assert "score/icon/missing-icon" in caplog.text
+    assert "score/key_visual/missing-key-visual" in caplog.text
+    assert "score/video/missing-video" in caplog.text
+
+
+async def test_score_assets_and_videos_publish_before_database(tmp_path):
+    remote = MemoryObjectStore()
+    image = PngArtifact.from_image(Image.new("RGBA", (64, 32), (1, 2, 3, 255)))
+    video = video_artifact(tmp_path)
+    manifest = ArtManifest(
+        upstream_version="art-v1",
+        arts=(),
+        source_arts=(),
+        score_assets=(ScoreAssetRecord("icon-main", "icon", image),),
+        score_videos=(ScoreVideoRecord("background-main", video),),
+    )
+
+    result = await Updater(remote).run([update_request(manifest)])
+
+    assert result == (UpdateResult("art", "art-v1", "updated"),)
+    assert remote.objects == {
+        "SCORE/art-v1/icon/icon-main.png": image.content,
+        "SCORE/art-v1/video/background-main.webm": video.content,
+    }
+    with database_connection(remote, tmp_path) as connection:
+        assert tuple(
+            connection.execute(
+                "SELECT asset_kind, asset_id, object_key, byte_size, width, height "
+                "FROM score_assets"
+            ).fetchone()
+        ) == (
+            "icon",
+            "icon-main",
+            "SCORE/art-v1/icon/icon-main.png",
+            image.byte_size,
+            64,
+            32,
+        )
+        assert tuple(
+            connection.execute(
+                "SELECT video_id, object_key, byte_size, width, height, "
+                "frame_rate_numerator, frame_rate_denominator, frame_count "
+                "FROM score_videos"
+            ).fetchone()
+        ) == (
+            "background-main",
+            "SCORE/art-v1/video/background-main.webm",
+            video.byte_size,
+            1920,
+            1080,
+            30,
+            1,
+            60,
+        )
+
+
+async def test_score_video_upload_failure_prevents_database_publication(tmp_path):
+    class FailingRemote(MemoryObjectStore):
+        async def put_video(self, _key, _artifact):
+            raise RuntimeError("Score video upload failed")
+
+    remote = FailingRemote()
+    video = video_artifact(tmp_path)
+    manifest = ArtManifest(
+        upstream_version="art-v1",
+        arts=(),
+        source_arts=(),
+        score_videos=(ScoreVideoRecord("background-main", video),),
+    )
+
+    with pytest.raises(RuntimeError, match="Score video upload failed"):
+        await Updater(remote).run([update_request(manifest)])
+
+    assert remote.database is None
+
+
 @pytest.mark.parametrize(
-    ("keep_story_groups", "keep_galleries", "missing"),
+    ("missing_fields", "missing"),
     [
-        (False, True, "story_groups"),
-        (True, False, "galleries"),
-        (False, False, "story_groups,galleries"),
+        (("movements",), "movements"),
+        (("galleries",), "galleries"),
+        (("movements", "movement_sections"), "movements,movement_sections"),
+        (("archive_groups", "galleries"), "archive_groups,galleries"),
     ],
 )
 async def test_incomplete_locale_sections_warn_and_still_publish(
     tmp_path,
     caplog,
-    keep_story_groups,
-    keep_galleries,
+    missing_fields,
     missing,
 ):
     remote = MemoryObjectStore()
     locale = locale_manifest("EN", "en-v1")
-    locale = replace(
-        locale,
-        story_groups=locale.story_groups if keep_story_groups else (),
-        galleries=locale.galleries if keep_galleries else (),
-    )
+    locale = replace(locale, **{field: () for field in missing_fields})
 
     with caplog.at_level("WARNING", logger="arkwaifu_updateloop.incomplete_upstream"):
         results = await Updater(remote).run(
@@ -405,12 +758,14 @@ async def test_incomplete_locale_sections_warn_and_still_publish(
             ).fetchone()[0]
             == "en-v1"
         )
-        assert connection.execute("SELECT COUNT(*) FROM story_groups").fetchone()[0] == (
-            1 if keep_story_groups else 0
-        )
-        assert connection.execute("SELECT COUNT(*) FROM galleries").fetchone()[0] == (
-            1 if keep_galleries else 0
-        )
+        expected = {
+            "movements": 0 if "movements" in missing_fields else 1,
+            "movement_sections": 0 if "movement_sections" in missing_fields else 1,
+            "archive_groups": 0 if "archive_groups" in missing_fields else 1,
+            "gallery_groups": 0 if "galleries" in missing_fields else 1,
+        }
+        for table, count in expected.items():
+            assert connection.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0] == count
 
 
 async def test_equal_res_version_is_a_noop_without_calling_builder():
@@ -620,6 +975,56 @@ async def test_character_sources_and_ordered_references_are_persisted(tmp_path):
         ) == ("amiya#1$1", 0, "amiya:body:1")
 
 
+async def test_source_art_identity_is_category_qualified(tmp_path):
+    remote = MemoryObjectStore()
+    image = PngArtifact.from_image(Image.new("RGBA", (2, 3), (1, 2, 3, 255)))
+    sources = tuple(
+        SourceArtRecord(
+            id="shared-panel",
+            category=category,
+            kind="composite_panel",
+            image=image,
+        )
+        for category in ("image", "background")
+    )
+    arts = tuple(
+        ArtRecord(
+            id=f"composite-{category}",
+            category=category,
+            image=image,
+            source_art_references=(SourceArtReference(category, "shared-panel"),),
+        )
+        for category in ("image", "background")
+    )
+
+    await Updater(remote).run([update_request(ArtManifest("v1", arts=arts, source_arts=sources))])
+
+    with database_connection(remote, tmp_path) as connection:
+        assert [
+            tuple(row)
+            for row in connection.execute(
+                "SELECT category, source_art_id, object_key FROM source_arts ORDER BY category"
+            )
+        ] == [
+            (
+                "background",
+                "shared-panel",
+                "ART/v1/source/background/shared-panel.png",
+            ),
+            ("image", "shared-panel", "ART/v1/source/image/shared-panel.png"),
+        ]
+        assert [
+            tuple(row)
+            for row in connection.execute(
+                "SELECT category, source_category, source_art_id "
+                "FROM art_source_refs ORDER BY category"
+            )
+        ] == [
+            ("background", "background", "shared-panel"),
+            ("image", "image", "shared-panel"),
+        ]
+
+
 async def test_art_delta_preserves_unmentioned_record_and_replaces_matching_identity(tmp_path):
     remote = MemoryObjectStore()
     await Updater(remote).run([update_request(art_manifest("v1", "fallback"))])
@@ -697,7 +1102,10 @@ async def test_constraint_failure_publishes_none_of_the_requested_units():
     original_database = remote.database
     original_objects = dict(remote.objects)
     invalid = locale_manifest("EN", "en-v1")
-    invalid = replace(invalid, story_groups=(invalid.story_groups[0], invalid.story_groups[0]))
+    invalid = replace(
+        invalid,
+        archive_groups=(invalid.archive_groups[0], invalid.archive_groups[0]),
+    )
 
     with pytest.raises(sqlite3.IntegrityError):
         await updater.run(
@@ -1136,11 +1544,17 @@ def test_schema_rejects_non_string_story_reference_names(tmp_path):
     connection = sqlite3.connect(path)
     try:
         connection.execute("INSERT INTO unit_versions VALUES ('EN', 'en-v1')")
-        connection.execute("INSERT INTO story_groups VALUES ('EN', 'group', 'Group', 'others', 0)")
+        connection.execute(
+            "INSERT INTO story_collections VALUES ('EN', 'archive_group:group', 'archive_group')"
+        )
+        connection.execute(
+            "INSERT INTO archive_groups VALUES "
+            "('EN', 'group', 'archive_group:group', 0, 'Group', 'others', NULL)"
+        )
         connection.execute(
             """
             INSERT INTO stories VALUES
-                ('EN', 'story', 'group', 'before', '', '', 'Story', '', 0)
+                ('EN', 'story', 'archive_group:group', 'before', '', '', 'Story', '', 0)
             """
         )
 

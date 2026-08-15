@@ -46,13 +46,15 @@ function setCollectionParam(
 export function useCollectionIndex<T>(
   records: T[],
   searchValues: (record: T) => readonly SearchValue[],
+  defaultOrder: CollectionOrder = "reverse",
 ): CollectionIndex<T> {
   const { pathname } = useLocation();
   const [searchParams, setSearchParams] = useSearchParams();
   const urlQuery = searchParams.get("q") ?? "";
   const [query, setQuery] = useState(urlQuery);
   const deferredQuery = useDeferredValue(normalized(query));
-  const order = searchParams.get("order") === "archive" ? "archive" : "reverse";
+  const orderParam = searchParams.get("order");
+  const order = orderParam === "archive" || orderParam === "reverse" ? orderParam : defaultOrder;
 
   useEffect(() => {
     const timeout = window.setTimeout(() => setQuery(urlQuery), 0);
@@ -74,7 +76,7 @@ export function useCollectionIndex<T>(
   }, [deferredQuery, order, records, searchValues]);
 
   function setOrder(value: CollectionOrder): void {
-    setCollectionParam(searchParams, setSearchParams, "order", value, "reverse");
+    setCollectionParam(searchParams, setSearchParams, "order", value, defaultOrder);
   }
 
   return { visible, query, setQuery, order, setOrder };

@@ -1,6 +1,6 @@
 import { use } from "react";
 import { useLocation, useParams } from "react-router";
-import { getUnreferencedArts } from "../../api";
+import { getUnreferencedArts } from "../../api/unreferenced";
 import { useUi, useUiLanguage } from "../../i18n";
 import { requiredLocale } from "../../navigation";
 import { ArchivePage, EmptyState, PageHeader } from "../../shared/Page";

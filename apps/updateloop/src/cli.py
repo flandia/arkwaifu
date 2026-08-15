@@ -136,6 +136,9 @@ async def _prepare_art(
         download_workers=settings.download_workers,
         extraction_workers=settings.extraction_workers,
         cache=cache,
+        gallery_metadata_base_url=(
+            "https://raw.githubusercontent.com/ArknightsAssets/ArknightsGamedata/master/cn"
+        ),
     )
     res_version = await builder.detect_version()
 

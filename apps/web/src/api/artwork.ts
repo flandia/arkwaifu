@@ -19,10 +19,10 @@ export function getArtContext(
   );
 }
 
-/** Fetches one source layer by its source-art identifier. */
-export function getSourceArt(sourceID: string): Promise<SourceArt> {
-  return cachedRequest(`source:${sourceID}`, () =>
-    fetchJson(`/api/source-arts/${pathSegment(sourceID)}`),
+/** Fetches one category-qualified retained source image. */
+export function getSourceArt(category: ArtCategory, sourceID: string): Promise<SourceArt> {
+  return cachedRequest(`source:${category}:${sourceID}`, () =>
+    fetchJson(`/api/source-arts/${category}/${pathSegment(sourceID)}`),
   );
 }
 
@@ -33,7 +33,9 @@ export function getArtWithSources(
 ): Promise<[ArtDetail, SourceArt[]]> {
   return cachedRequest(`art-with-sources:${category}:${artID}`, async () => {
     const art = await getArt(category, artID);
-    const sources = await Promise.all(art.sourceArtIDs.map(getSourceArt));
+    const sources = await Promise.all(
+      art.sourceArts.map((source) => getSourceArt(source.category, source.id)),
+    );
     return [art, sources];
   });
 }

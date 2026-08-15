@@ -47,7 +47,7 @@ The measurement identifier is public configuration, not a secret. Enabling the t
 
 The read service generates `https://api.arkwaifu.cc/sitemap.txt` from its current SQLite generation. The web app keeps only `public/robots.txt`, which advertises that URL. Archive updates therefore appear in the sitemap after the service refreshes its database; they do not require regenerating or redeploying the static website.
 
-The sitemap covers every locale home, story-section index, story-group page, gallery index, and gallery page, plus the canonical CN copies of About and Unreferenced Artwork. It deliberately omits individual stories and artworks, query URLs, and legacy or redirect-only routes. It is a crawl hint, not an indexing rule; use page metadata such as `noindex` when a page must not appear in search results.
+The sitemap covers every locale home, Score index, Movement, Score section, Archive index, Archive kind, Archive group, gallery index, and gallery page, plus the canonical CN copies of About and Unreferenced Artwork. It deliberately omits individual stories, gallery display members, and artworks, as well as query URLs. It is a crawl hint, not an indexing rule; use page metadata such as `noindex` when a page must not appear in search results.
 
 Each successful route publishes one absolute canonical URL without its query string, fragment, or trailing slash. Locale-specific pages are self-referential; the locale-independent About and Unreferenced Artwork pages use their CN paths as canonical. Redirect-only and missing routes are not sitemap entries. Do not add a fixed canonical to `index.html`: that file is the catch-all document for every route and would incorrectly make every page canonical to the same URL.
 

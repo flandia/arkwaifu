@@ -11,16 +11,29 @@ from PIL import Image
 
 ArtCategory = Literal["image", "background", "item", "character"]
 SourceRole = Literal["body", "face", "whole_body"]
+SourceArtKind = Literal["character", "composite_panel"]
+ScoreAssetKind = Literal[
+    "icon",
+    "logo",
+    "background",
+    "key_visual",
+    "title",
+    "decoration",
+    "retro_background",
+    "split",
+]
 LocaleUnit = Literal["CN", "EN", "JP", "KR", "TW"]
-StoryGroupType = Literal[
-    "main_story",
-    "major_event",
-    "minor_event",
+MovementType = Literal["continue", "discrete"]
+MovementSectionType = Literal["main_theme", "side_story", "vignette"]
+MovementLocationType = Literal["before", "after", "mainline_split", "story_set"]
+ArchiveKind = Literal[
+    "events",
     "operator_record",
     "integrated_strategies",
     "reclamation_algorithm",
     "others",
 ]
+CompositeType = Literal["none", "vertical", "horizontal"]
 StoryTag = Literal["before", "after", "interlude"]
 
 
@@ -123,8 +136,73 @@ PngImage = PngArtifact | FilePngArtifact
 
 
 @dataclass(frozen=True, slots=True)
+class FileVideoArtifact:
+    """Represent one validated WebM video backed by a stable file."""
+
+    path: Path
+    width: int
+    height: int
+    byte_size: int
+    frame_rate_numerator: int
+    frame_rate_denominator: int
+    frame_count: int
+
+    @classmethod
+    def from_path(
+        cls,
+        path: Path,
+        *,
+        width: int,
+        height: int,
+        frame_rate_numerator: int,
+        frame_rate_denominator: int,
+        frame_count: int,
+    ) -> FileVideoArtifact:
+        """Resolve a WebM file and retain its validated stream metadata."""
+
+        stable_path = path.resolve(strict=True)
+        if not stable_path.is_file():
+            raise ValueError(f"video path is not a file: {stable_path}")
+        byte_size = stable_path.stat().st_size
+        values = {
+            "byte size": byte_size,
+            "width": width,
+            "height": height,
+            "frame-rate numerator": frame_rate_numerator,
+            "frame-rate denominator": frame_rate_denominator,
+            "frame count": frame_count,
+        }
+        for name, value in values.items():
+            if not isinstance(value, int) or isinstance(value, bool) or value <= 0:
+                raise ValueError(f"invalid video {name}: {value!r}")
+        return cls(
+            path=stable_path,
+            width=width,
+            height=height,
+            byte_size=byte_size,
+            frame_rate_numerator=frame_rate_numerator,
+            frame_rate_denominator=frame_rate_denominator,
+            frame_count=frame_count,
+        )
+
+    @property
+    def content(self) -> bytes:
+        """Read the video without retaining it on the artifact."""
+
+        return self.path.read_bytes()
+
+
+@dataclass(frozen=True, slots=True)
+class SourceArtReference:
+    """Identify one category-qualified source image in composition order."""
+
+    category: ArtCategory
+    id: str
+
+
+@dataclass(frozen=True, slots=True)
 class SourceArtRecord:
-    """Represent one retained character layer and its versioned object.
+    """Represent one retained character layer or composite panel.
 
     ``res_version`` is the version which contributed this record. ``None``
     means the enclosing manifest's version; complete-history merges set it
@@ -132,10 +210,12 @@ class SourceArtRecord:
     """
 
     id: str
-    character_id: str
-    role: SourceRole
-    variant: str
+    category: ArtCategory
+    kind: SourceArtKind
     image: PngImage
+    character_id: str | None = None
+    role: SourceRole | None = None
+    variant: str | None = None
     res_version: str | None = None
 
 
@@ -149,7 +229,26 @@ class ArtRecord:
     id: str
     category: ArtCategory
     image: PngImage
-    source_art_ids: tuple[str, ...] = ()
+    source_art_references: tuple[SourceArtReference, ...] = ()
+    res_version: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class ScoreAssetRecord:
+    """Represent one localized-UI-independent Score PNG from the CN client."""
+
+    id: str
+    kind: ScoreAssetKind
+    image: PngImage
+    res_version: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class ScoreVideoRecord:
+    """Represent one muted Score background video from the CN client."""
+
+    id: str
+    video: FileVideoArtifact
     res_version: str | None = None
 
 
@@ -164,6 +263,8 @@ class ArtManifest:
     upstream_version: str
     arts: tuple[ArtRecord, ...]
     source_arts: tuple[SourceArtRecord, ...]
+    score_assets: tuple[ScoreAssetRecord, ...] = ()
+    score_videos: tuple[ScoreVideoRecord, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -183,7 +284,7 @@ class StoryRecord:
     """Represent one localized story and its ordered art references."""
 
     id: str
-    group_id: str
+    collection_id: str
     tag: StoryTag
     tag_text: str
     code: str
@@ -193,42 +294,127 @@ class StoryRecord:
 
 
 @dataclass(frozen=True, slots=True)
-class StoryGroupRecord:
-    """Represent one ordered group of localized stories."""
+class MovementLocation:
+    """Represent one node in a Movement's complete location graph."""
 
     id: str
+    position: int
+    location_type: MovementLocationType
+    sort_id: int
+    start_time: int
+    present_stage_id: str | None
+    unlock_stage_id: str | None
+    section_id: str | None
+    split_icon_asset_id: str | None
+    split_sub_name: str | None
+    video_id: str | None
+
+
+@dataclass(frozen=True, slots=True)
+class Movement:
+    """Represent one localized Arknights Movement from upstream ``storylines``."""
+
+    id: str
+    position: int
+    movement_type: MovementType
     name: str
-    group_type: StoryGroupType
+    icon_asset_id: str | None
+    logo_asset_id: str | None
+    background_asset_id: str | None
+    has_video: bool
+    start_time: int
+    locations: tuple[MovementLocation, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class MovementSection:
+    """Represent one Story Set and its one-to-one review-group stories."""
+
+    id: str
+    collection_id: str
+    section_type: MovementSectionType
+    name: str
+    review_group_id: str | None
+    sort_by_year: int
+    sort_within_year: int
+    key_visual_asset_id: str | None
+    title_asset_id: str | None
+    background_asset_id: str | None
+    decoration_asset_id: str | None
+    retro_background_asset_id: str | None
+    description: str
+    has_video: bool
     stories: tuple[StoryRecord, ...]
 
 
 @dataclass(frozen=True, slots=True)
-class GalleryEntry:
-    """Represent one ordered art entry in a gallery."""
+class ArchiveGroup:
+    """Represent one non-Score collection in the public Archives."""
+
+    id: str
+    collection_id: str
+    position: int
+    name: str
+    archive_kind: ArchiveKind
+    story_type: Literal["side_story", "vignette"] | None
+    stories: tuple[StoryRecord, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class CompositePanel:
+    """Represent one ordered source panel in an upstream composite recipe."""
+
+    id: str
+    position: int
+    width: int
+    height: int
+
+
+@dataclass(frozen=True, slots=True)
+class GalleryArtwork:
+    """Represent one ordered sibling artwork inside a gallery display."""
+
+    position: int
+    cg_id: str
+    art_id: str
+    category: ArtCategory
+    composite_type: CompositeType
+    panels: tuple[CompositePanel, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class GalleryDisplay:
+    """Represent sibling artworks sharing one game gallery card."""
 
     id: str
     position: int
     name: str
     description: str
-    art_id: str
-    category: ArtCategory = "image"
+    related_story_id: str | None
+    related_stage_id: str | None
+    artworks: tuple[GalleryArtwork, ...]
 
 
 @dataclass(frozen=True, slots=True)
-class Gallery:
-    """Represent one localized gallery and all of its entries."""
+class GalleryGroup:
+    """Represent one collection-owned gallery and its ordered displays."""
 
     id: str
+    collection_id: str
+    position: int
     name: str
     description: str
-    entries: tuple[GalleryEntry, ...]
+    location_id: str | None
+    displays: tuple[GalleryDisplay, ...]
 
 
 @dataclass(frozen=True, slots=True)
 class LocaleManifest:
-    """Contain the complete story and gallery dataset for one server version."""
+    """Contain one locale's complete Score, Archive, story, and gallery data."""
 
     unit: LocaleUnit
     upstream_version: str
-    story_groups: tuple[StoryGroupRecord, ...]
-    galleries: tuple[Gallery, ...]
+    movements: tuple[Movement, ...]
+    movement_sections: tuple[MovementSection, ...]
+    archive_groups: tuple[ArchiveGroup, ...]
+    galleries: tuple[GalleryGroup, ...]

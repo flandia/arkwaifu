@@ -103,6 +103,137 @@ def test_bundle_checksum_rejects_a_missing_inner_asset():
         _bundle_md5(wrapper.getvalue(), "expected.ab")
 
 
+@pytest.mark.asyncio
+async def test_gallery_recipes_are_branch_consistent_and_fetched_once(tmp_path: Path):
+    calls = []
+    stage = {
+        "cgGalleryDisplays": {
+            "display": {
+                "displayId": "Display",
+                "cgSource": "BACKGROUND",
+                "cgList": ["Composite"],
+            }
+        },
+        "cgGalleryCgs": {
+            "Composite": {
+                "cgId": "Composite",
+                "compositeType": "VERTICAL",
+                "compositeList": [
+                    {"cgId": "Top", "width": 2, "height": 1},
+                    {"cgId": "Bottom", "width": 2, "height": 1},
+                ],
+            }
+        },
+    }
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        calls.append(request.url.path)
+        if request.url.path.endswith("hot_update_list.json"):
+            return httpx.Response(200, json={"versionId": "cn-v1"})
+        return httpx.Response(200, json=stage)
+
+    builder = UpstreamArtBuilder(
+        version_url="https://example.test/version",
+        asset_base_url="https://example.test/assets",
+        gallery_metadata_base_url="https://example.test/cn",
+        cache=UpstreamCache(tmp_path / ".cache"),
+    )
+    async with httpx.AsyncClient(transport=httpx.MockTransport(respond)) as client:
+        first = await builder._load_gallery_recipes(client)
+        second = await builder._load_gallery_recipes(client)
+
+    assert first is second
+    assert calls == [
+        "/cn/hot_update_list.json",
+        "/cn/gamedata/excel/stage_table.json",
+        "/cn/hot_update_list.json",
+    ]
+    assert first.version == "cn-v1"
+    assert first.recipes[0].art_id == "top/bottom"
+    assert first.recipes[0].category == "background"
+
+
+@pytest.mark.asyncio
+async def test_gallery_recipe_fetch_rejects_a_branch_race(tmp_path: Path):
+    versions = iter(("cn-v1", "cn-v2"))
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("hot_update_list.json"):
+            return httpx.Response(200, json={"versionId": next(versions)})
+        return httpx.Response(
+            200,
+            json={"cgGalleryDisplays": {}, "cgGalleryCgs": {}},
+        )
+
+    builder = UpstreamArtBuilder(
+        version_url="https://example.test/version",
+        asset_base_url="https://example.test/assets",
+        gallery_metadata_base_url="https://example.test/cn",
+        cache=UpstreamCache(tmp_path / ".cache"),
+    )
+    async with httpx.AsyncClient(transport=httpx.MockTransport(respond)) as client:
+        with pytest.raises(RuntimeError, match="changed during art preparation"):
+            await builder._load_gallery_recipes(client)
+
+
+def _gallery_recipe_stage() -> dict[str, object]:
+    return {
+        "cgGalleryDisplays": {
+            "Display": {
+                "displayId": "display",
+                "cgSource": "IMAGE",
+                "cgList": ["Composite"],
+            }
+        },
+        "cgGalleryCgs": {
+            "Composite": {
+                "cgId": "composite",
+                "compositeType": "VERTICAL",
+                "compositeList": [
+                    {"cgId": "Top", "width": 2, "height": 1},
+                    {"cgId": "Bottom", "width": 2, "height": 1},
+                ],
+            }
+        },
+    }
+
+
+@pytest.mark.parametrize(
+    ("case", "error_type", "message"),
+    [
+        ("unknown_source", ValueError, "unknown cgSource"),
+        ("missing_cg", ValueError, "artwork is not declared"),
+        ("missing_composite_type", TypeError, "has no compositeType"),
+        ("display_id_mismatch", ValueError, "mapping key does not match displayId"),
+        ("cg_id_mismatch", ValueError, "mapping key does not match cgId"),
+        ("slash_panel", ValueError, "contains reserved '/'"),
+    ],
+)
+def test_gallery_recipe_parser_rejects_modern_schema_drift(
+    case: str,
+    error_type: type[Exception],
+    message: str,
+):
+    stage = _gallery_recipe_stage()
+    display = stage["cgGalleryDisplays"]["Display"]
+    cg = stage["cgGalleryCgs"]["Composite"]
+    if case == "unknown_source":
+        display["cgSource"] = "UNKNOWN"
+    elif case == "missing_cg":
+        stage["cgGalleryCgs"] = {}
+    elif case == "missing_composite_type":
+        del cg["compositeType"]
+    elif case == "display_id_mismatch":
+        display["displayId"] = "different"
+    elif case == "cg_id_mismatch":
+        cg["cgId"] = "different"
+    elif case == "slash_panel":
+        cg["compositeList"][0]["cgId"] = "top/ambiguous"
+
+    with pytest.raises(error_type, match=message):
+        UpstreamArtBuilder._parse_gallery_recipes(stage)
+
+
 @pytest.mark.parametrize("failing_stage", ["extract", "compose"])
 def test_combined_worker_reports_the_stage_that_failed(tmp_path, monkeypatch, failing_stage):
     def extract(_bundles, extracted, *, workers):
@@ -241,6 +372,7 @@ async def test_cold_fetched_stage_retries_a_corrupt_wrapper(
         extracted: Path,
         rendered: Path,
         upstream_version: str,
+        _recipes=(),
     ) -> None:
         _empty_render(extracted, rendered, upstream_version)
 
@@ -314,6 +446,7 @@ async def test_resource_processing_starts_while_another_download_is_in_flight(
         extracted: Path,
         rendered: Path,
         upstream_version: str,
+        _recipes=(),
     ) -> None:
         if bundle.name == "first.ab":
             processing_started.set()
@@ -422,6 +555,7 @@ async def test_build_returns_promoted_file_backed_paths_in_cache_workspace(
         extracted: Path,
         rendered: Path,
         upstream_version: str,
+        _recipes=(),
     ) -> None:
         image = PngArtifact.from_image(Image.new("RGBA", (2, 3), (1, 2, 3, 255)))
         write_art_manifest(
@@ -491,13 +625,19 @@ async def test_staged_cache_retains_inputs_and_render_only_reuses_extracted_tree
         extracted: Path,
         rendered: Path,
         upstream_version: str,
+        _recipes=(),
     ) -> None:
         nonlocal extractions, renders
         extractions += 1
         renders += 1
         _empty_render(extracted, rendered, upstream_version)
 
-    def render_resource(extracted: Path, rendered: Path, upstream_version: str) -> None:
+    def render_resource(
+        extracted: Path,
+        rendered: Path,
+        upstream_version: str,
+        _recipes=(),
+    ) -> None:
         nonlocal renders
         renders += 1
         assert (extracted / "unity-export.txt").read_text(encoding="utf-8") == "uncomposed"

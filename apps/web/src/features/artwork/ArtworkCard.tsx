@@ -1,8 +1,10 @@
 import { useState, ViewTransition } from "react";
-import { artTransitionName, type ArtCategory, type ArtDetail, type Locale } from "../../api";
+import type { ArtCategory, ArtDetail, Locale } from "../../api/types";
+import { artTransitionName } from "../../api/utils";
 import { useUi } from "../../i18n";
 import { TransitionLink, useCategoryLabel } from "../../navigation";
-import { Eyebrow, cn } from "../../shared/ui";
+import { cn } from "../../shared/ui/cn";
+import { Eyebrow } from "../../shared/ui/Typography";
 
 const ratioClasses: Record<ArtCategory, string> = {
   image: "aspect-video",
@@ -24,12 +26,14 @@ function ImageFallback() {
 
 function ArchiveImage({
   alt,
+  className = "size-full object-contain",
   height,
   priority = false,
   src,
   width,
 }: {
   alt: string;
+  className?: string;
   height: number;
   priority?: boolean;
   src: string;
@@ -40,7 +44,7 @@ function ArchiveImage({
   return (
     <img
       alt={alt}
-      className="size-full object-contain"
+      className={className}
       decoding="async"
       fetchPriority={priority ? "high" : "auto"}
       height={height}
@@ -55,15 +59,18 @@ function ArchiveImage({
 export function ArtworkImage({
   art,
   alt,
+  className,
   priority = false,
 }: {
   art: ArtDetail;
   alt: string;
+  className?: string;
   priority?: boolean;
 }) {
   return (
     <ArchiveImage
       alt={alt}
+      className={className}
       height={art.image.height}
       priority={priority}
       src={art.image.contentUrl}
@@ -110,7 +117,7 @@ export function ArtworkCard({
   const destination = `/${locale}/art/${category}/${encodeURIComponent(id)}`;
 
   return (
-    <article className="flex min-w-0 flex-col border-2 border-ink bg-surface [contain-intrinsic-size:auto_30rem] [content-visibility:auto]">
+    <article className="flex min-w-0 flex-col border-2 border-ink bg-surface text-ink [contain-intrinsic-size:auto_30rem] [content-visibility:auto]">
       <TransitionLink
         aria-label={t("common.open", { name: title })}
         className={cn(

@@ -13,6 +13,7 @@ import math
 import shutil
 from collections.abc import Sequence
 from dataclasses import dataclass
+from io import BytesIO
 from pathlib import Path
 from typing import Any, cast
 
@@ -23,13 +24,20 @@ from ..domain import (
     ArtManifest,
     ArtRecord,
     FilePngArtifact,
+    FileVideoArtifact,
+    GalleryArtwork,
     PngArtifact,
     PngImage,
+    ScoreAssetKind,
+    ScoreAssetRecord,
+    ScoreVideoRecord,
     SourceArtRecord,
+    SourceArtReference,
     SourceRole,
 )
 
 _AVG_ROOT = Path("assets/torappu/dynamicassets/avg")
+_MIXSTORY_ROOT = Path("assets/torappu/dynamicassets/arts/ui/mixstory")
 _LOGGER = logging.getLogger(__name__)
 _PICTURE_CATEGORIES = {
     "images": "image",
@@ -38,7 +46,20 @@ _PICTURE_CATEGORIES = {
 }
 _ART_CATEGORIES = frozenset({"image", "background", "item", "character"})
 _SOURCE_ROLES = frozenset({"body", "face", "whole_body"})
+_SOURCE_KINDS = frozenset({"character", "composite_panel"})
+_SCORE_ASSET_DIRECTORIES = {
+    "abbrs": "icon",
+    "logos": "logo",
+    "backgrounds": "background",
+    "kvs": "key_visual",
+    "titles": "title",
+    "decos": "decoration",
+    "retrobkgs": "retro_background",
+    "splits": "split",
+}
+_SCORE_ASSET_KINDS = frozenset(_SCORE_ASSET_DIRECTORIES.values())
 _IMAGE_PATH_FIELD = "image_path"
+_VIDEO_PATH_FIELD = "video_path"
 
 
 @dataclass(frozen=True, slots=True)
@@ -193,6 +214,108 @@ def _picture_records(extracted_root: Path) -> list[ArtRecord]:
     return records
 
 
+def _score_asset_records(extracted_root: Path) -> list[ScoreAssetRecord]:
+    """Read every dedicated Score sprite exported from the CN Windows client."""
+
+    root = extracted_root / _MIXSTORY_ROOT
+    records: list[ScoreAssetRecord] = []
+    for directory_name, raw_kind in _SCORE_ASSET_DIRECTORIES.items():
+        directory = root / directory_name
+        if not directory.is_dir():
+            continue
+        kind = cast(ScoreAssetKind, raw_kind)
+        for path in sorted(directory.glob("*.png")):
+            records.append(
+                ScoreAssetRecord(
+                    id=path.stem.lower(),
+                    kind=kind,
+                    image=PngArtifact.from_bytes(path.read_bytes()),
+                )
+            )
+    return records
+
+
+def add_gallery_composites(
+    manifest: ArtManifest,
+    recipes: Sequence[GalleryArtwork],
+) -> ArtManifest:
+    """Stitch recipes whose complete ordered panel set is present in one resource.
+
+    The client metadata describes each panel's logical layout dimensions. Windows
+    bundle textures may differ from those dimensions, so resize only the copy used
+    by the composite and retain the native panel artifact below.
+    """
+
+    arts = {(art.category, art.id): art for art in manifest.arts}
+    sources = {(source.category, source.id): source for source in manifest.source_arts}
+    for recipe in recipes:
+        if recipe.composite_type == "none":
+            continue
+        panels = [arts.get((recipe.category, panel.id)) for panel in recipe.panels]
+        if any(panel is None for panel in panels):
+            continue
+        present_panels = [panel for panel in panels if panel is not None]
+        opened: list[Image.Image] = []
+        canvas: Image.Image | None = None
+        try:
+            for record, panel in zip(present_panels, recipe.panels, strict=True):
+                with Image.open(BytesIO(record.image.content)) as image:
+                    layout_image = image.convert("RGBA")
+                layout_size = (panel.width, panel.height)
+                if layout_image.size != layout_size:
+                    resized = layout_image.resize(layout_size, Image.Resampling.LANCZOS)
+                    layout_image.close()
+                    layout_image = resized
+                opened.append(layout_image)
+            if recipe.composite_type == "vertical":
+                canvas = Image.new(
+                    "RGBA",
+                    (max(image.width for image in opened), sum(image.height for image in opened)),
+                )
+                offset = 0
+                for image in opened:
+                    canvas.alpha_composite(image, (0, offset))
+                    offset += image.height
+            else:
+                canvas = Image.new(
+                    "RGBA",
+                    (sum(image.width for image in opened), max(image.height for image in opened)),
+                )
+                offset = 0
+                for image in opened:
+                    canvas.alpha_composite(image, (offset, 0))
+                    offset += image.width
+            for record in present_panels:
+                sources[(record.category, record.id)] = SourceArtRecord(
+                    id=record.id,
+                    category=record.category,
+                    kind="composite_panel",
+                    image=record.image,
+                )
+            arts[(recipe.category, recipe.art_id)] = ArtRecord(
+                id=recipe.art_id,
+                category=recipe.category,
+                image=PngArtifact.from_image(canvas),
+                source_art_references=tuple(
+                    SourceArtReference(recipe.category, panel.id) for panel in recipe.panels
+                ),
+            )
+        finally:
+            if canvas is not None:
+                canvas.close()
+            for image in opened:
+                image.close()
+    return ArtManifest(
+        upstream_version=manifest.upstream_version,
+        arts=tuple(sorted(arts.values(), key=lambda art: (art.category, art.id))),
+        source_arts=tuple(
+            sorted(sources.values(), key=lambda source: (source.category, source.id))
+        ),
+        score_assets=manifest.score_assets,
+        score_videos=manifest.score_videos,
+    )
+
+
 def _character_records(extracted_root: Path) -> tuple[list[ArtRecord], list[SourceArtRecord]]:
     """Process character sources and compose every available variation.
 
@@ -219,6 +342,8 @@ def _character_records(extracted_root: Path) -> tuple[list[ArtRecord], list[Sour
                 body_source_id = f"{character_id}:body:{body_index}"
                 sources[body_source_id] = SourceArtRecord(
                     id=body_source_id,
+                    category="character",
+                    kind="character",
                     character_id=character_id,
                     role="body",
                     variant=str(body_index),
@@ -234,6 +359,8 @@ def _character_records(extracted_root: Path) -> tuple[list[ArtRecord], list[Sour
                 source_id = f"{character_id}:{role}:{body_index}:{face_index}"
                 sources[source_id] = SourceArtRecord(
                     id=source_id,
+                    category="character",
+                    kind="character",
                     character_id=character_id,
                     role=role,
                     variant=f"{body_index}:{face_index}",
@@ -270,7 +397,9 @@ def _character_records(extracted_root: Path) -> tuple[list[ArtRecord], list[Sour
                         id=f"{character_id}#{face_index}${body_index}",
                         category="character",
                         image=PngArtifact.from_image(output),
-                        source_art_ids=source_ids,
+                        source_art_references=tuple(
+                            SourceArtReference("character", source_id) for source_id in source_ids
+                        ),
                     )
                 )
     return arts, list(sources.values())
@@ -306,6 +435,12 @@ def build_art_manifest(extracted_root: Path, upstream_version: str) -> ArtManife
             )
         ),
         source_arts=tuple(sorted(sources, key=lambda record: record.id)),
+        score_assets=tuple(
+            sorted(
+                _score_asset_records(extracted_root),
+                key=lambda record: (record.kind, record.id),
+            )
+        ),
     )
 
 
@@ -323,14 +458,24 @@ def merge_art_manifests(
             raise ValueError("cannot merge art manifests from different upstream versions")
 
     arts = tuple(art for manifest in manifests for art in manifest.arts)
-    sources: dict[str, SourceArtRecord] = {}
+    sources: dict[tuple[str, str], SourceArtRecord] = {}
+    score_assets: dict[tuple[str, str], ScoreAssetRecord] = {}
+    score_videos: dict[str, ScoreVideoRecord] = {}
     for manifest in manifests:
         for source in manifest.source_arts:
-            sources[source.id] = source
+            sources[(source.category, source.id)] = source
+        for asset in manifest.score_assets:
+            score_assets[(asset.kind, asset.id)] = asset
+        for video in manifest.score_videos:
+            score_videos[video.id] = video
     return ArtManifest(
         upstream_version=upstream_version,
         arts=tuple(sorted(_deduplicate_arts(arts), key=lambda art: (art.category, art.id))),
-        source_arts=tuple(sorted(sources.values(), key=lambda source: source.id)),
+        source_arts=tuple(
+            sorted(sources.values(), key=lambda source: (source.category, source.id))
+        ),
+        score_assets=tuple(sorted(score_assets.values(), key=lambda asset: (asset.kind, asset.id))),
+        score_videos=tuple(sorted(score_videos.values(), key=lambda video: video.id)),
     )
 
 
@@ -343,6 +488,7 @@ def write_art_manifest(manifest: ArtManifest, destination: Path) -> None:
     processed.mkdir(parents=True, exist_ok=True)
 
     next_image_index = 0
+    next_video_index = 0
 
     def persist_image(artifact: PngImage) -> str:
         nonlocal next_image_index
@@ -355,6 +501,15 @@ def write_art_manifest(manifest: ArtManifest, destination: Path) -> None:
             shutil.copyfile(artifact.path, output)
         return relative
 
+    def persist_video(artifact: FileVideoArtifact) -> str:
+        nonlocal next_video_index
+        relative = _cached_video_path(next_video_index)
+        next_video_index += 1
+        output = destination / Path(relative)
+        if artifact.path != output.resolve():
+            shutil.copyfile(artifact.path, output)
+        return relative
+
     payload = {
         "upstream_version": manifest.upstream_version,
         "arts": [
@@ -362,19 +517,44 @@ def write_art_manifest(manifest: ArtManifest, destination: Path) -> None:
                 "id": art.id,
                 "category": art.category,
                 _IMAGE_PATH_FIELD: persist_image(art.image),
-                "source_art_ids": list(art.source_art_ids),
+                "source_art_references": [
+                    {"category": source.category, "id": source.id}
+                    for source in art.source_art_references
+                ],
             }
             for art in manifest.arts
         ],
         "source_arts": [
             {
                 "id": source.id,
+                "category": source.category,
+                "kind": source.kind,
                 "character_id": source.character_id,
                 "role": source.role,
                 "variant": source.variant,
                 _IMAGE_PATH_FIELD: persist_image(source.image),
             }
             for source in manifest.source_arts
+        ],
+        "score_assets": [
+            {
+                "id": asset.id,
+                "kind": asset.kind,
+                _IMAGE_PATH_FIELD: persist_image(asset.image),
+            }
+            for asset in manifest.score_assets
+        ],
+        "score_videos": [
+            {
+                "id": video.id,
+                _VIDEO_PATH_FIELD: persist_video(video.video),
+                "width": video.video.width,
+                "height": video.video.height,
+                "frame_rate_numerator": video.video.frame_rate_numerator,
+                "frame_rate_denominator": video.video.frame_rate_denominator,
+                "frame_count": video.video.frame_count,
+            }
+            for video in manifest.score_videos
         ],
     }
     (destination / "manifest.json").write_text(
@@ -407,9 +587,20 @@ def _cached_image_path(index: int) -> str:
     return f"processed/{index:08d}.png"
 
 
+def _cached_video_path(index: int) -> str:
+    return f"processed/{index:08d}.webm"
+
+
 def _cached_identifier(record: dict[str, object], name: str, context: str) -> str:
     value = _required_string(record, name, context)
     if value != value.lower():
+        raise ValueError(f"cached {context} has an invalid {name}: {value!r}")
+    return value
+
+
+def _positive_integer(record: dict[str, object], name: str, context: str) -> int:
+    value = _required_field(record, name, context)
+    if not isinstance(value, int) or isinstance(value, bool) or value <= 0:
         raise ValueError(f"cached {context} has an invalid {name}: {value!r}")
     return value
 
@@ -424,7 +615,10 @@ def _read_art_manifest(source: Path) -> ArtManifest:
     version = _required_string(payload, "upstream_version", "art manifest")
     raw_arts = _required_records(payload, "arts", source)
     raw_sources = _required_records(payload, "source_arts", source)
+    raw_score_assets = _required_records(payload, "score_assets", source)
+    raw_score_videos = _required_records(payload, "score_videos", source)
     next_image_index = 0
+    next_video_index = 0
 
     def artifact(record: dict[str, object], context: str) -> FilePngArtifact:
         nonlocal next_image_index
@@ -442,6 +636,28 @@ def _read_art_manifest(source: Path) -> ArtManifest:
         except (OSError, TypeError, ValueError) as error:
             raise ValueError(f"cannot read cached art image {path}: {error}") from error
 
+    def video_artifact(record: dict[str, object], context: str) -> FileVideoArtifact:
+        nonlocal next_video_index
+        expected = _cached_video_path(next_video_index)
+        next_video_index += 1
+        relative = _required_string(record, _VIDEO_PATH_FIELD, context)
+        if relative != expected:
+            raise ValueError(
+                f"cached {context} has an invalid {_VIDEO_PATH_FIELD}: "
+                f"{relative!r}, expected {expected!r}"
+            )
+        try:
+            return FileVideoArtifact.from_path(
+                source / Path(expected),
+                width=_positive_integer(record, "width", context),
+                height=_positive_integer(record, "height", context),
+                frame_rate_numerator=_positive_integer(record, "frame_rate_numerator", context),
+                frame_rate_denominator=_positive_integer(record, "frame_rate_denominator", context),
+                frame_count=_positive_integer(record, "frame_count", context),
+            )
+        except (OSError, TypeError, ValueError) as error:
+            raise ValueError(f"cannot read cached Score video: {error}") from error
+
     arts: list[ArtRecord] = []
     for index, value in enumerate(raw_arts):
         context = f"art record {index}"
@@ -450,17 +666,31 @@ def _read_art_manifest(source: Path) -> ArtManifest:
         category = _required_string(value, "category", context)
         if category not in _ART_CATEGORIES:
             raise ValueError(f"cached {context} has an invalid category: {category!r}")
-        raw_source_ids = _required_field(value, "source_art_ids", context)
-        if not isinstance(raw_source_ids, list) or not all(
-            isinstance(source_id, str) and source_id for source_id in raw_source_ids
+        raw_references = _required_field(value, "source_art_references", context)
+        if not isinstance(raw_references, list) or not all(
+            isinstance(reference, dict) for reference in raw_references
         ):
             raise ValueError(f"cached {context} has invalid source-art references")
+        references = []
+        for reference_index, raw_reference in enumerate(raw_references):
+            reference_context = f"{context} source reference {reference_index}"
+            raw_category = _required_string(raw_reference, "category", reference_context)
+            if raw_category not in _ART_CATEGORIES:
+                raise ValueError(
+                    f"cached {reference_context} has an invalid category: {raw_category!r}"
+                )
+            references.append(
+                SourceArtReference(
+                    cast(ArtCategory, raw_category),
+                    _cached_identifier(raw_reference, "id", reference_context),
+                )
+            )
         arts.append(
             ArtRecord(
                 id=_cached_identifier(value, "id", context),
                 category=cast(ArtCategory, category),
                 image=artifact(value, context),
-                source_art_ids=tuple(raw_source_ids),
+                source_art_references=tuple(references),
             )
         )
 
@@ -469,20 +699,71 @@ def _read_art_manifest(source: Path) -> ArtManifest:
         context = f"source-art record {index}"
         if not isinstance(value, dict):
             raise TypeError(f"cached {context} is not an object: {value!r}")
-        role = _required_string(value, "role", context)
-        if role not in _SOURCE_ROLES:
-            raise ValueError(f"cached {context} has an invalid role: {role!r}")
+        category = _required_string(value, "category", context)
+        if category not in _ART_CATEGORIES:
+            raise ValueError(f"cached {context} has an invalid category: {category!r}")
+        kind = _required_string(value, "kind", context)
+        if kind not in _SOURCE_KINDS:
+            raise ValueError(f"cached {context} has an invalid kind: {kind!r}")
+        character_id = value.get("character_id")
+        role = value.get("role")
+        variant = value.get("variant")
+        if kind == "character":
+            if not isinstance(character_id, str) or character_id != character_id.lower():
+                raise ValueError(f"cached {context} has an invalid character_id")
+            if role not in _SOURCE_ROLES:
+                raise ValueError(f"cached {context} has an invalid role: {role!r}")
+            if not isinstance(variant, str) or not variant:
+                raise ValueError(f"cached {context} has an invalid variant")
+        elif any(value is not None for value in (character_id, role, variant)):
+            raise ValueError(f"cached {context} composite panel has character metadata")
         sources.append(
             SourceArtRecord(
                 id=_cached_identifier(value, "id", context),
-                character_id=_cached_identifier(value, "character_id", context),
-                role=cast(SourceRole, role),
-                variant=_required_string(value, "variant", context),
+                category=cast(ArtCategory, category),
+                kind=cast(Any, kind),
+                image=artifact(value, context),
+                character_id=cast(str | None, character_id),
+                role=cast(SourceRole | None, role),
+                variant=cast(str | None, variant),
+            )
+        )
+
+    score_assets: list[ScoreAssetRecord] = []
+    for index, value in enumerate(raw_score_assets):
+        context = f"Score asset record {index}"
+        if not isinstance(value, dict):
+            raise TypeError(f"cached {context} is not an object: {value!r}")
+        kind = _required_string(value, "kind", context)
+        if kind not in _SCORE_ASSET_KINDS:
+            raise ValueError(f"cached {context} has an invalid kind: {kind!r}")
+        score_assets.append(
+            ScoreAssetRecord(
+                id=_cached_identifier(value, "id", context),
+                kind=cast(ScoreAssetKind, kind),
                 image=artifact(value, context),
             )
         )
 
-    manifest = ArtManifest(version, tuple(arts), tuple(sources))
+    score_videos: list[ScoreVideoRecord] = []
+    for index, value in enumerate(raw_score_videos):
+        context = f"Score video record {index}"
+        if not isinstance(value, dict):
+            raise TypeError(f"cached {context} is not an object: {value!r}")
+        score_videos.append(
+            ScoreVideoRecord(
+                id=_cached_identifier(value, "id", context),
+                video=video_artifact(value, context),
+            )
+        )
+
+    manifest = ArtManifest(
+        version,
+        tuple(arts),
+        tuple(sources),
+        tuple(score_assets),
+        tuple(score_videos),
+    )
     _validate_cached_relationships(manifest)
     return manifest
 
@@ -491,22 +772,30 @@ def _validate_cached_relationships(manifest: ArtManifest) -> None:
     """Check relationships owned by the cache format rather than upstream data."""
 
     art_ids = [(art.category, art.id) for art in manifest.arts]
-    source_ids = [source.id for source in manifest.source_arts]
+    source_ids = [(source.category, source.id) for source in manifest.source_arts]
+    score_asset_ids = [(asset.kind, asset.id) for asset in manifest.score_assets]
+    score_video_ids = [video.id for video in manifest.score_videos]
     if len(art_ids) != len(set(art_ids)):
         raise ValueError("cached art identities are not unique")
     if len(source_ids) != len(set(source_ids)):
         raise ValueError("cached source-art identifiers are not unique")
+    if len(score_asset_ids) != len(set(score_asset_ids)):
+        raise ValueError("cached Score asset identifiers are not unique")
+    if len(score_video_ids) != len(set(score_video_ids)):
+        raise ValueError("cached Score video identifiers are not unique")
 
     available_sources = set(source_ids)
     for art in manifest.arts:
-        if not isinstance(art.source_art_ids, tuple) or len(art.source_art_ids) != len(
-            set(art.source_art_ids)
-        ):
+        if not isinstance(art.source_art_references, tuple) or len(
+            art.source_art_references
+        ) != len(set(art.source_art_references)):
             raise ValueError(f"cached art {art.id} repeats a source-art reference")
-        for source_id in art.source_art_ids:
-            if source_id != source_id.lower():
+        for reference in art.source_art_references:
+            if reference.id != reference.id.lower():
                 raise ValueError(f"cached art {art.id} has an invalid source-art reference")
-        missing = set(art.source_art_ids) - available_sources
+        missing = {
+            (reference.category, reference.id) for reference in art.source_art_references
+        } - available_sources
         if missing:
             raise ValueError(f"cached art {art.id} references missing sources: {sorted(missing)}")
 

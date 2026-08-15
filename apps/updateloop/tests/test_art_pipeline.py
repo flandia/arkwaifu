@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 import json
+from io import BytesIO
 from pathlib import Path
 
 import pytest
 from PIL import Image
 
 from arkwaifu_updateloop.art import (
+    add_gallery_composites,
     build_art_manifest,
     merge_art_manifests,
     read_art_manifest,
@@ -15,9 +17,12 @@ from arkwaifu_updateloop.art import (
 from arkwaifu_updateloop.domain import (
     ArtManifest,
     ArtRecord,
+    CompositePanel,
     FilePngArtifact,
+    GalleryArtwork,
     PngArtifact,
     SourceArtRecord,
+    SourceArtReference,
 )
 
 
@@ -63,6 +68,130 @@ def test_picture_identity_includes_category(tmp_path: Path):
     assert manifest.arts[0].image.content == background
 
 
+def test_score_visual_directories_keep_dedicated_kinds(tmp_path: Path):
+    root = tmp_path / "assets/torappu/dynamicassets/arts/ui/mixstory"
+    write_png(root / "abbrs/storyline_abbr_ur.png", (1, 2, 3, 255))
+    write_png(root / "splits/act_3.png", (4, 5, 6, 255))
+    write_png(root / "logos/storyline_ur.png", (7, 8, 9, 255))
+    write_png(root / "retrobkgs/retro_main_0.png", (10, 11, 12, 255))
+
+    manifest = build_art_manifest(tmp_path, "v1")
+
+    assert [(asset.kind, asset.id) for asset in manifest.score_assets] == [
+        ("icon", "storyline_abbr_ur"),
+        ("logo", "storyline_ur"),
+        ("retro_background", "retro_main_0"),
+        ("split", "act_3"),
+    ]
+
+
+def test_known_sacrifice_torch_vertical_recipe_is_top_to_bottom():
+    colors = [(255, 0, 0, 255), (0, 255, 0, 255), (0, 0, 255, 255), (0, 0, 0, 255)]
+    panel_ids = ("66_i15_4", "66_i15_3", "66_i15_2", "66_i15_1")
+    panels = tuple(
+        CompositePanel(panel_id, position, 2, 1) for position, panel_id in enumerate(panel_ids)
+    )
+    manifest = ArtManifest(
+        "v1",
+        tuple(
+            ArtRecord(
+                panel_id, "background", PngArtifact.from_image(Image.new("RGBA", (2, 1), color))
+            )
+            for panel_id, color in zip(panel_ids, colors, strict=True)
+        ),
+        (),
+    )
+    recipe = GalleryArtwork(
+        0,
+        "66_i15_3",
+        "/".join(panel_ids),
+        "background",
+        "vertical",
+        panels,
+    )
+
+    result = add_gallery_composites(manifest, (recipe,))
+    composite = next(art for art in result.arts if art.id == recipe.art_id)
+    with Image.open(BytesIO(composite.image.content)) as image:
+        assert image.size == (2, 4)
+        assert [image.getpixel((0, y)) for y in range(4)] == colors
+    assert {(art.category, art.id) for art in result.arts}.issuperset(
+        {("background", panel_id) for panel_id in panel_ids}
+    )
+    assert {(source.category, source.id) for source in result.source_arts} == {
+        ("background", panel_id) for panel_id in panel_ids
+    }
+    assert tuple(reference.id for reference in composite.source_art_references) == panel_ids
+
+
+def test_known_horizontal_panorama_is_left_to_right():
+    panel_ids = ("60_i11_1l", "60_i11_1r")
+    panels = tuple(
+        CompositePanel(panel_id, position, 1, 2) for position, panel_id in enumerate(panel_ids)
+    )
+    manifest = ArtManifest(
+        "v1",
+        (
+            ArtRecord(
+                "60_i11_1l", "image", PngArtifact.from_image(Image.new("RGBA", (1, 2), "red"))
+            ),
+            ArtRecord(
+                "60_i11_1r", "image", PngArtifact.from_image(Image.new("RGBA", (1, 2), "blue"))
+            ),
+        ),
+        (),
+    )
+    recipe = GalleryArtwork(0, "60_i11_1m", "/".join(panel_ids), "image", "horizontal", panels)
+
+    result = add_gallery_composites(manifest, (recipe,))
+    composite = next(art for art in result.arts if art.id == recipe.art_id)
+    with Image.open(BytesIO(composite.image.content)) as image:
+        assert image.size == (2, 2)
+        assert image.getpixel((0, 0)) == (255, 0, 0, 255)
+        assert image.getpixel((1, 0)) == (0, 0, 255, 255)
+
+
+def test_gallery_composite_resizes_panels_to_declared_layout_dimensions():
+    manifest = ArtManifest(
+        "v1",
+        (
+            ArtRecord(
+                "top",
+                "image",
+                PngArtifact.from_image(Image.new("RGBA", (2, 1), "red")),
+            ),
+            ArtRecord(
+                "bottom",
+                "image",
+                PngArtifact.from_image(Image.new("RGBA", (1, 2), "blue")),
+            ),
+        ),
+        (),
+    )
+    recipe = GalleryArtwork(
+        0,
+        "composite",
+        "top/bottom",
+        "image",
+        "vertical",
+        (
+            CompositePanel("top", 0, 4, 3),
+            CompositePanel("bottom", 1, 4, 2),
+        ),
+    )
+
+    result = add_gallery_composites(manifest, (recipe,))
+
+    composite = next(art for art in result.arts if art.id == recipe.art_id)
+    with Image.open(BytesIO(composite.image.content)) as image:
+        assert image.size == (4, 5)
+        assert image.getpixel((0, 0)) == (255, 0, 0, 255)
+        assert image.getpixel((0, 4)) == (0, 0, 255, 255)
+    assert {
+        (source.id, source.image.width, source.image.height) for source in result.source_arts
+    } == {("top", 2, 1), ("bottom", 1, 2)}
+
+
 def test_independent_bundle_manifests_keep_same_id_in_distinct_categories():
     image = PngArtifact.from_image(Image.new("RGBA", (1, 1), (1, 2, 3, 255)))
     background = PngArtifact.from_image(Image.new("RGBA", (1, 1), (4, 5, 6, 255)))
@@ -100,7 +229,7 @@ def test_cached_art_manifest_round_trips_without_pickle(tmp_path: Path):
     cached = read_art_manifest(tmp_path)
 
     assert cached.upstream_version == value.upstream_version
-    assert [(art.id, art.category, art.source_art_ids) for art in cached.arts] == [
+    assert [(art.id, art.category, art.source_art_references) for art in cached.arts] == [
         ("event", "image", ())
     ]
     assert isinstance(cached.arts[0].image, FilePngArtifact)
@@ -166,8 +295,25 @@ def cached_character_manifest() -> ArtManifest:
     source_id = "char:body:1"
     return ArtManifest(
         "v1",
-        (ArtRecord("char#1$1", "character", artifact, (source_id,)),),
-        (SourceArtRecord(source_id, "char", "body", "1", artifact),),
+        (
+            ArtRecord(
+                "char#1$1",
+                "character",
+                artifact,
+                (SourceArtReference("character", source_id),),
+            ),
+        ),
+        (
+            SourceArtRecord(
+                source_id,
+                "character",
+                "character",
+                artifact,
+                character_id="char",
+                role="body",
+                variant="1",
+            ),
+        ),
     )
 
 
@@ -319,7 +465,10 @@ def test_character_sources_precede_resize_and_composition(
         "char_test:face:1:1",
     ]
     art = manifest.arts[0]
-    assert art.source_art_ids == ("char_test:body:1", "char_test:face:1:1")
+    assert tuple(source.id for source in art.source_art_references) == (
+        "char_test:body:1",
+        "char_test:face:1:1",
+    )
     with Image.open(Path(directory / "body.png")) as raw_body:
         assert manifest.source_arts[0].image.width == raw_body.width
     from io import BytesIO
@@ -348,5 +497,7 @@ def test_whole_body_source_is_exposed_without_composition(tmp_path: Path):
     manifest = build_art_manifest(tmp_path, "v2")
 
     assert manifest.arts[0].id == "char_whole#1$1"
-    assert manifest.arts[0].source_art_ids == ("char_whole:whole_body:1:1",)
+    assert tuple(source.id for source in manifest.arts[0].source_art_references) == (
+        "char_whole:whole_body:1:1",
+    )
     assert manifest.source_arts[0].role == "whole_body"

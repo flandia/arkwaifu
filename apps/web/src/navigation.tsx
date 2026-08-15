@@ -9,50 +9,35 @@ import {
 } from "react";
 import type { TFunction } from "i18next";
 import { Link, useNavigate, type LinkProps } from "react-router";
-import { ApiError, type ArtCategory, type Locale, type StoryGroupType } from "./api";
+import { ApiError } from "./api/client";
+import type { ArchiveKind, ArtCategory, Locale, StoryParent } from "./api/types";
 import { i18n, useUi } from "./i18n";
+import { cn } from "./shared/ui/cn";
 
 export type NavigationKind = "lateral" | "forward" | "back";
 
-export const storySections = {
-  main: {
-    type: "main_story",
-    labelKey: "story.sections.main",
-    index: "01",
-  },
+export const archiveKinds = {
   events: {
-    type: "major_event",
-    labelKey: "story.sections.events",
-    index: "02",
+    labelKey: "archive.kinds.events",
+    index: "A1",
   },
-  vignettes: {
-    type: "minor_event",
-    labelKey: "story.sections.vignettes",
-    index: "03",
-  },
-  records: {
-    type: "operator_record",
-    labelKey: "story.sections.records",
-    index: "04",
+  "operator-record": {
+    labelKey: "archive.kinds.operatorRecord",
+    index: "A2",
   },
   "integrated-strategies": {
-    type: "integrated_strategies",
-    labelKey: "story.sections.integratedStrategies",
-    index: "05",
+    labelKey: "archive.kinds.integratedStrategies",
+    index: "A3",
   },
   "reclamation-algorithm": {
-    type: "reclamation_algorithm",
-    labelKey: "story.sections.reclamationAlgorithm",
-    index: "06",
+    labelKey: "archive.kinds.reclamationAlgorithm",
+    index: "A4",
   },
   others: {
-    type: "others",
-    labelKey: "story.sections.others",
-    index: "07",
+    labelKey: "archive.kinds.others",
+    index: "A5",
   },
 } as const;
-
-export type StorySection = keyof typeof storySections;
 
 export function isLocale(value: string | undefined): value is Locale {
   return value === "CN" || value === "EN" || value === "JP" || value === "KR" || value === "TW";
@@ -73,32 +58,41 @@ export function localeLanguageTag(locale: Locale): string {
   }[locale];
 }
 
-export function isStorySection(value: string | undefined): value is StorySection {
-  return value !== undefined && Object.hasOwn(storySections, value);
+export function isArchiveKind(value: string | undefined): value is ArchiveKind {
+  return value !== undefined && Object.hasOwn(archiveKinds, value);
 }
 
-export function requiredSection(value: string | undefined): StorySection {
-  if (!isStorySection(value)) throw new ApiError(i18n.t("errors.missingSection"), 404);
+export function requiredArchiveKind(value: string | undefined): ArchiveKind {
+  if (!isArchiveKind(value)) throw new ApiError(i18n.t("errors.missingArchiveKind"), 404);
   return value;
 }
 
-export function sectionForType(type: StoryGroupType): StorySection {
-  const match = Object.entries(storySections).find(([, section]) => section.type === type);
-  return match?.[0] as StorySection;
+export function archiveKindLabel(kind: ArchiveKind, t: TFunction): string {
+  return t(archiveKinds[kind].labelKey);
 }
 
-export function storySectionLabel(section: StorySection, t: TFunction): string {
-  return t(storySections[section].labelKey);
-}
-
-export function useStorySections() {
+export function useArchiveKinds() {
   const { t } = useUi();
   return Object.fromEntries(
-    Object.entries(storySections).map(([slug, section]) => [
-      slug,
-      { ...section, title: t(section.labelKey) },
+    Object.entries(archiveKinds).map(([kind, details]) => [
+      kind,
+      { ...details, title: t(details.labelKey) },
     ]),
-  ) as Record<StorySection, (typeof storySections)[StorySection] & { title: string }>;
+  ) as Record<ArchiveKind, (typeof archiveKinds)[ArchiveKind] & { title: string }>;
+}
+
+export function storyParentPath(locale: Locale, parent: StoryParent): string {
+  return parent.kind === "score"
+    ? `/${locale}/scores/${encodeURIComponent(parent.movementID)}/${encodeURIComponent(parent.sectionID)}`
+    : `/${locale}/archives/${parent.archiveKind}/${encodeURIComponent(parent.groupID)}`;
+}
+
+export function storyPath(locale: Locale, parent: StoryParent, storyID: string): string {
+  return `${storyParentPath(locale, parent)}/${encodeURIComponent(storyID)}`;
+}
+
+export function isPathAtOrBelow(pathname: string, parentPath: string): boolean {
+  return pathname === parentPath || pathname.startsWith(`${parentPath}/`);
 }
 
 const categoryKeys = {
@@ -183,7 +177,13 @@ export function beginNavigation(callback: () => void, kind: NavigationKind = "la
   });
 }
 
-export function PageTransition({ children }: { children: ReactNode }) {
+export function PageTransition({
+  children,
+  className,
+}: {
+  children: ReactNode;
+  className?: string;
+}) {
   return (
     <ViewTransition
       default="none"
@@ -200,8 +200,10 @@ export function PageTransition({ children }: { children: ReactNode }) {
         default: "slide-down",
       }}
     >
-      <div className="mx-auto w-full max-w-[90rem] px-[clamp(1.25rem,4vw,4rem)] pt-[clamp(2rem,5vw,5rem)] pb-[clamp(4rem,8vw,8rem)]">
-        {children}
+      <div className={cn("min-h-full", className)}>
+        <div className="@container/page mx-auto w-full max-w-[90rem] px-[clamp(1.25rem,4vw,4rem)] pt-[clamp(2rem,5vw,5rem)] pb-[clamp(4rem,8vw,8rem)]">
+          {children}
+        </div>
       </div>
     </ViewTransition>
   );

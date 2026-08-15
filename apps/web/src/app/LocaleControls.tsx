@@ -1,7 +1,7 @@
+import { useEffect, useTransition } from "react";
 import { useLocation, useNavigate } from "react-router";
-import { localeNames, type Locale } from "../api";
+import { localeNames, type Locale } from "../api/types";
 import { useUi, useUiLanguage, type UiLanguage } from "../i18n";
-import { beginNavigation } from "../navigation";
 
 const controlClass =
   "min-h-11 min-w-40 border-2 border-ink bg-surface px-3 py-2 font-bold text-ink focus-visible:outline-3 focus-visible:outline-offset-2 focus-visible:outline-ink";
@@ -11,6 +11,15 @@ export function LocaleControls({ locale }: { locale: Locale }) {
   const { language, languages, changeLanguage } = useUiLanguage();
   const location = useLocation();
   const navigate = useNavigate();
+  const [isLocalePending, startLocaleTransition] = useTransition();
+
+  useEffect(() => {
+    if (!isLocalePending) return;
+    document.documentElement.dataset.navigationPending = "true";
+    return () => {
+      delete document.documentElement.dataset.navigationPending;
+    };
+  }, [isLocalePending]);
 
   function changeLocale(nextLocale: Locale) {
     try {
@@ -20,15 +29,24 @@ export function LocaleControls({ locale }: { locale: Locale }) {
     }
     const parts = location.pathname.split("/");
     parts[1] = nextLocale;
-    beginNavigation(() => void navigate(`${parts.join("/")}${location.search}`), "lateral");
+    startLocaleTransition(() => {
+      void navigate(`${parts.join("/")}${location.search}`);
+    });
   }
 
   return (
-    <div className="grid w-full gap-3 sm:grid-cols-2 min-[74rem]:flex min-[74rem]:w-auto">
+    <div
+      aria-busy={isLocalePending || undefined}
+      className="grid w-full gap-3 sm:grid-cols-2 min-[74rem]:flex min-[74rem]:w-auto"
+    >
+      <span aria-live="polite" className="sr-only">
+        {isLocalePending ? t("loading.message") : ""}
+      </span>
       <label className="grid gap-1 text-[0.68rem] font-extrabold tracking-wider uppercase min-[74rem]:grid-cols-[auto_minmax(10rem,1fr)] min-[74rem]:items-center">
         <span>{t("utility.archiveLocale")}</span>
         <select
           className={controlClass}
+          disabled={isLocalePending}
           name="archive-locale"
           onChange={(event) => changeLocale(event.currentTarget.value as Locale)}
           value={locale}
@@ -45,6 +63,7 @@ export function LocaleControls({ locale }: { locale: Locale }) {
         <span>{t("utility.uiLanguage")}</span>
         <select
           className={controlClass}
+          disabled={isLocalePending}
           name="ui-language"
           onChange={(event) => void changeLanguage(event.currentTarget.value as UiLanguage)}
           value={language}

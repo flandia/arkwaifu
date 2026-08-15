@@ -1,17 +1,23 @@
-import { formatBytes, type ArtDetail, type SourceArt } from "../../api";
+import type { ArtDetail, SourceArt } from "../../api/types";
+import { formatBytes } from "../../api/utils";
 import { useUi, useUiLanguage } from "../../i18n";
-import { Eyebrow } from "../../shared/ui";
+import { Eyebrow } from "../../shared/ui/Typography";
 
 export function SourceLayerCard({
   source,
   composition,
+  index = 0,
 }: {
   source: SourceArt;
   composition: ArtDetail;
+  index?: number;
 }) {
   const { t } = useUi();
   const { language } = useUiLanguage();
-  const role = t(`art.${source.role === "whole_body" ? "wholeBody" : source.role}`);
+  const role =
+    source.kind === "character" && source.role
+      ? t(`art.${source.role === "whole_body" ? "wholeBody" : source.role}`)
+      : t("art.compositePanel", { position: index + 1 });
   return (
     <article className="min-w-0 border-2 border-ink bg-surface [contain-intrinsic-size:auto_28rem] [content-visibility:auto]">
       <a
@@ -38,7 +44,11 @@ export function SourceLayerCard({
         </span>
       </a>
       <div className="p-5">
-        <Eyebrow>{t("art.layer", { role })}</Eyebrow>
+        <Eyebrow>
+          {source.kind === "character"
+            ? t("art.layer", { role })
+            : t("art.panelSource", { position: index + 1 })}
+        </Eyebrow>
         <code className="block break-words" translate="no">
           {source.id}
         </code>

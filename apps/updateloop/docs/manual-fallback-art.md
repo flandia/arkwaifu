@@ -60,11 +60,13 @@ Prepare each retained character layer for this key:
 ART/{contributing_res_version}/source/character/{escaped_source_id}.png
 ```
 
-Apply the composition PNG’s create-only rule, `Content-Type`, and `Cache-Control` policy to every source object. Record each source’s identifier, character identifier, role, sprite variant, object key, byte size, width, and height in `source_arts`.
+Apply the composition PNG's create-only rule, `Content-Type`, and `Cache-Control` policy to every source object. Record each source under `(category, source_art_id)` with `kind = 'character'`, plus its character identifier, role, sprite variant, object key, byte size, width, and height.
 
-For a character composition, replace its `art_source_refs` rows in composition order. Use `category = 'character'`, the composition `art_id`, a zero-based `position`, and each stable source identifier.
+For a character composition, replace its `art_source_refs` rows in composition order. Use `category = 'character'`, the composition `art_id`, a zero-based `position`, `source_category = 'character'`, and each stable source identifier.
 
 A final composition remains usable without source rows when the original layers are unavailable.
+
+Gallery composite panels use the same tables but keep the final art category, set `kind = 'composite_panel'`, and leave character metadata null. Their source-reference order must match the vertical top-to-bottom or horizontal left-to-right recipe. Do not use `/` in a panel identifier; the final composite identity joins ordered panel identifiers with `/` before object-key escaping.
 
 ## Adapt Android portrait fallbacks
 

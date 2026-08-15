@@ -9,35 +9,55 @@ import {
   useNavigationType,
   useParams,
 } from "react-router";
-import { ApiError, clearApiCache, type Locale } from "./api";
+import { ApiError, clearApiCache } from "./api/client";
+import type { Locale } from "./api/types";
 import { AppShell } from "./app/AppShell";
 import { useUi } from "./i18n";
 import { isLocale, LoadingPage } from "./navigation";
 import { ArchivePage } from "./shared/Page";
-import { ActionButton, ActionLink, Eyebrow } from "./shared/ui";
+import { ActionButton, ActionLink } from "./shared/ui/Action";
+import { Eyebrow } from "./shared/ui/Typography";
 
 const AboutPage = lazy(async () => ({ default: (await import("./features/about")).AboutPage }));
 const ArtDetailPage = lazy(async () => ({
   default: (await import("./features/artwork/ArtDetailPage")).ArtDetailPage,
 }));
-const GalleriesPage = lazy(async () => ({
-  default: (await import("./features/galleries")).GalleriesPage,
+const ArchiveGroupPage = lazy(async () => ({
+  default: (await import("./features/archives/ArchiveGroupPage")).ArchiveGroupPage,
+}));
+const ArchiveGroupsPage = lazy(async () => ({
+  default: (await import("./features/archives/ArchiveGroupsPage")).ArchiveGroupsPage,
+}));
+const ArchiveIndexPage = lazy(async () => ({
+  default: (await import("./features/archives/ArchiveIndexPage")).ArchiveIndexPage,
+}));
+const ArchiveStoryPage = lazy(async () => ({
+  default: (await import("./features/archives/ArchiveStoryPage")).ArchiveStoryPage,
 }));
 const GalleryDetailPage = lazy(async () => ({
-  default: (await import("./features/galleries")).GalleryDetailPage,
+  default: (await import("./features/galleries/GalleryDetailPage")).GalleryDetailPage,
+}));
+const GalleryDisplayPage = lazy(async () => ({
+  default: (await import("./features/galleries/GalleryDisplayPage")).GalleryDisplayPage,
+}));
+const GalleryIndexPage = lazy(async () => ({
+  default: (await import("./features/galleries/GalleryIndexPage")).GalleryIndexPage,
 }));
 const HomePage = lazy(async () => ({ default: (await import("./features/home")).HomePage }));
 const NotFoundPage = lazy(async () => ({
   default: (await import("./features/not-found")).NotFoundPage,
 }));
-const StoryDetailPage = lazy(async () => ({
-  default: (await import("./features/stories/StoryDetailPage")).StoryDetailPage,
+const MovementPage = lazy(async () => ({
+  default: (await import("./features/scores/MovementPage")).MovementPage,
 }));
-const StoryGroupPage = lazy(async () => ({
-  default: (await import("./features/stories/StoryGroupPage")).StoryGroupPage,
+const ScoreIndexPage = lazy(async () => ({
+  default: (await import("./features/scores/ScoreIndexPage")).ScoreIndexPage,
 }));
-const StoryIndexPage = lazy(async () => ({
-  default: (await import("./features/stories/StoryIndexPage")).StoryIndexPage,
+const ScoreSectionPage = lazy(async () => ({
+  default: (await import("./features/scores/ScoreSectionPage")).ScoreSectionPage,
+}));
+const ScoreStoryPage = lazy(async () => ({
+  default: (await import("./features/scores/ScoreStoryPage")).ScoreStoryPage,
 }));
 const UnreferencedArtPage = lazy(async () => ({
   default: (await import("./features/artwork/UnreferencedArtPage")).UnreferencedArtPage,
@@ -159,11 +179,21 @@ export default function App() {
       <Route element={<Navigate replace to={`/${preferredLocale()}`} />} path="/" />
       <Route element={<LocalizedLayout />} path="/:locale">
         <Route element={<HomePage />} index />
-        <Route element={<StoryIndexPage />} path="stories/:section" />
-        <Route element={<StoryGroupPage />} path="stories/:section/:groupID" />
-        <Route element={<StoryDetailPage />} path="stories/:section/:groupID/:storyID" />
-        <Route element={<GalleriesPage />} path="galleries" />
+        <Route element={<ScoreIndexPage />} path="scores" />
+        <Route element={<MovementPage />} path="scores/:movementID" />
+        <Route element={<ScoreSectionPage />} path="scores/:movementID/:sectionID" />
+        <Route element={<ScoreStoryPage />} path="scores/:movementID/:sectionID/:storyID" />
+        <Route element={<ArchiveIndexPage />} path="archives" />
+        <Route element={<ArchiveGroupsPage />} path="archives/:kind" />
+        <Route element={<ArchiveGroupPage />} path="archives/:kind/:groupID" />
+        <Route element={<ArchiveStoryPage />} path="archives/:kind/:groupID/:storyID" />
+        <Route element={<GalleryIndexPage />} path="galleries" />
         <Route element={<GalleryDetailPage />} path="galleries/:galleryID" />
+        <Route
+          element={<GalleryDisplayPage />}
+          path="galleries/:galleryID/displays/:displayID/:cgID"
+        />
+        <Route element={<GalleryDisplayPage />} path="galleries/:galleryID/displays/:displayID" />
         <Route element={<UnreferencedArtPage />} path="unreferenced" />
         <Route element={<ArtDetailPage />} path="art/:category/:artID" />
         <Route element={<AboutPage />} path="about" />

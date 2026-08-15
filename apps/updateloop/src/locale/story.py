@@ -6,12 +6,20 @@ import json
 import logging
 import re
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path, PurePosixPath
 from typing import Any
 
-from ..domain import StoryArtReference, StoryGroupRecord, StoryRecord, StoryTag
+from ..domain import (
+    ArchiveGroup,
+    Movement,
+    MovementSection,
+    StoryArtReference,
+    StoryRecord,
+    StoryTag,
+)
 from ..local_path import resolve_local_path, safe_relative_path
+from .score import parse_score
 
 _DATA_ROOT = Path("assets/torappu/dynamicassets/gamedata")
 _INCOMPLETE_UPSTREAM_LOGGER = logging.getLogger("arkwaifu_updateloop.incomplete_upstream")
@@ -56,8 +64,19 @@ class Directive:
     params: dict[str, str]
 
 
-def parse_story_groups(root: Path) -> tuple[StoryGroupRecord, ...]:
-    """Parse every story script into its semantic or fallback directory group."""
+@dataclass(frozen=True, slots=True)
+class _ParsedGroup:
+    id: str
+    name: str
+    group_type: str
+    stories: tuple[StoryRecord, ...]
+
+
+def parse_story_data(
+    root: Path,
+) -> tuple[tuple[Movement, ...], tuple[MovementSection, ...], tuple[ArchiveGroup, ...]]:
+    """Parse the complete Score hierarchy and the remaining Archive groups."""
+
     table = _read_json(root / _DATA_ROOT / "excel/story_review_table.json")
     metadata = _picture_metadata(root)
     variables = _story_variables(root)
@@ -101,7 +120,7 @@ def parse_story_groups(root: Path) -> tuple[StoryGroupRecord, ...]:
                 )
             )
         groups.append(
-            StoryGroupRecord(
+            _ParsedGroup(
                 id=group_id,
                 name=_text(_at(raw_group, "name")),
                 group_type=group_type,
@@ -111,7 +130,73 @@ def parse_story_groups(root: Path) -> tuple[StoryGroupRecord, ...]:
     groups.extend(_integrated_strategies_groups(root, metadata, variables, claimed_paths))
     groups.extend(_reclamation_groups(root, metadata, variables, claimed_paths))
     groups.extend(_other_story_groups(root, metadata, variables, claimed_paths))
-    return tuple(groups)
+
+    review_names = {
+        group.id: group.name for group in groups if group.group_type in _GROUP_TYPES.values()
+    }
+    movements, sections = parse_score(root, review_names)
+    review_groups = {group.id: group for group in groups}
+    claimed_groups: set[str] = set()
+    populated_sections = []
+    for section in sections:
+        group = review_groups.get(section.review_group_id or "")
+        if group is None:
+            populated_sections.append(section)
+            continue
+        if group.id in claimed_groups:
+            raise ValueError(f"review group is claimed by multiple Movement Sections: {group.id}")
+        claimed_groups.add(group.id)
+        populated_sections.append(
+            replace(
+                section,
+                name=group.name,
+                stories=tuple(
+                    replace(story, collection_id=section.collection_id) for story in group.stories
+                ),
+            )
+        )
+
+    archives = []
+    for group in groups:
+        if group.id in claimed_groups:
+            continue
+        if group.group_type == "main_story":
+            raise ValueError(
+                f"main-story review group is not owned by a Movement Section: {group.id}"
+            )
+        archive_kind, story_type = _archive_type(group.group_type)
+        archives.append(
+            ArchiveGroup(
+                id=group.id,
+                collection_id=f"archive_group:{group.id}",
+                position=len(archives),
+                name=group.name,
+                archive_kind=archive_kind,
+                story_type=story_type,
+                stories=tuple(
+                    replace(story, collection_id=f"archive_group:{group.id}")
+                    for story in group.stories
+                ),
+            )
+        )
+    return movements, tuple(populated_sections), tuple(archives)
+
+
+def _archive_type(group_type: str) -> tuple[str, str | None]:
+    if group_type == "major_event":
+        return "events", "side_story"
+    if group_type == "minor_event":
+        return "events", "vignette"
+    if group_type in {
+        "operator_record",
+        "integrated_strategies",
+        "reclamation_algorithm",
+        "others",
+    }:
+        return group_type, None
+    if group_type == "main_story":
+        raise ValueError("main-story review groups cannot be archived")
+    return "others", None
 
 
 def _integrated_strategies_groups(
@@ -119,7 +204,7 @@ def _integrated_strategies_groups(
     metadata: dict[str, tuple[str, str]],
     variables: Mapping[str, str],
     claimed_paths: set[str],
-) -> tuple[StoryGroupRecord, ...]:
+) -> tuple[_ParsedGroup, ...]:
     """Build one group per 集成战略 theme from its official ending catalog."""
 
     table = _read_json(root / _DATA_ROOT / "excel/roguelike_topic_table.json")
@@ -185,7 +270,7 @@ def _integrated_strategies_groups(
                 )
         if stories:
             groups.append(
-                StoryGroupRecord(
+                _ParsedGroup(
                     id=group_id,
                     name=_text(_at(raw_topic, "name")) or topic_id,
                     group_type="integrated_strategies",
@@ -247,7 +332,7 @@ def _reclamation_groups(
     metadata: dict[str, tuple[str, str]],
     variables: Mapping[str, str],
     claimed_paths: set[str],
-) -> tuple[StoryGroupRecord, ...]:
+) -> tuple[_ParsedGroup, ...]:
     """Build one 生息演算 group per topic and leave its guides to ``others``."""
 
     table = _read_json(root / _DATA_ROOT / "excel/sandbox_perm_table.json")
@@ -303,7 +388,7 @@ def _reclamation_groups(
                 stories.append(story)
         if stories:
             groups.append(
-                StoryGroupRecord(
+                _ParsedGroup(
                     id=group_id,
                     name=_text(_at(raw_topic, "topicName")) or topic_id,
                     group_type="reclamation_algorithm",
@@ -334,7 +419,7 @@ def _other_story_groups(
     metadata: dict[str, tuple[str, str]],
     variables: Mapping[str, str],
     claimed_paths: set[str],
-) -> tuple[StoryGroupRecord, ...]:
+) -> tuple[_ParsedGroup, ...]:
     """Expose every remaining story script, grouped only by its source directory."""
 
     story_root = root / _DATA_ROOT / "story"
@@ -371,7 +456,7 @@ def _other_story_groups(
             for path, story_path in paths
         )
         groups.append(
-            StoryGroupRecord(
+            _ParsedGroup(
                 id=group_id,
                 name=directory,
                 group_type="others",
@@ -406,7 +491,7 @@ def _story_record(
         directives = ()
     return StoryRecord(
         id=id,
-        group_id=group_id,
+        collection_id=group_id,
         tag=tag,
         tag_text=tag_text,
         code=code,

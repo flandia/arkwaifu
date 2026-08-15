@@ -1,173 +1,279 @@
 # Use the Arkwaifu HTTP API
 
-The Arkwaifu Hypertext Transfer Protocol (HTTP) application programming interface (API) exposes read-only JavaScript Object Notation (JSON) metadata and the public text sitemap. It covers composed artwork, source layers, localized stories, and galleries. This reference defines every route, response shape, ordering guarantee, error, cross-origin policy, and direct object Uniform Resource Locator (URL).
+The service exposes read-only JSON metadata for composed artwork, Scores,
+Archives, and galleries. `CN`, `EN`, `JP`, `KR`, and `TW` are the supported
+locales; locale path parameters are case-insensitive. Percent-encode every
+identifier used as one path segment. In particular, a composite artwork ID may
+contain `/` and must be sent as `%2F`.
 
-## Send API requests
+All routes accept `GET`. `OPTIONS` returns HTTP 204. Responses include public
+cross-origin resource sharing headers. A missing record, invalid locale, or
+invalid Archive kind returns HTTP 404 with `{"error":"not_found"}`. A database
+or metadata failure returns HTTP 503 with
+`{"error":"service_unavailable"}`.
 
-All routes accept `GET`. Every response includes public cross-origin resource sharing (CORS) headers:
+## Routes
 
-- `Access-Control-Allow-Origin: *`
-- `Access-Control-Allow-Methods: GET, OPTIONS`
-- `Access-Control-Allow-Headers: Accept, Content-Type`
-- `Access-Control-Max-Age: 86400`
-
-An `OPTIONS` request returns HTTP 204 without a body before path routing. Successful and application-error JSON responses use `application/json`; the sitemap uses UTF-8 `text/plain`. Missing resources and unsupported locales return HTTP 404 with `{"error":"not_found"}`. Database failures return HTTP 503 with `{"error":"service_unavailable"}` and do not expose local paths or connection details.
-
-An unmatched path or unsupported method returns the Dream router’s HTTP 404 response. Clients should not depend on a JSON body for that router-level response.
-
-Localized routes accept `CN`, `EN`, `JP`, `KR`, and `TW`. Locale values are case-insensitive. An unsupported locale returns HTTP 404.
-
-Routes use these path parameters:
-
-| Parameter | Meaning |
+| Route | Result |
 | --- | --- |
-| `:locale` | One supported archive locale |
-| `:category` | Exact artwork category: `image`, `background`, `item`, or `character` |
-| `:id` | Exact, case-sensitive lowercase logical identifier for the artwork, source layer, story group, story, or gallery selected by the route |
+| `GET /health` | `{"status":"ok"}` |
+| `GET /sitemap.txt` | UTF-8 text sitemap |
+| `GET /api/arts/:category/:id` | Composed artwork |
+| `GET /api/source-arts/:category/:id` | Category-qualified source artwork |
+| `GET /api/unreferenced-arts` | Unreferenced artwork array |
+| `GET /api/:locale/arts/:category/:id/context` | Localized artwork context |
+| `GET /api/:locale/scores` | Movement summaries |
+| `GET /api/:locale/scores/:movementID` | Movement and ordered items |
+| `GET /api/:locale/scores/:movementID/:sectionID` | Movement Section detail |
+| `GET /api/:locale/scores/:movementID/:sectionID/:storyID` | Score Story detail |
+| `GET /api/:locale/archives` | Archive kind counts |
+| `GET /api/:locale/archives/:kind` | Archive Group summaries |
+| `GET /api/:locale/archives/:kind/:groupID` | Archive Group detail |
+| `GET /api/:locale/archives/:kind/:groupID/:storyID` | Archive Story detail |
+| `GET /api/:locale/galleries` | Gallery summaries across the hierarchy |
+| `GET /api/:locale/galleries/:id` | Gallery display hierarchy |
 
-Percent-encode reserved characters in path parameters. Collection routes return HTTP 200 with `[]` when a supported locale has no matching rows.
+Archive `:kind` is one of `events`, `operator-record`,
+`integrated-strategies`, `reclamation-algorithm`, or `others`. There are no
+legacy story-group or shallow Movement/Section/Group endpoints.
 
-## Read health status
+## Common metadata
 
-`GET /health` checks the current SQLite generation. A healthy reader returns HTTP 200:
+Image metadata is:
 
 ```json
-{"status":"ok"}
+{"byteSize":123,"width":800,"height":600,"contentUrl":"https://…"}
 ```
 
-A failed SQLite check returns the standard HTTP 503 error body.
-
-## Read the sitemap
-
-`GET /sitemap.txt` renders a text sitemap from the current SQLite generation.
-It contains absolute canonical `https://arkwaifu.cc` URLs for the five locale
-homes, all story-section indexes and story groups, all gallery indexes and
-galleries, and the canonical CN About and Unreferenced Artwork pages. Database
-refreshes are reflected on the next request; no static web rebuild is needed.
-
-## Read artwork
-
-Artwork routes identify a composition by its exact `category` and `id`. Categories include `image`, `background`, `item`, and `character`.
-
-| Route | HTTP 200 result |
-| --- | --- |
-| `GET /api/arts/:category/:id` | Composed artwork |
-| `GET /api/source-arts/:id` | Source artwork |
-| `GET /api/unreferenced-arts` | Unreferenced artwork array |
-| `GET /api/:locale/arts/:category/:id/context` | Artwork context |
-
-The composed-art response includes `id`, `category`, `thumbnailContentUrl`, `image`, and `sourceArtIDs`. Source artwork identifiers follow composition order. The `image` object includes `byteSize`, `width`, `height`, and `contentUrl`. Sizes use bytes, and dimensions use pixels.
-
-The global unreferenced-art list contains compact objects with `id`, `category`, and `thumbnailContentUrl`. It orders rows by `image`, `background`, `item`, and `character`, then by artwork ID. An archive without unreferenced artwork returns HTTP 200 and `[]`.
-
-The context response contains `names`, `siblings`, and `occurrences`. Names preserve first-occurrence order without duplicates. Character siblings share the exact identifier prefix before `#` and are ordered by artwork ID. Each sibling’s names preserve their first occurrence without duplicates. Other categories return an empty sibling list. Occurrences follow stored group and story positions and contain unique stories.
-
-Direct object URLs normally use the service's configured public object origin.
-The China API mirror may return the same immutable object keys below
-`https://assets.cn.arkwaifu.cc` instead; clients must treat the returned URL as
-authoritative rather than reconstructing an object hostname.
-
-## Interpret response fields
-
-Every object uses the fields and nullability in this table. Fields not marked nullable are always present with the listed JSON type.
-
-| Object | Fields |
-| --- | --- |
-| Image metadata | `byteSize: number` in bytes, `width: number` in pixels, `height: number` in pixels, `contentUrl: string` |
-| Composed artwork | `id: string`, `category: string`, `thumbnailContentUrl: string`, `image: Image metadata`, `sourceArtIDs: string[]` |
-| Source artwork | `id: string`, `characterID: string`, `role: "body" \| "face" \| "whole_body"`, `variant: string`, `image: Image metadata` |
-| Unreferenced artwork | `id: string`, `category: string`, `thumbnailContentUrl: string` |
-| Artwork reference | `artID: string`, `kind: "picture" \| "character"`, `category: string`, `title: string \| null`, `subtitle: string \| null`, `names: string[]`, `thumbnailContentUrl: string \| null` |
-| Artwork sibling | `artID: string`, `names: string[]`, `thumbnailContentUrl: string` |
-| Artwork occurrence | `groupID: string`, `groupName: string`, `groupType: string`, `storyID: string`, `storyName: string`, `storyCode: string`, `storyTagText: string` |
-| Artwork context | `names: string[]`, `siblings: Artwork sibling[]`, `occurrences: Artwork occurrence[]` |
-| Story metadata | `id: string`, `groupID: string`, `tag: "before" \| "after" \| "interlude"`, `tagText: string`, `code: string`, `name: string`, `info: string` |
-| Story summary | All Story metadata fields, `artReferences: []`, `representativeArtReference: Artwork reference \| null`, `previewArtReferences: Artwork reference[]` |
-| Story detail | All Story metadata fields, `artReferences: Artwork reference[]` |
-| Story-group summary | `id: string`, `name: string`, `type: string`, `representativeArtReference: Artwork reference \| null`, `previewArtReferences: Artwork reference[]` |
-| Story-group detail | All Story-group summary fields, `artReferences: Artwork reference[]` |
-| Gallery summary | `id: string`, `name: string`, `description: string`, `previewThumbnailContentUrls: string[]` |
-| Gallery entry | `id: string`, `position: number`, `name: string`, `description: string`, `artID: string`, `category: string`, `thumbnailContentUrl: string \| null` |
-| Gallery detail | `id: string`, `name: string`, `description: string`, `entries: Gallery entry[]` |
-
-`title`, `subtitle`, and `thumbnailContentUrl` remain present when their value is null. A null thumbnail means the logical story reference or gallery entry has no matching composed artwork. Only `representativeArtReference` becomes null because its preview list is empty. Artwork-reference `names` preserve source order.
-
-## Read story groups
-
-Story-group routes return localized groups in stored position order. Each group has `id`, `name`, and a schema-defined `type`:
-
-- `main_story`
-- `major_event`
-- `minor_event`
-- `operator_record`
-- `integrated_strategies`
-- `reclamation_algorithm`
-- `others`
-
-`integrated_strategies` groups official Integrated Strategies ending stories by topic. `reclamation_algorithm` includes only Reclamation Algorithm stories with artwork references.
-
-`others` groups the remaining eligible non-`[uc]` scripts by source directory. It includes tutorial and control scripts, and the singular `other` is not valid.
-
-The story-group routes are:
-
-| Route | HTTP 200 result |
-| --- | --- |
-| `GET /api/:locale/story-groups` | Story-group summary array |
-| `GET /api/:locale/story-groups/:id` | Story-group detail |
-| `GET /api/:locale/story-groups/:id/stories` | Story summary array |
-| `GET /api/:locale/stories/:id` | Story detail |
-
-An existing group without stories returns HTTP 200 and `[]` from its story-list route. Its detail route returns HTTP 200 with `representativeArtReference: null`, `previewArtReferences: []`, and `artReferences: []`. A missing group returns HTTP 404 from both routes.
-
-Story summaries include `id`, `groupID`, `tag`, `tagText`, `code`, `name`, `info`, `artReferences`, `representativeArtReference`, and `previewArtReferences`. `artReferences` is always an empty list in summaries for compatibility. Story detail includes the complete `artReferences` list in stored source-reference position and omits preview fields.
-
-## Use preview references
-
-Story-group and story summaries include up to three stable card backgrounds in `previewArtReferences`. Each artwork reference has this shape:
+Video metadata adds `frameRate` and `frameCount`:
 
 ```json
 {
-  "artID": "avg_1",
-  "kind": "picture",
-  "category": "image",
-  "title": null,
-  "subtitle": null,
-  "names": [],
-  "thumbnailContentUrl": "https://objects.example/arkwaifu/ART/v1/thumbnail/image/avg_1.webp"
+  "byteSize":12345,
+  "width":1920,
+  "height":1080,
+  "frameRate":29.97002997002997,
+  "frameCount":900,
+  "contentUrl":"https://…"
 }
 ```
 
-Previews include only references that resolve against composed artwork. If a summary has an available `image`, the list contains only illustrations; otherwise it uses available `background` references. The service ranks artwork used by fewer distinct groups or stories first, then applies a stable ID-seeded shuffle for ties.
+A declared Score image reference is either `null`, when the locale metadata has
+no identifier, or `{"id":"…","image":ImageMetadata|null}`. Video references
+use `{"id":"…","video":VideoMetadata|null}`. The nested null distinguishes a
+declared upstream identifier whose object has not yet been published from an
+identifier that was never declared.
 
-`representativeArtReference` is the first preview for compatibility. It is `null` when `previewArtReferences` is empty.
+Artwork references have this shape:
 
-Group-detail `artReferences` preserves stored story and reference order and deduplicates by `category` plus `artID`. It includes only available artwork. Story-detail references remain present when unavailable, with `thumbnailContentUrl: null`.
+```json
+{
+  "artID":"…",
+  "kind":"picture",
+  "category":"image",
+  "title":null,
+  "subtitle":null,
+  "names":[],
+  "thumbnailContentUrl":"https://…"
+}
+```
 
-## Read galleries
+`thumbnailContentUrl` is null when the logical reference has no corresponding
+composition. Preview lists use available `image` references when present and
+otherwise available `background` references. They preserve source order,
+deduplicate `(category, artID)`, and contain at most three entries.
 
-Gallery routes return localized metadata. They preserve gallery-entry position without adding per-gallery or per-entry queries.
+## Artwork and source artwork
 
-| Route | HTTP 200 result |
-| --- | --- |
-| `GET /api/:locale/galleries` | Gallery summary array ordered by gallery ID |
-| `GET /api/:locale/galleries/:id` | Gallery detail |
+A composed artwork returns:
 
-A gallery summary contains `id`, `name`, `description`, and `previewThumbnailContentUrls`. The preview array contains at most three direct thumbnail URLs. It uses available illustrations when possible and backgrounds only when no illustration is available. Selection orders artwork by a deterministic score seeded by the gallery ID, then by artwork ID, and removes duplicate object keys.
+```json
+{
+  "id":"cg/part",
+  "category":"image",
+  "thumbnailContentUrl":"https://…",
+  "image":{"byteSize":123,"width":800,"height":600,"contentUrl":"https://…"},
+  "sourceArts":[{"category":"image","id":"panel/source"}]
+}
+```
 
-A gallery detail contains `id`, `name`, `description`, and `entries`. Each entry includes `id`, nonnegative stored `position`, `name`, `description`, `artID`, `category`, and `thumbnailContentUrl`. Unavailable entries remain in position with `thumbnailContentUrl: null`.
+Source identities are category-qualified. Source `kind` is `character` or
+`composite_panel`:
 
-## Fetch direct object URLs
+```json
+{
+  "id":"panel/source",
+  "category":"image",
+  "kind":"composite_panel",
+  "characterID":null,
+  "role":null,
+  "variant":null,
+  "image":{"byteSize":50,"width":400,"height":300,"contentUrl":"https://…"}
+}
+```
 
-Metadata responses point directly to public bucket or CDN objects. The service percent-encodes each object-key path segment and removes one trailing slash from the configured base URL.
+Character sources populate `characterID`, `role`, and `variant`; composite
+panels leave all three null. Unreferenced artwork objects contain `id`,
+`category`, and `thumbnailContentUrl`.
 
-Composed and source Portable Network Graphics (PNG) objects use `ART/<resVersion>/<variant>/<category>/<name>.png`, where `variant` is `composition` or `source`. These PNG objects are create-only, so a current database can reference several historical `resVersion` prefixes.
+Artwork context contains `names`, character `siblings`, and `occurrences`.
+Every occurrence carries the same discriminated `parent` described below plus
+`storyID`, `storyName`, `storyCode`, and `storyTagText`.
 
-Thumbnail WebP objects use `ART/<resVersion>/thumbnail/<category>/<name>.webp`. They are mutable, use `Content-Type: image/webp`, and keep the object store’s default cache policy.
+## Parents and Stories
 
-Configure the object store for public reads. Published PNG objects use `Content-Type: image/png` and `Cache-Control: public, max-age=31536000, immutable`.
+Stories and galleries identify their hierarchy owner with one of:
 
-The former image-proxy routes are intentionally absent and return HTTP 404:
+```json
+{
+  "kind":"score",
+  "movementID":"movement-a",
+  "movementName":"为了明日",
+  "sectionID":"section-a",
+  "sectionName":"方舟"
+}
+```
 
-- `/api/arts/:category/:id/content`
-- `/api/arts/:category/:id/thumbnail/content`
-- `/api/source-arts/:id/content`
+```json
+{
+  "kind":"archive",
+  "archiveKind":"events",
+  "groupID":"event-a",
+  "groupName":"孤星"
+}
+```
+
+A Story summary contains `id`, `tag`, `tagText`, `code`, `name`, `info`,
+`representativeArtReference`, and `previewArtReferences`. A Story detail
+replaces the two preview fields with `parent` and the complete ordered
+`artReferences` array. The deep route verifies that the Story belongs to the
+Movement Section or Archive Group in its path.
+
+## Scores
+
+The `/scores` response is an ordered array of Movements:
+
+```json
+{
+  "id":"movement-a",
+  "name":"为了明日",
+  "type":"continue",
+  "position":0,
+  "sectionCount":1,
+  "startTime":1700000000,
+  "icon":{"id":"icon-main","image":null},
+  "logo":null,
+  "background":null,
+  "backgroundVideo":null
+}
+```
+
+Movement `type` is `continue` or `discrete`; `sectionCount` is its number of
+canonical Story Sections. Movement detail adds `items`. The
+service stores the complete upstream placement graph but presents only
+canonical `story_set` sections and `mainline_split` items, ordered by placement
+position:
+
+```json
+[
+  {
+    "kind":"split",
+    "id":"split-a",
+    "position":0,
+    "subName":"序曲",
+    "icon":null,
+    "video":null
+  },
+  {
+    "kind":"section",
+    "position":1,
+    "section":{
+      "id":"section-a",
+      "name":"方舟",
+      "description":"…",
+      "type":"main_theme",
+      "position":1,
+      "sortByYear":0,
+      "sortWithinYear":0,
+      "storyCount":10,
+      "keyVisual":null,
+      "titleImage":null,
+      "background":null,
+      "decoration":null,
+      "retroBackground":null
+    }
+  }
+]
+```
+
+Section `type` is `main_theme`, `side_story`, or `vignette`. Section detail adds
+`activeBackgroundVideo`, `stories`, aggregate `artReferences`, and
+`gallery: GalleryDetail|null`. Its active video is the latest preceding
+`mainline_split` video in the same Movement.
+
+## Archives
+
+The Archive index returns all five kinds, including zero counts:
+
+```json
+[{"kind":"events","groupCount":12}]
+```
+
+An Archive Group summary contains `id`, `name`, route `kind`, semantic `type`,
+`representativeArtReference`, and `previewArtReferences`. Event `type` is
+`side_story` or `vignette`; other values are `operator_record`,
+`integrated_strategies`, `reclamation_algorithm`, or `others`. Group detail adds
+`stories`, aggregate `artReferences`, and `gallery: GalleryDetail|null`.
+
+## Galleries
+
+Gallery summary objects contain `id`, `name`, `description`, discriminated
+`parent`, and `previewThumbnailContentUrls`. Previews select the first artwork
+from each distinct display in display order, skip unresolved compositions, and
+stop after three displays. A later sibling in the same display is never used as
+another summary preview.
+
+Gallery detail owns the complete sibling hierarchy:
+
+```json
+{
+  "id":"score-gallery",
+  "name":"方舟画集",
+  "description":"…",
+  "parent":{"kind":"score","movementID":"…","movementName":"…","sectionID":"…","sectionName":"…"},
+  "displays":[
+    {
+      "id":"display-one",
+      "position":0,
+      "name":"牺牲火炬",
+      "description":"…",
+      "relatedStoryID":"score-story",
+      "relatedStageID":"0-1",
+      "artworks":[
+        {
+          "position":0,
+          "cgID":"upstream-first",
+          "artID":"display-first",
+          "category":"image",
+          "thumbnailContentUrl":"https://…"
+        }
+      ]
+    }
+  ]
+}
+```
+
+`cgID` is the upstream gallery member identifier. `artID` is the stable
+composition identifier and may contain `/`. An unresolved member remains in
+the display with a null thumbnail URL. There is no gallery-display endpoint;
+clients select a display from this deep response.
+
+## Sitemap and object URLs
+
+`GET /sitemap.txt` contains canonical `https://arkwaifu.cc` locale, Score,
+Archive, and gallery URLs. It contains no legacy `/stories` URLs. A successful
+database refresh affects the next sitemap request.
+
+Returned object URLs use the configured public origin. When the optional China
+origin is configured, an exact `X-Forwarded-Host: api.cn.arkwaifu.cc` selects
+that origin. Clients should use returned URLs rather than rebuilding them.

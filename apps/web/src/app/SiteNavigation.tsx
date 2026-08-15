@@ -1,8 +1,12 @@
+import { Suspense, use, type ReactNode } from "react";
+import { ErrorBoundary } from "react-error-boundary";
 import { useLocation } from "react-router";
-import type { Locale } from "../api";
+import { getMovements } from "../api/scores";
+import type { Locale, ScoreImage } from "../api/types";
 import { useUi } from "../i18n";
-import { TransitionLink, useStorySections } from "../navigation";
-import { Eyebrow } from "../shared/ui";
+import { archiveKinds, isPathAtOrBelow, TransitionLink, useArchiveKinds } from "../navigation";
+import { Eyebrow } from "../shared/ui/Typography";
+import { ScoreArchiveMark } from "../features/hierarchy/ScoreVisual";
 
 const logoUrl = "/arkwaifu_phantom@0.25x.png";
 const repositoryUrl = "https://github.com/flandia/arkwaifu";
@@ -10,13 +14,17 @@ const repositoryUrl = "https://github.com/flandia/arkwaifu";
 function NavItem({
   active,
   index,
+  icon,
   label,
+  mark,
   onNavigate,
   to,
 }: {
   active: boolean;
   index: string;
+  icon?: ScoreImage | null;
   label: string;
+  mark?: ReactNode;
   onNavigate?: () => void;
   to: string;
 }) {
@@ -24,16 +32,61 @@ function NavItem({
     <li>
       <TransitionLink
         aria-current={active ? "page" : undefined}
-        className="grid min-h-12 grid-cols-[2.25rem_minmax(0,1fr)] items-center border-l-4 border-transparent px-4 py-2 text-sm text-white/80 no-underline transition-[background-color,border-color,color] hover:border-white/40 hover:bg-white/10 hover:text-white aria-[current=page]:border-signal aria-[current=page]:bg-brand aria-[current=page]:text-white"
+        className="grid min-h-12 grid-cols-[2.25rem_minmax(0,1fr)] items-center border-l-4 border-transparent bg-ink px-4 py-2 text-sm text-white/80 no-underline transition-[background-color,border-color,color] hover:border-white/40 hover:bg-white/10 hover:text-white aria-[current=page]:border-signal aria-[current=page]:bg-brand aria-[current=page]:text-white"
         onClick={onNavigate}
         to={to}
       >
-        <span className="font-mono text-[0.68rem] tabular-nums opacity-65" aria-hidden="true">
-          {index}
-        </span>
-        <strong className="min-w-0 leading-snug">{label}</strong>
+        {mark ??
+          (icon?.image ? (
+            <img
+              alt=""
+              className="size-7 object-contain"
+              height={icon.image.height}
+              loading="lazy"
+              src={icon.image.contentUrl}
+              width={icon.image.width}
+            />
+          ) : (
+            <span
+              className="font-mono text-[0.68rem] text-white/75 tabular-nums"
+              aria-hidden="true"
+            >
+              {index}
+            </span>
+          ))}
+        <strong className="flex min-h-7 min-w-0 translate-y-[0.06em] items-center leading-none">
+          {label}
+        </strong>
       </TransitionLink>
     </li>
+  );
+}
+
+function MovementNavigation({ locale, onNavigate }: { locale: Locale; onNavigate?: () => void }) {
+  const { pathname } = useLocation();
+  const movements = use(getMovements(locale));
+  return movements.map((movement, index) => {
+    const movementPath = `/${locale}/scores/${encodeURIComponent(movement.id)}`;
+    return (
+      <NavItem
+        active={isPathAtOrBelow(pathname, movementPath)}
+        icon={movement.logo}
+        index={`S${index + 1}`}
+        key={movement.id}
+        label={movement.name}
+        onNavigate={onNavigate}
+        to={movementPath}
+      />
+    );
+  });
+}
+
+function MovementNavigationFallback() {
+  return (
+    <li
+      className="mx-4 my-2 h-10 animate-pulse bg-white/10 motion-reduce:animate-none"
+      aria-hidden="true"
+    />
   );
 }
 
@@ -54,7 +107,7 @@ export function SiteNavigation({
 }) {
   const { pathname } = useLocation();
   const { t } = useUi();
-  const sections = useStorySections();
+  const archives = useArchiveKinds();
 
   return (
     <div className="flex min-h-full flex-col bg-ink text-white">
@@ -87,16 +140,40 @@ export function SiteNavigation({
           />
         </ul>
 
-        <SectionLabel>{t("navigation.stories")}</SectionLabel>
+        <SectionLabel>{t("navigation.scores")}</SectionLabel>
         <ul className="m-0 list-none p-0">
-          {Object.entries(sections).map(([slug, section]) => (
+          <NavItem
+            active={pathname === `/${locale}/scores`}
+            index="S0"
+            label={t("navigation.allScores")}
+            mark={<ScoreArchiveMark className="size-7 text-white" />}
+            onNavigate={onNavigate}
+            to={`/${locale}/scores`}
+          />
+          <ErrorBoundary fallback={null}>
+            <Suspense fallback={<MovementNavigationFallback />}>
+              <MovementNavigation locale={locale} onNavigate={onNavigate} />
+            </Suspense>
+          </ErrorBoundary>
+        </ul>
+
+        <SectionLabel>{t("navigation.archives")}</SectionLabel>
+        <ul className="m-0 list-none p-0">
+          <NavItem
+            active={pathname === `/${locale}/archives`}
+            index="A0"
+            label={t("navigation.allArchives")}
+            onNavigate={onNavigate}
+            to={`/${locale}/archives`}
+          />
+          {(Object.keys(archiveKinds) as Array<keyof typeof archiveKinds>).map((kind) => (
             <NavItem
-              active={pathname.startsWith(`/${locale}/stories/${slug}`)}
-              index={section.index}
-              key={slug}
-              label={section.title}
+              active={pathname.startsWith(`/${locale}/archives/${kind}`)}
+              index={archiveKinds[kind].index}
+              key={kind}
+              label={archives[kind].title}
               onNavigate={onNavigate}
-              to={`/${locale}/stories/${slug}`}
+              to={`/${locale}/archives/${kind}`}
             />
           ))}
         </ul>
@@ -105,14 +182,14 @@ export function SiteNavigation({
         <ul className="m-0 list-none p-0">
           <NavItem
             active={pathname.startsWith(`/${locale}/galleries`)}
-            index="08"
+            index="C1"
             label={t("navigation.galleries")}
             onNavigate={onNavigate}
             to={`/${locale}/galleries`}
           />
           <NavItem
             active={pathname === `/${locale}/unreferenced`}
-            index="09"
+            index="C2"
             label={t("navigation.unreferenced")}
             onNavigate={onNavigate}
             to={`/${locale}/unreferenced`}
@@ -123,7 +200,7 @@ export function SiteNavigation({
         <ul className="m-0 list-none p-0">
           <NavItem
             active={pathname === `/${locale}/about`}
-            index="10"
+            index="I1"
             label={t("navigation.about")}
             onNavigate={onNavigate}
             to={`/${locale}/about`}

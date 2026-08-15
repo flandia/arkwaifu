@@ -9,7 +9,7 @@ import pytest
 from arkwaifu_updateloop.locale import (
     normalize_character_id,
     parse_directives,
-    parse_story_groups,
+    parse_story_data,
 )
 from arkwaifu_updateloop.locale import story as story_module
 
@@ -29,6 +29,17 @@ def _write_story(root: Path, relative: str, value: str) -> None:
 def _write_empty_story_catalogs(root: Path) -> None:
     _write_json(root, "excel/roguelike_topic_table.json", {"topics": {}, "details": {}})
     _write_json(root, "excel/sandbox_perm_table.json", {"basicInfo": {}, "detail": {}})
+    _write_json(root, "excel/stage_table.json", {})
+    _write_json(root, "excel/activity_table.json", {})
+
+
+def _archive_groups(root: Path):
+    excel = root / "assets/torappu/dynamicassets/gamedata/excel"
+    for name in ("stage_table.json", "activity_table.json"):
+        if not (excel / name).exists():
+            _write_json(root, f"excel/{name}", {})
+    _movements, _sections, archives = parse_story_data(root)
+    return archives
 
 
 def test_directive_parameters_keep_quoted_commas():
@@ -83,7 +94,7 @@ def test_story_parser_preserves_order_metadata_and_character_names(tmp_path: Pat
             "group": {
                 "id": "GROUP",
                 "name": "Main",
-                "actType": "MAIN_STORY",
+                "actType": "ACTIVITY_STORY",
                 "infoUnlockDatas": [
                     {
                         "storyId": "STORY_1",
@@ -131,11 +142,19 @@ def test_story_parser_preserves_order_metadata_and_character_names(tmp_path: Pat
         '[showitem(image="ITEM_ONE")] ',
     )
 
-    (group,) = parse_story_groups(tmp_path)
+    (group,) = _archive_groups(tmp_path)
     (story,) = group.stories
 
-    assert (group.id, group.group_type) == ("group", "main_story")
-    assert (story.id, story.group_id, story.tag) == ("story_1", "group", "before")
+    assert (group.id, group.archive_kind, group.story_type) == (
+        "group",
+        "events",
+        "side_story",
+    )
+    assert (story.id, story.collection_id, story.tag) == (
+        "story_1",
+        "archive_group:group",
+        "before",
+    )
     assert story.info == "Story info"
     assert [reference.art_id for reference in story.art_references] == [
         "bg_room",
@@ -183,7 +202,34 @@ def test_story_parser_rejects_unsafe_local_paths(tmp_path: Path, field: str, val
     _write_json(tmp_path, "excel/story_review_meta_table.json", {})
 
     with pytest.raises(ValueError, match=r"unsafe (story|game-data) path"):
-        parse_story_groups(tmp_path)
+        parse_story_data(tmp_path)
+
+
+def test_unclaimed_main_story_review_group_is_an_invariant_failure(tmp_path: Path):
+    _write_empty_story_catalogs(tmp_path)
+    _write_json(
+        tmp_path,
+        "excel/story_review_table.json",
+        {
+            "main_0": {
+                "id": "main_0",
+                "name": "Unclaimed main story",
+                "actType": "MAIN_STORY",
+                "infoUnlockDatas": [
+                    {
+                        "storyId": "main_00-01",
+                        "storyTxt": "main_00-01",
+                        "avgTag": "Before Operation",
+                    }
+                ],
+            }
+        },
+    )
+    _write_json(tmp_path, "excel/story_review_meta_table.json", {})
+    _write_story(tmp_path, "main_00-01.txt", '[name="Amiya"]')
+
+    with pytest.raises(ValueError, match="main-story review group is not owned"):
+        parse_story_data(tmp_path)
 
 
 @pytest.mark.parametrize(
@@ -207,7 +253,7 @@ def test_story_parser_resolves_character_variables(tmp_path: Path):
             "group": {
                 "id": "group",
                 "name": "Tutorial",
-                "actType": "MAIN_STORY",
+                "actType": "ACTIVITY_STORY",
                 "infoUnlockDatas": [
                     {
                         "storyId": "story",
@@ -230,7 +276,7 @@ def test_story_parser_resolves_character_variables(tmp_path: Path):
         '[character(name="$ill_amiya_normal")]\n[name="Amiya"]',
     )
 
-    (group,) = parse_story_groups(tmp_path)
+    (group,) = _archive_groups(tmp_path)
 
     (reference,) = group.stories[0].art_references
     assert reference.art_id == "char_002_amiya_1#1$1"
@@ -260,7 +306,7 @@ def test_missing_optional_info_is_empty(tmp_path: Path):
     _write_json(tmp_path, "excel/story_review_meta_table.json", {})
     _write_story(tmp_path, "story.txt", "")
 
-    (group,) = parse_story_groups(tmp_path)
+    (group,) = _archive_groups(tmp_path)
 
     assert group.stories[0].info == ""
     assert group.stories[0].tag == "after"
@@ -289,7 +335,7 @@ def test_missing_story_text_warns_and_keeps_story(tmp_path: Path, caplog):
     _write_json(tmp_path, "excel/story_review_meta_table.json", {})
 
     with caplog.at_level(logging.WARNING, logger="arkwaifu_updateloop.incomplete_upstream"):
-        (group,) = parse_story_groups(tmp_path)
+        (group,) = _archive_groups(tmp_path)
 
     (story,) = group.stories
     assert story.id == "story"
@@ -519,10 +565,10 @@ def test_story_parser_classifies_records_endings_reclamation_and_others(tmp_path
     )
     _write_story(tmp_path, "misc/free.txt", '[background(image="free")]')
 
-    groups = parse_story_groups(tmp_path)
+    groups = _archive_groups(tmp_path)
     by_type = {
-        group_type: [group for group in groups if group.group_type == group_type]
-        for group_type in {group.group_type for group in groups}
+        archive_kind: [group for group in groups if group.archive_kind == archive_kind]
+        for archive_kind in {group.archive_kind for group in groups}
     }
 
     (record,) = by_type["operator_record"]

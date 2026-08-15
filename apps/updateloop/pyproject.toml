@@ -5,6 +5,7 @@ description = "Update Arkwaifu art and locale data"
 readme = "README.md"
 requires-python = ">=3.14,<3.15"
 dependencies = [
+  "av>=18,<19",
   "boto3>=1.40,<2",
   "httpx>=0.28,<1",
   "lz4>=4.4,<5",

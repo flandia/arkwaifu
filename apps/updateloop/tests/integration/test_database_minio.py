@@ -16,14 +16,15 @@ from arkwaifu_updateloop import (
     UpdateRequest,
 )
 from arkwaifu_updateloop.domain import (
+    ArchiveGroup,
     ArtManifest,
     ArtRecord,
-    Gallery,
-    GalleryEntry,
+    GalleryArtwork,
+    GalleryDisplay,
+    GalleryGroup,
     LocaleManifest,
     PngArtifact,
     StoryArtReference,
-    StoryGroupRecord,
     StoryRecord,
 )
 
@@ -83,28 +84,62 @@ def _art(version: str) -> ArtManifest:
 
 def _locale(version: str) -> LocaleManifest:
     return LocaleManifest(
-        "EN",
-        version,
-        (
-            StoryGroupRecord(
-                "group",
-                "Group",
-                "major_event",
-                (
+        unit="EN",
+        upstream_version=version,
+        movements=(),
+        movement_sections=(),
+        archive_groups=(
+            ArchiveGroup(
+                id="group",
+                collection_id="archive_group:group",
+                position=0,
+                name="Group",
+                archive_kind="events",
+                story_type="side_story",
+                stories=(
                     StoryRecord(
-                        "story",
-                        "group",
-                        "before",
-                        "Before Operation",
-                        "1",
-                        "Story",
-                        "Info",
-                        (StoryArtReference("fixture", "picture", "image"),),
+                        id="story",
+                        collection_id="archive_group:group",
+                        tag="before",
+                        tag_text="Before Operation",
+                        code="1",
+                        name="Story",
+                        info="Info",
+                        art_references=(StoryArtReference("fixture", "picture", "image"),),
                     ),
                 ),
             ),
         ),
-        (Gallery("gallery", "Gallery", "", (GalleryEntry("entry", 0, "", "", "fixture"),)),),
+        galleries=(
+            GalleryGroup(
+                id="gallery",
+                collection_id="archive_group:group",
+                position=0,
+                name="Gallery",
+                description="",
+                location_id=None,
+                displays=(
+                    GalleryDisplay(
+                        id="entry",
+                        position=0,
+                        name="",
+                        description="",
+                        related_story_id="story",
+                        related_stage_id=None,
+                        artworks=(
+                            GalleryArtwork(
+                                position=0,
+                                cg_id="fixture",
+                                art_id="fixture",
+                                category="image",
+                                composite_type="none",
+                                panels=(),
+                            ),
+                        ),
+                    ),
+                ),
+            ),
+        ),
     )
 
 

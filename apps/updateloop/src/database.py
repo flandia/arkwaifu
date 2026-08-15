@@ -1,4 +1,4 @@
-"""Create and update the local SQLite database published by the update loop."""
+"""Create and update the local SQLite archive published by the update loop."""
 
 from __future__ import annotations
 
@@ -78,7 +78,7 @@ def validate_schema_version(path: Path) -> None:
 
 
 def read_versions(path: Path) -> dict[str, str]:
-    """Return the published upstream version recorded for each available dataset."""
+    """Return the upstream version recorded for each available dataset."""
 
     connection = _connect(path)
     try:
@@ -97,14 +97,11 @@ def apply_changes(
     manifests: Sequence[ArtManifest | LocaleManifest],
     *,
     art_keys: Mapping[tuple[str, str], str],
-    source_keys: Mapping[str, str],
+    source_keys: Mapping[tuple[str, str], str],
+    score_asset_keys: Mapping[tuple[str, str], str],
+    score_video_keys: Mapping[str, str],
 ) -> frozenset[str]:
-    """Apply every manifest in one transaction and return referenced PNG keys.
-
-    Art manifests overlay the current category-qualified art set. Locale
-    manifests replace the complete selected locale through the cascading
-    unit-version foreign key.
-    """
+    """Apply all manifests atomically and return every referenced object key."""
 
     connection = _connect(path)
     try:
@@ -112,7 +109,14 @@ def apply_changes(
         try:
             for manifest in manifests:
                 if isinstance(manifest, ArtManifest):
-                    _apply_art(connection, manifest, art_keys, source_keys)
+                    _apply_art(
+                        connection,
+                        manifest,
+                        art_keys,
+                        source_keys,
+                        score_asset_keys,
+                        score_video_keys,
+                    )
             for manifest in manifests:
                 if isinstance(manifest, LocaleManifest):
                     _replace_locale(connection, manifest)
@@ -123,7 +127,12 @@ def apply_changes(
         return frozenset(
             str(row[0])
             for row in connection.execute(
-                "SELECT object_key FROM arts UNION SELECT object_key FROM source_arts"
+                """
+                SELECT object_key FROM arts
+                UNION SELECT object_key FROM source_arts
+                UNION SELECT object_key FROM score_assets
+                UNION SELECT object_key FROM score_videos
+                """
             )
         )
     finally:
@@ -134,7 +143,9 @@ def _apply_art(
     connection: sqlite3.Connection,
     manifest: ArtManifest,
     art_keys: Mapping[tuple[str, str], str],
-    source_keys: Mapping[str, str],
+    source_keys: Mapping[tuple[str, str], str],
+    score_asset_keys: Mapping[tuple[str, str], str],
+    score_video_keys: Mapping[str, str],
 ) -> None:
     connection.execute(
         """
@@ -143,62 +154,85 @@ def _apply_art(
         """,
         (manifest.upstream_version,),
     )
-    connection.execute(
-        """
+    candidate_schema = """
+        DROP TABLE IF EXISTS candidate_art_source_refs;
+        DROP TABLE IF EXISTS candidate_arts;
+        DROP TABLE IF EXISTS candidate_source_arts;
+        DROP TABLE IF EXISTS candidate_score_assets;
+        DROP TABLE IF EXISTS candidate_score_videos;
+
         CREATE TEMP TABLE candidate_source_arts (
-            source_art_id TEXT PRIMARY KEY,
-            character_id TEXT NOT NULL,
-            role TEXT NOT NULL CHECK (role IN ('body', 'face', 'whole_body')),
-            variant TEXT NOT NULL CHECK (length(variant) > 0),
+            category TEXT NOT NULL,
+            source_art_id TEXT NOT NULL,
+            kind TEXT NOT NULL,
+            character_id TEXT,
+            role TEXT,
+            variant TEXT,
             object_key TEXT NOT NULL UNIQUE,
             byte_size INTEGER NOT NULL CHECK (byte_size > 0),
             width INTEGER NOT NULL CHECK (width > 0),
-            height INTEGER NOT NULL CHECK (height > 0)
-        ) STRICT
-        """
-    )
-    connection.execute(
-        """
+            height INTEGER NOT NULL CHECK (height > 0),
+            PRIMARY KEY (category, source_art_id)
+        ) STRICT;
         CREATE TEMP TABLE candidate_arts (
+            category TEXT NOT NULL,
             art_id TEXT NOT NULL,
-            category TEXT NOT NULL
-                CHECK (category IN ('image', 'background', 'item', 'character')),
             object_key TEXT NOT NULL UNIQUE,
             byte_size INTEGER NOT NULL CHECK (byte_size > 0),
             width INTEGER NOT NULL CHECK (width > 0),
             height INTEGER NOT NULL CHECK (height > 0),
             PRIMARY KEY (category, art_id)
-        ) STRICT
-        """
-    )
-    connection.execute(
-        """
+        ) STRICT;
         CREATE TEMP TABLE candidate_art_source_refs (
-            category TEXT NOT NULL CHECK (category = 'character'),
+            category TEXT NOT NULL,
             art_id TEXT NOT NULL,
             position INTEGER NOT NULL CHECK (position >= 0),
+            source_category TEXT NOT NULL,
             source_art_id TEXT NOT NULL,
             PRIMARY KEY (category, art_id, position),
-            UNIQUE (category, art_id, source_art_id),
+            UNIQUE (category, art_id, source_category, source_art_id),
             FOREIGN KEY (category, art_id)
                 REFERENCES candidate_arts (category, art_id) ON DELETE CASCADE
-        ) STRICT
+        ) STRICT;
+        CREATE TEMP TABLE candidate_score_assets (
+            asset_kind TEXT NOT NULL,
+            asset_id TEXT NOT NULL,
+            object_key TEXT NOT NULL UNIQUE,
+            byte_size INTEGER NOT NULL CHECK (byte_size > 0),
+            width INTEGER NOT NULL CHECK (width > 0),
+            height INTEGER NOT NULL CHECK (height > 0),
+            PRIMARY KEY (asset_kind, asset_id)
+        ) STRICT;
+        CREATE TEMP TABLE candidate_score_videos (
+            video_id TEXT PRIMARY KEY,
+            object_key TEXT NOT NULL UNIQUE,
+            byte_size INTEGER NOT NULL CHECK (byte_size > 0),
+            width INTEGER NOT NULL CHECK (width > 0),
+            height INTEGER NOT NULL CHECK (height > 0),
+            frame_rate_numerator INTEGER NOT NULL CHECK (frame_rate_numerator > 0),
+            frame_rate_denominator INTEGER NOT NULL CHECK (frame_rate_denominator > 0),
+            frame_count INTEGER NOT NULL CHECK (frame_count > 0)
+        ) STRICT;
         """
-    )
+    for statement in candidate_schema.split(";"):
+        if statement.strip():
+            connection.execute(statement)
     connection.executemany(
         """
         INSERT INTO candidate_source_arts
-            (source_art_id, character_id, role, variant, object_key,
-             byte_size, width, height)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            (category, source_art_id, kind, character_id, role, variant,
+             object_key, byte_size, width, height)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             (
+                source.category,
                 source.id,
+                source.kind,
                 source.character_id,
                 source.role,
                 source.variant,
-                source_keys[source.id],
+                source_keys[(source.category, source.id)],
                 source.image.byte_size,
                 source.image.width,
                 source.image.height,
@@ -209,13 +243,13 @@ def _apply_art(
     connection.executemany(
         """
         INSERT INTO candidate_arts
-            (art_id, category, object_key, byte_size, width, height)
+            (category, art_id, object_key, byte_size, width, height)
         VALUES (?, ?, ?, ?, ?, ?)
         """,
         (
             (
-                art.id,
                 art.category,
+                art.id,
                 art_keys[(art.category, art.id)],
                 art.image.byte_size,
                 art.image.width,
@@ -227,25 +261,65 @@ def _apply_art(
     connection.executemany(
         """
         INSERT INTO candidate_art_source_refs
-            (category, art_id, position, source_art_id)
-        VALUES (?, ?, ?, ?)
+            (category, art_id, position, source_category, source_art_id)
+        VALUES (?, ?, ?, ?, ?)
         """,
         (
-            (art.category, art.id, position, source_id)
+            (art.category, art.id, position, source.category, source.id)
             for art in manifest.arts
-            for position, source_id in enumerate(art.source_art_ids)
+            for position, source in enumerate(art.source_art_references)
+        ),
+    )
+    connection.executemany(
+        """
+        INSERT INTO candidate_score_assets
+            (asset_kind, asset_id, object_key, byte_size, width, height)
+        VALUES (?, ?, ?, ?, ?, ?)
+        """,
+        (
+            (
+                asset.kind,
+                asset.id,
+                score_asset_keys[(asset.kind, asset.id)],
+                asset.image.byte_size,
+                asset.image.width,
+                asset.image.height,
+            )
+            for asset in manifest.score_assets
+        ),
+    )
+    connection.executemany(
+        """
+        INSERT INTO candidate_score_videos
+            (video_id, object_key, byte_size, width, height,
+             frame_rate_numerator, frame_rate_denominator, frame_count)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            (
+                video.id,
+                score_video_keys[video.id],
+                video.video.byte_size,
+                video.video.width,
+                video.video.height,
+                video.video.frame_rate_numerator,
+                video.video.frame_rate_denominator,
+                video.video.frame_count,
+            )
+            for video in manifest.score_videos
         ),
     )
 
     connection.execute(
         """
         INSERT INTO source_arts
-            (source_art_id, character_id, role, variant, object_key,
-             byte_size, width, height)
-        SELECT source_art_id, character_id, role, variant, object_key,
-               byte_size, width, height
+            (category, source_art_id, kind, character_id, role, variant,
+             object_key, byte_size, width, height)
+        SELECT category, source_art_id, kind, character_id, role, variant,
+               object_key, byte_size, width, height
         FROM candidate_source_arts WHERE true
-        ON CONFLICT (source_art_id) DO UPDATE SET
+        ON CONFLICT (category, source_art_id) DO UPDATE SET
+            kind = excluded.kind,
             character_id = excluded.character_id,
             role = excluded.role,
             variant = excluded.variant,
@@ -257,9 +331,8 @@ def _apply_art(
     )
     connection.execute(
         """
-        INSERT INTO arts
-            (art_id, category, object_key, byte_size, width, height)
-        SELECT art_id, category, object_key, byte_size, width, height
+        INSERT INTO arts (category, art_id, object_key, byte_size, width, height)
+        SELECT category, art_id, object_key, byte_size, width, height
         FROM candidate_arts WHERE true
         ON CONFLICT (category, art_id) DO UPDATE SET
             object_key = excluded.object_key,
@@ -270,24 +343,47 @@ def _apply_art(
     )
     connection.execute(
         """
-        DELETE FROM art_source_refs
-        WHERE (category, art_id) IN (
-            SELECT candidate.category, candidate.art_id
-            FROM candidate_arts AS candidate
-            JOIN arts USING (category, art_id)
-            WHERE arts.object_key = candidate.object_key
-        )
+        INSERT INTO score_assets
+            (asset_kind, asset_id, object_key, byte_size, width, height)
+        SELECT asset_kind, asset_id, object_key, byte_size, width, height
+        FROM candidate_score_assets WHERE true
+        ON CONFLICT (asset_kind, asset_id) DO UPDATE SET
+            object_key = excluded.object_key,
+            byte_size = excluded.byte_size,
+            width = excluded.width,
+            height = excluded.height
         """
     )
     connection.execute(
         """
-        INSERT INTO art_source_refs (category, art_id, position, source_art_id)
-        SELECT reference.category, reference.art_id,
-               reference.position, reference.source_art_id
-        FROM candidate_art_source_refs AS reference
-        JOIN candidate_arts AS candidate USING (category, art_id)
-        JOIN arts USING (category, art_id)
-        WHERE arts.object_key = candidate.object_key
+        INSERT INTO score_videos
+            (video_id, object_key, byte_size, width, height,
+             frame_rate_numerator, frame_rate_denominator, frame_count)
+        SELECT video_id, object_key, byte_size, width, height,
+               frame_rate_numerator, frame_rate_denominator, frame_count
+        FROM candidate_score_videos WHERE true
+        ON CONFLICT (video_id) DO UPDATE SET
+            object_key = excluded.object_key,
+            byte_size = excluded.byte_size,
+            width = excluded.width,
+            height = excluded.height,
+            frame_rate_numerator = excluded.frame_rate_numerator,
+            frame_rate_denominator = excluded.frame_rate_denominator,
+            frame_count = excluded.frame_count
+        """
+    )
+    connection.execute(
+        """
+        DELETE FROM art_source_refs
+        WHERE (category, art_id) IN (SELECT category, art_id FROM candidate_arts)
+        """
+    )
+    connection.execute(
+        """
+        INSERT INTO art_source_refs
+            (category, art_id, position, source_category, source_art_id)
+        SELECT category, art_id, position, source_category, source_art_id
+        FROM candidate_art_source_refs
         """
     )
 
@@ -301,25 +397,132 @@ def _replace_locale(connection: sqlite3.Connection, manifest: LocaleManifest) ->
     )
     connection.executemany(
         """
-        INSERT INTO story_groups (locale, group_id, name, group_type, position)
-        VALUES (?, ?, ?, ?, ?)
+        INSERT INTO story_collections (locale, collection_id, collection_kind)
+        VALUES (?, ?, ?)
         """,
         (
-            (unit, group.id, group.name, group.group_type, group_position)
-            for group_position, group in enumerate(manifest.story_groups)
+            *(
+                (unit, section.collection_id, "movement_section")
+                for section in manifest.movement_sections
+            ),
+            *(
+                (unit, archive.collection_id, "archive_group")
+                for archive in manifest.archive_groups
+            ),
         ),
     )
     connection.executemany(
         """
+        INSERT INTO movements
+            (locale, movement_id, position, movement_type, name,
+             icon_asset_id, logo_asset_id, background_asset_id, has_video, start_time)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            (
+                unit,
+                movement.id,
+                movement.position,
+                movement.movement_type,
+                movement.name,
+                movement.icon_asset_id,
+                movement.logo_asset_id,
+                movement.background_asset_id,
+                int(movement.has_video),
+                movement.start_time,
+            )
+            for movement in manifest.movements
+        ),
+    )
+    connection.executemany(
+        """
+        INSERT INTO movement_sections
+            (locale, section_id, collection_id, section_type, name, review_group_id,
+             sort_by_year, sort_within_year, key_visual_asset_id, title_asset_id,
+             background_asset_id, decoration_asset_id, retro_background_asset_id,
+             description, has_video)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            (
+                unit,
+                section.id,
+                section.collection_id,
+                section.section_type,
+                section.name,
+                section.review_group_id,
+                section.sort_by_year,
+                section.sort_within_year,
+                section.key_visual_asset_id,
+                section.title_asset_id,
+                section.background_asset_id,
+                section.decoration_asset_id,
+                section.retro_background_asset_id,
+                section.description,
+                int(section.has_video),
+            )
+            for section in manifest.movement_sections
+        ),
+    )
+    connection.executemany(
+        """
+        INSERT INTO movement_locations
+            (locale, movement_id, location_id, position, location_type, sort_id,
+             start_time, present_stage_id, unlock_stage_id, section_id,
+             split_icon_asset_id, split_sub_name, video_id)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            (
+                unit,
+                movement.id,
+                location.id,
+                location.position,
+                location.location_type,
+                location.sort_id,
+                location.start_time,
+                location.present_stage_id,
+                location.unlock_stage_id,
+                location.section_id,
+                location.split_icon_asset_id,
+                location.split_sub_name,
+                location.video_id,
+            )
+            for movement in manifest.movements
+            for location in movement.locations
+        ),
+    )
+    connection.executemany(
+        """
+        INSERT INTO archive_groups
+            (locale, archive_id, collection_id, position, name, archive_kind, story_type)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            (
+                unit,
+                archive.id,
+                archive.collection_id,
+                archive.position,
+                archive.name,
+                archive.archive_kind,
+                archive.story_type,
+            )
+            for archive in manifest.archive_groups
+        ),
+    )
+    groups = (*manifest.movement_sections, *manifest.archive_groups)
+    connection.executemany(
+        """
         INSERT INTO stories
-            (locale, story_id, group_id, tag, tag_text, code, name, info, position)
+            (locale, story_id, collection_id, tag, tag_text, code, name, info, position)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             (
                 unit,
                 story.id,
-                group.id,
+                story.collection_id,
                 story.tag,
                 story.tag_text,
                 story.code,
@@ -327,7 +530,7 @@ def _replace_locale(connection: sqlite3.Connection, manifest: LocaleManifest) ->
                 story.info,
                 story_position,
             )
-            for group in manifest.story_groups
+            for group in groups
             for story_position, story in enumerate(group.stories)
         ),
     )
@@ -350,43 +553,103 @@ def _replace_locale(connection: sqlite3.Connection, manifest: LocaleManifest) ->
                 reference.subtitle,
                 json.dumps(reference.names, ensure_ascii=False, separators=(",", ":")),
             )
-            for group in manifest.story_groups
+            for group in groups
             for story in group.stories
             for reference_position, reference in enumerate(story.art_references)
         ),
     )
     connection.executemany(
         """
-        INSERT INTO galleries (locale, gallery_id, name, description)
-        VALUES (?, ?, ?, ?)
+        INSERT INTO gallery_groups
+            (locale, gallery_id, collection_id, position, name, description, location_id)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
         """,
-        ((unit, gallery.id, gallery.name, gallery.description) for gallery in manifest.galleries),
+        (
+            (
+                unit,
+                gallery.id,
+                gallery.collection_id,
+                gallery.position,
+                gallery.name,
+                gallery.description,
+                gallery.location_id,
+            )
+            for gallery in manifest.galleries
+        ),
     )
     connection.executemany(
         """
-        INSERT INTO gallery_entries
-            (locale, gallery_id, position, entry_id, name, description, art_id, category)
+        INSERT INTO gallery_displays
+            (locale, gallery_id, display_id, position, name, description,
+             related_story_id, related_stage_id)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             (
                 unit,
                 gallery.id,
-                entry.position,
-                entry.id,
-                entry.name,
-                entry.description,
-                entry.art_id,
-                entry.category,
+                display.id,
+                display.position,
+                display.name,
+                display.description,
+                display.related_story_id,
+                display.related_stage_id,
             )
             for gallery in manifest.galleries
-            for entry in gallery.entries
+            for display in gallery.displays
+        ),
+    )
+    connection.executemany(
+        """
+        INSERT INTO gallery_display_artworks
+            (locale, gallery_id, display_id, position, cg_id, art_id,
+             category, composite_type)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            (
+                unit,
+                gallery.id,
+                display.id,
+                artwork.position,
+                artwork.cg_id,
+                artwork.art_id,
+                artwork.category,
+                artwork.composite_type,
+            )
+            for gallery in manifest.galleries
+            for display in gallery.displays
+            for artwork in display.artworks
+        ),
+    )
+    connection.executemany(
+        """
+        INSERT INTO gallery_display_artwork_panels
+            (locale, gallery_id, display_id, artwork_position,
+             position, panel_art_id, width, height)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            (
+                unit,
+                gallery.id,
+                display.id,
+                artwork.position,
+                panel.position,
+                panel.id,
+                panel.width,
+                panel.height,
+            )
+            for gallery in manifest.galleries
+            for display in gallery.displays
+            for artwork in display.artworks
+            for panel in artwork.panels
         ),
     )
 
 
 def find_missing_art_references(path: Path) -> tuple[str, ...]:
-    """Return locale art identifiers which are absent from the current art set."""
+    """Return locale art identifiers absent from the current art set."""
 
     connection = _connect(path)
     try:
@@ -394,17 +657,65 @@ def find_missing_art_references(path: Path) -> tuple[str, ...]:
             str(row[0])
             for row in connection.execute(
                 """
-            WITH referenced AS (
-                SELECT category, art_id FROM story_art_references
-                UNION
-                SELECT category, art_id FROM gallery_entries
+                WITH referenced AS (
+                    SELECT category, art_id FROM story_art_references
+                    UNION
+                    SELECT category, art_id FROM gallery_display_artworks
+                )
+                SELECT referenced.category || '/' || referenced.art_id
+                FROM referenced
+                LEFT JOIN arts USING (category, art_id)
+                WHERE arts.art_id IS NULL
+                ORDER BY referenced.category, referenced.art_id
+                """
             )
-            SELECT referenced.category || '/' || referenced.art_id
-            FROM referenced
-            LEFT JOIN arts USING (category, art_id)
-            WHERE arts.art_id IS NULL
-            ORDER BY referenced.art_id
-            """
+        )
+    finally:
+        connection.close()
+
+
+def find_missing_score_references(path: Path) -> tuple[str, ...]:
+    """Return declared Score PNG and video identifiers absent from the art set."""
+
+    connection = _connect(path)
+    try:
+        return tuple(
+            str(row[0])
+            for row in connection.execute(
+                """
+                WITH declared_assets(asset_kind, asset_id) AS (
+                    SELECT 'icon', icon_asset_id FROM movements WHERE icon_asset_id IS NOT NULL
+                    UNION SELECT 'logo', logo_asset_id FROM movements
+                        WHERE logo_asset_id IS NOT NULL
+                    UNION SELECT 'background', background_asset_id FROM movements
+                        WHERE background_asset_id IS NOT NULL
+                    UNION SELECT 'key_visual', key_visual_asset_id FROM movement_sections
+                        WHERE key_visual_asset_id IS NOT NULL
+                    UNION SELECT 'title', title_asset_id FROM movement_sections
+                        WHERE title_asset_id IS NOT NULL
+                    UNION SELECT 'background', background_asset_id FROM movement_sections
+                        WHERE background_asset_id IS NOT NULL
+                    UNION SELECT 'decoration', decoration_asset_id FROM movement_sections
+                        WHERE decoration_asset_id IS NOT NULL
+                    UNION SELECT 'retro_background', retro_background_asset_id
+                        FROM movement_sections WHERE retro_background_asset_id IS NOT NULL
+                    UNION SELECT 'split', split_icon_asset_id FROM movement_locations
+                        WHERE split_icon_asset_id IS NOT NULL
+                ), missing_assets AS (
+                    SELECT 'score/' || declared.asset_kind || '/' || declared.asset_id AS identity
+                    FROM declared_assets AS declared
+                    LEFT JOIN score_assets AS available USING (asset_kind, asset_id)
+                    WHERE available.asset_id IS NULL
+                ), missing_videos AS (
+                    SELECT 'score/video/' || locations.video_id AS identity
+                    FROM movement_locations AS locations
+                    LEFT JOIN score_videos AS available USING (video_id)
+                    WHERE locations.video_id IS NOT NULL AND available.video_id IS NULL
+                )
+                SELECT identity FROM missing_assets
+                UNION SELECT identity FROM missing_videos
+                ORDER BY identity
+                """
             )
         )
     finally:

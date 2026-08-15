@@ -1,18 +1,15 @@
 import { use, ViewTransition } from "react";
 import { useLocation, useParams } from "react-router";
-import {
-  ApiError,
-  artTransitionName,
-  formatBytes,
-  getArtContext,
-  getArtWithSources,
-  type ArtDetail,
-  type ArtCategory,
-} from "../../api";
+import { getArtContext, getArtWithSources } from "../../api/artwork";
+import { ApiError } from "../../api/client";
+import type { ArtCategory, ArtDetail } from "../../api/types";
+import { artTransitionName, formatBytes } from "../../api/utils";
 import { useUi, useUiLanguage } from "../../i18n";
 import { localeLanguageTag, requiredLocale, useCategoryLabel } from "../../navigation";
 import { ArchivePage, BackLink, PageHeader } from "../../shared/Page";
-import { ActionLink, ArtworkGrid, Eyebrow, SectionHeading } from "../../shared/ui";
+import { ActionLink } from "../../shared/ui/Action";
+import { ArtworkGrid } from "../../shared/ui/ArtworkGrid";
+import { Eyebrow, SectionHeading } from "../../shared/ui/Typography";
 import { ArtworkImage } from "./ArtworkCard";
 import { ArtworkOccurrences, SiblingCharacters } from "./ArtworkContext";
 import { SourceLayerCard } from "./SourceLayerCard";
@@ -119,14 +116,23 @@ export function ArtDetailPage() {
       {sources.length ? (
         <section className="mt-[clamp(4rem,9vw,8rem)]" aria-labelledby="source-layers-title">
           <SectionHeading
-            eyebrow={t("art.characterAssembly")}
+            eyebrow={
+              sources.some((source) => source.kind === "composite_panel")
+                ? t("art.compositeAssembly")
+                : t("art.characterAssembly")
+            }
             meta={new Intl.NumberFormat(language).format(sources.length)}
-            title={t("art.retainedLayers")}
+            title={t("art.retainedSources")}
             titleId="source-layers-title"
           />
           <ArtworkGrid>
-            {sources.map((source) => (
-              <SourceLayerCard composition={art} key={source.id} source={source} />
+            {sources.map((source, index) => (
+              <SourceLayerCard
+                composition={art}
+                index={index}
+                key={`${source.category}:${source.id}`}
+                source={source}
+              />
             ))}
           </ArtworkGrid>
         </section>

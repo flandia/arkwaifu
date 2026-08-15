@@ -23,10 +23,11 @@ from .asyncio_tools import await_owned
 from .database import (
     apply_changes,
     find_missing_art_references,
+    find_missing_score_references,
     initialize_or_validate,
     read_versions,
 )
-from .domain import ArtManifest, LocaleManifest, PngImage
+from .domain import ArtManifest, FileVideoArtifact, LocaleManifest, PngImage
 from .object_store import ObjectStore
 from .thumbnail import make_thumbnail, thumbnail_object_key
 
@@ -39,6 +40,18 @@ _UNITS = frozenset({"art", "CN", "EN", "JP", "KR", "TW"})
 _INCOMPLETE_UPSTREAM_LOGGER = logging.getLogger("arkwaifu_updateloop.incomplete_upstream")
 _LOGGER = logging.getLogger(__name__)
 _THUMBNAIL_WORKERS = os.cpu_count() or 1
+_SCORE_ASSET_KINDS = frozenset(
+    {
+        "icon",
+        "logo",
+        "background",
+        "key_visual",
+        "title",
+        "decoration",
+        "retro_background",
+        "split",
+    }
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -95,8 +108,11 @@ def _prepare_art_publication(
     manifests: Sequence[Manifest],
 ) -> tuple[
     dict[tuple[str, str], str],
+    dict[tuple[str, str], str],
+    dict[tuple[str, str], str],
     dict[str, str],
     tuple[tuple[str, PngImage], ...],
+    tuple[tuple[str, FileVideoArtifact], ...],
 ]:
     """Derive object keys and candidate uploads from the requested art manifest."""
 
@@ -105,7 +121,7 @@ def _prepare_art_publication(
         None,
     )
     if manifest is None:
-        return {}, {}, ()
+        return {}, {}, {}, {}, (), ()
     art_keys = {
         (art.category, art.id): art_object_key(
             res_version=art.res_version or manifest.upstream_version,
@@ -116,19 +132,51 @@ def _prepare_art_publication(
         for art in manifest.arts
     }
     source_keys = {
-        source.id: art_object_key(
+        (source.category, source.id): art_object_key(
             res_version=source.res_version or manifest.upstream_version,
             variant="source",
-            category="character",
+            category=source.category,
             identifier=source.id,
         )
         for source in manifest.source_arts
     }
-    uploads = tuple(
+    score_asset_keys = {
+        (asset.kind, asset.id): score_asset_object_key(
+            res_version=asset.res_version or manifest.upstream_version,
+            kind=asset.kind,
+            identifier=asset.id,
+        )
+        for asset in manifest.score_assets
+    }
+    score_video_keys = {
+        video.id: score_video_object_key(
+            res_version=video.res_version or manifest.upstream_version,
+            identifier=video.id,
+        )
+        for video in manifest.score_videos
+    }
+    png_uploads = tuple(
         [(art_keys[(art.category, art.id)], art.image) for art in manifest.arts]
-        + [(source_keys[source.id], source.image) for source in manifest.source_arts]
+        + [
+            (source_keys[(source.category, source.id)], source.image)
+            for source in manifest.source_arts
+        ]
+        + [
+            (score_asset_keys[(asset.kind, asset.id)], asset.image)
+            for asset in manifest.score_assets
+        ]
     )
-    return art_keys, source_keys, uploads
+    video_uploads = tuple(
+        (score_video_keys[video.id], video.video) for video in manifest.score_videos
+    )
+    return (
+        art_keys,
+        source_keys,
+        score_asset_keys,
+        score_video_keys,
+        png_uploads,
+        video_uploads,
+    )
 
 
 def art_object_key(
@@ -147,6 +195,30 @@ def art_object_key(
     if category not in {"image", "background", "item", "character"}:
         raise ValueError(f"unknown art object category: {category}")
     segments = ("ART", res_version, variant, category, f"{identifier}.png")
+    return "/".join(quote(segment, safe="") for segment in segments)
+
+
+def score_asset_object_key(*, res_version: str, kind: str, identifier: str) -> str:
+    """Return the immutable object key for one Score PNG."""
+
+    if not isinstance(res_version, str) or not res_version:
+        raise ValueError("art resVersion cannot be empty")
+    if not isinstance(kind, str) or kind not in _SCORE_ASSET_KINDS:
+        raise ValueError(f"unknown Score asset kind: {kind}")
+    if not isinstance(identifier, str) or not identifier:
+        raise ValueError("Score asset identifier cannot be empty")
+    segments = ("SCORE", res_version, kind, f"{identifier}.png")
+    return "/".join(quote(segment, safe="") for segment in segments)
+
+
+def score_video_object_key(*, res_version: str, identifier: str) -> str:
+    """Return the immutable object key for one Score WebM."""
+
+    if not isinstance(res_version, str) or not res_version:
+        raise ValueError("art resVersion cannot be empty")
+    if not isinstance(identifier, str) or not identifier:
+        raise ValueError("Score video identifier cannot be empty")
+    segments = ("SCORE", res_version, "video", f"{identifier}.webm")
     return "/".join(quote(segment, safe="") for segment in segments)
 
 
@@ -169,10 +241,10 @@ class Updater:
         """Prepare and publish all requested changes as one operation.
 
         Builders run concurrently. Successful manifests enter one local SQLite
-        transaction, immutable PNG winners and derived thumbnails upload with
-        bounded concurrency, and the database uploads last. A failure before
+        transaction, immutable PNG and WebM winners and derived thumbnails upload
+        with bounded concurrency, and the database uploads last. A failure before
         the final upload leaves the previously published database current,
-        although PNG creations can remain unreferenced and mutable thumbnails
+        although immutable creations can remain unreferenced and mutable thumbnails
         can be partially refreshed.
         """
 
@@ -215,7 +287,14 @@ class Updater:
                 (manifest for manifest in manifests if isinstance(manifest, ArtManifest)),
                 None,
             )
-            art_keys, source_keys, candidate_uploads = _prepare_art_publication(manifests)
+            (
+                art_keys,
+                source_keys,
+                score_asset_keys,
+                score_video_keys,
+                candidate_uploads,
+                candidate_video_uploads,
+            ) = _prepare_art_publication(manifests)
             apply_started = time.perf_counter()
             try:
                 committed_object_keys = await await_owned(
@@ -225,6 +304,8 @@ class Updater:
                         manifests,
                         art_keys=art_keys,
                         source_keys=source_keys,
+                        score_asset_keys=score_asset_keys,
+                        score_video_keys=score_video_keys,
                     )
                 )
             except Exception:
@@ -250,6 +331,11 @@ class Updater:
                 for key, artifact in candidate_uploads
                 if key in committed_object_keys
             )
+            referenced_video_uploads = tuple(
+                (key, artifact)
+                for key, artifact in candidate_video_uploads
+                if key in committed_object_keys
+            )
             if art_manifest is None:
                 thumbnail_candidates = ()
             else:
@@ -273,8 +359,21 @@ class Updater:
                     len(missing),
                     list(missing[:10]),
                 )
+            missing_score = await await_owned(
+                asyncio.to_thread(find_missing_score_references, database_path)
+            )
+            if missing_score:
+                _INCOMPLETE_UPSTREAM_LOGGER.warning(
+                    "database references unavailable Score assets; continuing count=%d sample=%s",
+                    len(missing_score),
+                    list(missing_score[:10]),
+                )
             await self._upload_artifacts(
                 referenced_uploads,
+                version=art_manifest.upstream_version if art_manifest is not None else None,
+            )
+            await self._upload_videos(
+                referenced_video_uploads,
                 version=art_manifest.upstream_version if art_manifest is not None else None,
             )
             await self._publish_thumbnails(
@@ -353,7 +452,9 @@ class Updater:
                 missing_sections = [
                     name
                     for name, records in (
-                        ("story_groups", manifest.story_groups),
+                        ("movements", manifest.movements),
+                        ("movement_sections", manifest.movement_sections),
+                        ("archive_groups", manifest.archive_groups),
                         ("galleries", manifest.galleries),
                     )
                     if not records
@@ -528,6 +629,71 @@ class Updater:
         tasks = [
             asyncio.create_task(worker(), name=f"thumbnail-publish-{index}")
             for index in range(min(_THUMBNAIL_WORKERS, len(candidates)))
+        ]
+        batch = asyncio.gather(*tasks)
+        try:
+            await asyncio.shield(batch)
+        except asyncio.CancelledError:
+            stop.set()
+            await await_owned(batch)
+            raise
+        if first_error is not None:
+            raise first_error
+
+    async def _upload_videos(
+        self,
+        uploads: Sequence[tuple[str, FileVideoArtifact]],
+        *,
+        version: str | None,
+    ) -> None:
+        """Upload immutable Score videos with bounded concurrency."""
+
+        if not uploads:
+            return
+        iterator = iter(enumerate(uploads, start=1))
+        total = len(uploads)
+        stop = asyncio.Event()
+        first_error: Exception | None = None
+
+        async def worker() -> None:
+            nonlocal first_error
+            while not stop.is_set():
+                try:
+                    current, (key, artifact) = next(iterator)
+                except StopIteration:
+                    return
+                started = time.perf_counter()
+                try:
+                    await self._object_store.put_video(key, artifact)
+                except Exception as error:  # noqa: BLE001 - adapter errors are opaque
+                    if version is not None:
+                        _log_art_action(
+                            "upload",
+                            version=version,
+                            resource=key,
+                            current=current,
+                            total=total,
+                            status="failed",
+                            elapsed_seconds=time.perf_counter() - started,
+                        )
+                    if first_error is None:
+                        first_error = error
+                    stop.set()
+                    return
+                if version is not None:
+                    _log_art_action(
+                        "upload",
+                        version=version,
+                        resource=key,
+                        current=current,
+                        total=total,
+                        status="done",
+                        elapsed_seconds=time.perf_counter() - started,
+                    )
+
+        tasks = [
+            asyncio.create_task(worker(), name=f"batch-video-upload-{index}")
+            for index in range(min(self._upload_workers, len(uploads)))
         ]
         batch = asyncio.gather(*tasks)
         try:

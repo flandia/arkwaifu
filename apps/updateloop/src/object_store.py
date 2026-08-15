@@ -11,12 +11,13 @@ from botocore.config import Config
 from botocore.exceptions import ClientError
 
 from .asyncio_tools import await_owned
-from .domain import PngImage
+from .domain import FileVideoArtifact, PngImage
 
 DATABASE_OBJECT_KEY = "arkwaifu.sqlite3"
 _DATABASE_CONTENT_TYPE = "application/vnd.sqlite3"
 _PNG_CONTENT_TYPE = "image/png"
 _PNG_CACHE_CONTROL = "public, max-age=31536000, immutable"
+_VIDEO_CONTENT_TYPE = "video/webm"
 _THUMBNAIL_CONTENT_TYPE = "image/webp"
 _MAX_POOL_CONNECTIONS = 16
 
@@ -51,6 +52,10 @@ class ObjectStore(Protocol):
 
     async def put_thumbnail(self, key: str, content: bytes) -> None:
         """Replace one derived WebP thumbnail object."""
+        ...
+
+    async def put_video(self, key: str, artifact: FileVideoArtifact) -> None:
+        """Create one immutable Score WebM object."""
         ...
 
 
@@ -141,6 +146,31 @@ class S3ObjectStore:
             with artifact.path.open("rb") as content:
                 self._client.put_object(Body=content, **request)
 
+    async def put_video(self, key: str, artifact: FileVideoArtifact) -> None:
+        """Create one WebM, accepting an already matching immutable object."""
+
+        await await_owned(asyncio.to_thread(self._put_video, key, artifact))
+
+    def _put_video(self, key: str, artifact: FileVideoArtifact) -> None:
+        try:
+            existing = self._client.head_object(Bucket=self._bucket, Key=key)
+        except ClientError as error:
+            if not _is_missing(error):
+                raise
+        else:
+            self._validate_video(key, artifact, existing)
+            return
+
+        with artifact.path.open("rb") as content:
+            self._client.put_object(
+                Bucket=self._bucket,
+                Key=key,
+                Body=content,
+                ContentLength=artifact.byte_size,
+                ContentType=_VIDEO_CONTENT_TYPE,
+                CacheControl=_PNG_CACHE_CONTROL,
+            )
+
     async def put_thumbnail(self, key: str, content: bytes) -> None:
         """Replace one mutable WebP thumbnail."""
 
@@ -176,6 +206,31 @@ class S3ObjectStore:
             )
             raise ValueError(f"immutable PNG object conflicts with {key}: {detail}")
 
+    @staticmethod
+    def _validate_video(
+        key: str,
+        artifact: FileVideoArtifact,
+        metadata: dict[str, object],
+    ) -> None:
+        """Require an existing object to match the immutable WebM contract."""
+
+        expected = {
+            "ContentLength": artifact.byte_size,
+            "ContentType": _VIDEO_CONTENT_TYPE,
+            "CacheControl": _PNG_CACHE_CONTROL,
+        }
+        mismatches = {
+            name: (metadata.get(name), value)
+            for name, value in expected.items()
+            if metadata.get(name) != value
+        }
+        if mismatches:
+            detail = ", ".join(
+                f"{name}={actual!r} (expected {wanted!r})"
+                for name, (actual, wanted) in mismatches.items()
+            )
+            raise ValueError(f"immutable WebM object conflicts with {key}: {detail}")
+
 
 class MemoryObjectStore:
     """Store database and art bytes in memory for deterministic updater tests."""
@@ -210,3 +265,11 @@ class MemoryObjectStore:
         """Replace one mutable WebP thumbnail."""
 
         self.objects[key] = content
+
+    async def put_video(self, key: str, artifact: FileVideoArtifact) -> None:
+        """Create one immutable WebM or accept an identical existing value."""
+
+        content = artifact.content
+        existing = self.objects.setdefault(key, content)
+        if existing != content:
+            raise ValueError(f"immutable WebM object conflicts with {key}")

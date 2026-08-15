@@ -3,8 +3,8 @@ import { canonicalUrl, isSearchMirror } from "./seo";
 
 describe("canonicalUrl", () => {
   it("removes query strings, fragments, and trailing slashes", () => {
-    expect(canonicalUrl("/CN/stories/main/?order=archive#image")).toBe(
-      "https://arkwaifu.cc/CN/stories/main",
+    expect(canonicalUrl("/CN/scores/main/?order=archive#image")).toBe(
+      "https://arkwaifu.cc/CN/scores/main",
     );
   });
 

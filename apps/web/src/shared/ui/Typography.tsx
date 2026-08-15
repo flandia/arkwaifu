@@ -18,6 +18,7 @@ interface SectionHeadingProps extends Omit<ComponentPropsWithoutRef<"div">, "tit
   title: ReactNode;
   titleId?: string;
   meta?: ReactNode;
+  tone?: "light" | "dark";
 }
 
 export function SectionHeading({
@@ -26,12 +27,14 @@ export function SectionHeading({
   meta,
   title,
   titleId,
+  tone = "light",
   ...props
 }: SectionHeadingProps) {
   return (
     <div
       className={cn(
-        "mb-8 grid grid-cols-[minmax(0,1fr)_auto] items-end border-b-[3px] border-ink pb-4",
+        "mb-8 grid grid-cols-[minmax(0,1fr)_auto] items-end border-b-[3px] pb-4",
+        tone === "dark" ? "border-white/30" : "border-ink",
         className,
       )}
       {...props}

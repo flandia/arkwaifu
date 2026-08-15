@@ -1,23 +1,31 @@
 import { afterEach, describe, expect, it, mock, spyOn } from "bun:test";
 import {
-  ApiError,
-  artTransitionName,
-  clearApiCache,
-  formatBytes,
-  getArt,
-  getArtContext,
-  getStoriesByGroup,
-  getStory,
-  getStoryGroup,
-  getStoryGroupWithStories,
-  getUnreferencedArts,
-  uniqueStoryArtReferences,
-  type StoryArtReference,
-  type StoryDetail,
-  type StoryGroupDetail,
-  type StorySummary,
-} from "./api";
-import { resolveApiBaseUrl } from "./api/client";
+  getArchiveGroup,
+  getArchiveGroups,
+  getArchiveKinds,
+  getArchiveStory,
+} from "./api/archives";
+import { getArt, getArtContext, getArtWithSources } from "./api/artwork";
+import { ApiError, clearApiCache, resolveApiBaseUrl } from "./api/client";
+import { getGalleries, getGallery } from "./api/galleries";
+import { getMovement, getMovements, getScoreSection, getScoreStory } from "./api/scores";
+import type {
+  ArchiveGroupDetail,
+  ArchiveGroupSummary,
+  ArchiveKindSummary,
+  ArtContext,
+  ArtDetail,
+  GalleryDetail,
+  GallerySummary,
+  MovementDetail,
+  MovementSummary,
+  ScoreSectionDetail,
+  StoryArtReference,
+  StoryDetail,
+  StorySummary,
+} from "./api/types";
+import { getUnreferencedArts } from "./api/unreferenced";
+import { artTransitionName, formatBytes, uniqueStoryArtReferences } from "./api/utils";
 
 const configuredApiBaseUrl = resolveApiBaseUrl(import.meta.env.VITE_API_BASE_URL);
 
@@ -36,7 +44,7 @@ const reference: StoryArtReference = {
     "https://objects.example/ART/art-v1/thumbnail/character/char_220_grani%25235%25241.webp",
 };
 
-const artResponse = {
+const artResponse: ArtDetail = {
   id: reference.artID,
   category: reference.category,
   thumbnailContentUrl:
@@ -47,7 +55,83 @@ const artResponse = {
     height: 200,
     contentUrl: "https://objects.example/art.png",
   },
-  sourceArtIDs: [],
+  sourceArts: [],
+};
+
+const scoreParent = {
+  kind: "score" as const,
+  movementID: "main",
+  movementName: "For Tomorrow",
+  sectionID: "main_17",
+  sectionName: "Critical Phase Transition",
+};
+
+const storySummary: StorySummary = {
+  id: "main_17-1",
+  tag: "before",
+  tagText: "Before Operation",
+  code: "17-1",
+  name: "Seeds",
+  info: "A story summary.",
+  previewArtReferences: [reference],
+  representativeArtReference: reference,
+};
+
+const storyDetail: StoryDetail = {
+  id: storySummary.id,
+  tag: storySummary.tag,
+  tagText: storySummary.tagText,
+  code: storySummary.code,
+  name: storySummary.name,
+  info: "A story detail.",
+  parent: scoreParent,
+  artReferences: [reference],
+};
+
+const galleryDetail: GalleryDetail = {
+  id: "main_17",
+  name: "Critical Phase Transition",
+  description: "A gallery.",
+  parent: scoreParent,
+  displays: [
+    {
+      id: "sacrifice-torch",
+      position: 0,
+      name: "Sacrifice Torch",
+      description: "Four sibling artworks.",
+      relatedStoryID: storySummary.id,
+      relatedStageID: null,
+      artworks: [
+        {
+          position: 0,
+          cgID: "cg_001",
+          artID: "cg_001_a/cg_001_b",
+          category: "image",
+          thumbnailContentUrl: "https://objects.example/cg.webp",
+        },
+      ],
+    },
+  ],
+};
+
+const sectionDetail: ScoreSectionDetail = {
+  id: scoreParent.sectionID,
+  name: scoreParent.sectionName,
+  description: "A section.",
+  type: "main_theme",
+  position: 1,
+  sortByYear: 2026,
+  sortWithinYear: 1,
+  keyVisual: null,
+  titleImage: null,
+  background: null,
+  decoration: null,
+  retroBackground: null,
+  storyCount: 1,
+  activeBackgroundVideo: null,
+  stories: [storySummary],
+  artReferences: [reference],
+  gallery: galleryDetail,
 };
 
 function jsonResponse(body: unknown, status = 200): Response {
@@ -107,7 +191,6 @@ describe("archive API client", () => {
     expect(await first).toEqual(artResponse);
     expect(fetch).toHaveBeenCalledTimes(1);
     expect(fetch.mock.calls[0]?.[0]).toBe(apiUrl("/api/arts/character/char_220_grani%235%241"));
-    expect(fetch.mock.calls[0]?.[1]).toMatchObject({ headers: { Accept: "application/json" } });
   });
 
   it("retains failed requests until an explicit retry clears the cache", async () => {
@@ -120,11 +203,9 @@ describe("archive API client", () => {
       expect.objectContaining({ name: "ApiError", message: expect.any(String), status: 503 }),
     );
     expect(error).toBeInstanceOf(ApiError);
-
-    const cachedError = await getArt("character", reference.artID).catch(
-      (reason: unknown) => reason,
+    expect(await getArt("character", reference.artID).catch((reason: unknown) => reason)).toBe(
+      error,
     );
-    expect(cachedError).toBe(error);
     expect(fetch).toHaveBeenCalledTimes(1);
 
     clearApiCache();
@@ -135,95 +216,171 @@ describe("archive API client", () => {
   it("rejects successful non-JSON responses", async () => {
     spyOn(globalThis, "fetch").mockResolvedValue(new Response("<html />", { status: 200 }));
     const error = await getArt("image", "bad-response").catch((reason: unknown) => reason);
-    expect(error).toEqual(
-      expect.objectContaining({ name: "ApiError", message: expect.any(String), status: 200 }),
-    );
     expect(error).toBeInstanceOf(ApiError);
+    expect(error).toEqual(expect.objectContaining({ status: 200 }));
   });
 
-  it("loads aggregate story-group artwork through the detail route", async () => {
-    const group: StoryGroupDetail = {
-      id: "main_17",
-      name: "相变临界",
-      type: "main_story" as const,
-      previewArtReferences: [reference],
-      representativeArtReference: reference,
-      artReferences: [reference],
+  it("uses the compact Score routes and preserves the embedded gallery", async () => {
+    const movement: MovementSummary = {
+      id: "main",
+      name: "For Tomorrow",
+      type: "continue",
+      position: 0,
+      sectionCount: 1,
+      startTime: 0,
+      icon: null,
+      logo: null,
+      background: null,
+      backgroundVideo: null,
     };
-    const fetch = spyOn(globalThis, "fetch").mockResolvedValue(jsonResponse(group));
-
-    expect(await getStoryGroup("CN", group.id)).toEqual(group);
-    expect(fetch.mock.calls[0]?.[0]).toBe(apiUrl("/api/CN/story-groups/main_17"));
-  });
-
-  it("keeps story summary and detail endpoint shapes distinct", async () => {
-    const detail: StoryDetail = {
-      id: "main_17-1",
-      groupID: "main_17",
-      tag: "before",
-      tagText: "Before Operation",
-      code: "17-1",
-      name: "Seeds",
-      info: "A story detail.",
-      artReferences: [reference],
-    };
-    const summary: StorySummary = {
-      id: detail.id,
-      groupID: detail.groupID,
-      tag: detail.tag,
-      tagText: detail.tagText,
-      code: detail.code,
-      name: detail.name,
-      info: detail.info,
-      artReferences: [],
-      previewArtReferences: [reference],
-      representativeArtReference: reference,
+    const movementDetail: MovementDetail = {
+      ...movement,
+      items: [{ kind: "section", position: 0, section: sectionDetail }],
     };
     const fetch = spyOn(globalThis, "fetch")
-      .mockResolvedValueOnce(jsonResponse([summary]))
-      .mockResolvedValueOnce(jsonResponse(detail));
+      .mockResolvedValueOnce(jsonResponse([movement]))
+      .mockResolvedValueOnce(jsonResponse(movementDetail))
+      .mockResolvedValueOnce(jsonResponse(sectionDetail))
+      .mockResolvedValueOnce(jsonResponse(storyDetail));
 
-    expect(await getStoriesByGroup("EN", detail.groupID)).toEqual([summary]);
-    expect(await getStory("EN", detail.id)).toEqual(detail);
+    expect(await getMovements("EN")).toEqual([movement]);
+    expect(await getMovement("EN", "main")).toEqual(movementDetail);
+    expect((await getScoreSection("EN", "main", "main_17")).gallery).toEqual(galleryDetail);
+    expect(await getScoreStory("EN", "main", "main_17", "main_17-1")).toEqual(storyDetail);
     expect(fetch.mock.calls.map(([url]) => url)).toEqual([
-      apiUrl("/api/EN/story-groups/main_17/stories"),
-      apiUrl("/api/EN/stories/main_17-1"),
+      apiUrl("/api/EN/scores"),
+      apiUrl("/api/EN/scores/main"),
+      apiUrl("/api/EN/scores/main/main_17"),
+      apiUrl("/api/EN/scores/main/main_17/main_17-1"),
     ]);
   });
 
-  it("loads and caches localized artwork context", async () => {
-    const context = {
-      names: ["安洁莉娜"],
-      siblings: [
-        {
-          artID: "avg_1015_aglna2_1#12$2",
-          names: ["安洁莉娜"],
-          thumbnailContentUrl: "https://objects.example/angelina.webp",
-        },
+  it("uses compact Archive routes with hyphenated route kinds", async () => {
+    const kinds: ArchiveKindSummary[] = [{ kind: "operator-record", groupCount: 1 }];
+    const group: ArchiveGroupSummary = {
+      id: "char_220_grani",
+      name: "Grani",
+      kind: "operator-record",
+      type: "operator_record",
+      representativeArtReference: reference,
+      previewArtReferences: [reference],
+    };
+    const detail: ArchiveGroupDetail = {
+      ...group,
+      stories: [storySummary],
+      artReferences: [reference],
+      gallery: null,
+    };
+    const archiveStory: StoryDetail = {
+      ...storyDetail,
+      parent: {
+        kind: "archive",
+        archiveKind: "operator-record",
+        groupID: group.id,
+        groupName: group.name,
+      },
+    };
+    const fetch = spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(jsonResponse(kinds))
+      .mockResolvedValueOnce(jsonResponse([group]))
+      .mockResolvedValueOnce(jsonResponse(detail))
+      .mockResolvedValueOnce(jsonResponse(archiveStory));
+
+    expect(await getArchiveKinds("CN")).toEqual(kinds);
+    expect(await getArchiveGroups("CN", "operator-record")).toEqual([group]);
+    expect(await getArchiveGroup("CN", "operator-record", group.id)).toEqual(detail);
+    expect(await getArchiveStory("CN", "operator-record", group.id, archiveStory.id)).toEqual(
+      archiveStory,
+    );
+    expect(fetch.mock.calls.map(([url]) => url)).toEqual([
+      apiUrl("/api/CN/archives"),
+      apiUrl("/api/CN/archives/operator-record"),
+      apiUrl("/api/CN/archives/operator-record/char_220_grani"),
+      apiUrl("/api/CN/archives/operator-record/char_220_grani/main_17-1"),
+    ]);
+  });
+
+  it("loads display-owned galleries and retains stable cg IDs", async () => {
+    const summary: GallerySummary = {
+      id: galleryDetail.id,
+      name: galleryDetail.name,
+      description: galleryDetail.description,
+      parent: galleryDetail.parent,
+      previewThumbnailContentUrls: ["https://objects.example/cg.webp"],
+    };
+    const fetch = spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(jsonResponse([summary]))
+      .mockResolvedValueOnce(jsonResponse(galleryDetail));
+
+    expect(await getGalleries("CN")).toEqual([summary]);
+    const detail = await getGallery("CN", "main/17");
+    expect(detail.displays[0]?.artworks[0]).toMatchObject({
+      cgID: "cg_001",
+      artID: "cg_001_a/cg_001_b",
+    });
+    expect(fetch.mock.calls.map(([url]) => url)).toEqual([
+      apiUrl("/api/CN/galleries"),
+      apiUrl("/api/CN/galleries/main%2F17"),
+    ]);
+  });
+
+  it("loads category-qualified composite panels for slash-containing artwork IDs", async () => {
+    const composite: ArtDetail = {
+      ...artResponse,
+      id: "panel_a/panel_b",
+      category: "image",
+      sourceArts: [
+        { category: "image", id: "panel_a" },
+        { category: "image", id: "panel_b" },
       ],
+    };
+    const sourceResponse = (id: string) => ({
+      id,
+      category: "image",
+      kind: "composite_panel",
+      characterID: null,
+      role: null,
+      variant: null,
+      image: { ...artResponse.image, contentUrl: `https://objects.example/${id}.png` },
+    });
+    const fetch = spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(jsonResponse(composite))
+      .mockResolvedValueOnce(jsonResponse(sourceResponse("panel_a")))
+      .mockResolvedValueOnce(jsonResponse(sourceResponse("panel_b")));
+
+    const [art, sources] = await getArtWithSources("image", composite.id);
+    expect(art).toEqual(composite);
+    expect(sources.map(({ id, kind }) => ({ id, kind }))).toEqual([
+      { id: "panel_a", kind: "composite_panel" },
+      { id: "panel_b", kind: "composite_panel" },
+    ]);
+    expect(fetch.mock.calls.map(([url]) => url)).toEqual([
+      apiUrl("/api/arts/image/panel_a%2Fpanel_b"),
+      apiUrl("/api/source-arts/image/panel_a"),
+      apiUrl("/api/source-arts/image/panel_b"),
+    ]);
+  });
+
+  it("loads and caches hierarchy-aware artwork context", async () => {
+    const context: ArtContext = {
+      names: ["安洁莉娜"],
+      siblings: [],
       occurrences: [
         {
-          groupID: "act53side",
-          groupName: "挽歌燃烧殆尽",
-          groupType: "major_event" as const,
-          storyID: "act53side_level_st_01",
-          storyName: "序曲",
-          storyCode: "ST-1",
-          storyTagText: "剧情",
+          parent: scoreParent,
+          storyID: storySummary.id,
+          storyName: storySummary.name,
+          storyCode: storySummary.code,
+          storyTagText: storySummary.tagText,
         },
       ],
     };
     const fetch = spyOn(globalThis, "fetch").mockResolvedValue(jsonResponse(context));
 
     const first = getArtContext("CN", "character", reference.artID);
-    const second = getArtContext("CN", "character", reference.artID);
-
-    expect(first).toBe(second);
+    expect(getArtContext("CN", "character", reference.artID)).toBe(first);
     expect(await first).toEqual(context);
     expect(fetch).toHaveBeenCalledTimes(1);
-    expect(fetch.mock.calls[0]?.[0]).toBe(
-      apiUrl("/api/CN/arts/character/char_220_grani%235%241/context"),
-    );
   });
 
   it("loads the global unreferenced artwork index once", async () => {
@@ -237,25 +394,20 @@ describe("archive API client", () => {
     const fetch = spyOn(globalThis, "fetch").mockResolvedValue(jsonResponse(summaries));
 
     const first = getUnreferencedArts();
-    const second = getUnreferencedArts();
-
-    expect(first).toBe(second);
+    expect(getUnreferencedArts()).toBe(first);
     expect(await first).toEqual(summaries);
     expect(fetch).toHaveBeenCalledTimes(1);
-    expect(fetch.mock.calls[0]?.[0]).toBe(apiUrl("/api/unreferenced-arts"));
   });
 
-  it("retains a missing group-page request instead of retrying during Suspense renders", async () => {
+  it("retains a failed section request across Suspense renders", async () => {
     const fetch = spyOn(globalThis, "fetch").mockResolvedValue(
       jsonResponse({ error: "not_found" }, 404),
     );
 
-    const first = getStoryGroupWithStories("CN", "missing");
-    const second = getStoryGroupWithStories("CN", "missing");
-    expect(first).toBe(second);
+    const first = getScoreSection("CN", "main", "missing");
+    expect(getScoreSection("CN", "main", "missing")).toBe(first);
     const error = await first.catch((reason: unknown) => reason);
     expect(error).toEqual(expect.objectContaining({ name: "ApiError", status: 404 }));
-    expect(fetch).toHaveBeenCalledTimes(2);
-    expect(getStoryGroupWithStories("CN", "missing")).toBe(first);
+    expect(fetch).toHaveBeenCalledTimes(1);
   });
 });

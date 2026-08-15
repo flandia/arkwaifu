@@ -22,7 +22,7 @@ import httpx
 from ..asyncio_tools import await_owned
 from ..domain import LocaleManifest, LocaleUnit
 from ..local_path import resolve_local_path, safe_relative_path
-from ..locale import parse_galleries, parse_story_groups
+from ..locale import parse_galleries, parse_story_data
 from .cache import UpstreamCache
 
 _REPOSITORY = "ArknightsAssets/ArknightsGamedata"
@@ -67,7 +67,7 @@ _SELECTED_PATHS = {
 }
 # Bump this when the selected inputs or extracted directory layout changes;
 # resVersion identifies upstream content, not the local extraction recipe.
-_LOCALE_EXTRACTION_CACHE_FORMAT = "5"
+_LOCALE_EXTRACTION_CACHE_FORMAT = "6"
 _RAW_CONTENT_ACCEPT = "application/vnd.github.raw+json"
 
 _ASSET_PREFIX = Path("assets/torappu/dynamicassets")
@@ -94,11 +94,32 @@ def _parse_manifest(
 ) -> LocaleManifest:
     """Parse the selected files for one locale into publication records."""
 
+    movements, sections, archives = parse_story_data(data_root)
+    collection_names = {record.collection_id: record.name for record in (*sections, *archives)}
+    legacy_collections = {archive.id: archive.collection_id for archive in archives}
+    for archive in archives:
+        if archive.archive_kind in {"integrated_strategies", "reclamation_algorithm"}:
+            _, separator, source_id = archive.id.partition(":")
+            if separator:
+                legacy_collections[source_id] = archive.collection_id
+    legacy_collections.update(
+        {
+            section.review_group_id: section.collection_id
+            for section in sections
+            if section.review_group_id is not None
+        }
+    )
     return LocaleManifest(
         unit=unit,
         upstream_version=upstream_version,
-        story_groups=parse_story_groups(data_root),
-        galleries=parse_galleries(data_root),
+        movements=movements,
+        movement_sections=sections,
+        archive_groups=archives,
+        galleries=parse_galleries(
+            data_root,
+            collection_names=collection_names,
+            legacy_collections=legacy_collections,
+        ),
     )
 
 

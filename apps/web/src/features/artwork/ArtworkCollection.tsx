@@ -1,8 +1,10 @@
 import { useState } from "react";
-import type { ArtCategory, Locale } from "../../api";
+import type { ArtCategory, Locale } from "../../api/types";
 import { useUi } from "../../i18n";
 import { useCategoryLabel } from "../../navigation";
-import { ActionButton, ArtworkGrid, SectionHeading } from "../../shared/ui";
+import { ActionButton } from "../../shared/ui/Action";
+import { ArtworkGrid } from "../../shared/ui/ArtworkGrid";
+import { SectionHeading } from "../../shared/ui/Typography";
 import { ArtworkCard } from "./ArtworkCard";
 
 const categoryOrder: ArtCategory[] = ["image", "background", "item", "character"];
@@ -32,6 +34,7 @@ function ArtworkCategorySection({
   items,
   language,
   locale,
+  tone,
 }: {
   category: ArtCategory;
   eyebrow?: string;
@@ -39,6 +42,7 @@ function ArtworkCategorySection({
   items: ArtworkCollectionItem[];
   language: string;
   locale: Locale;
+  tone: "light" | "dark";
 }) {
   const { t } = useUi();
   const labelCategory = useCategoryLabel();
@@ -48,9 +52,10 @@ function ArtworkCategorySection({
   return (
     <section className="scroll-mt-8" id={category}>
       <SectionHeading
-        eyebrow={eyebrow ?? t("story.assetCategory")}
+        eyebrow={eyebrow ?? t("art.assetCategory")}
         meta={new Intl.NumberFormat().format(items.length)}
         title={labelCategory(category, true)}
+        tone={tone}
       />
       {items.length ? (
         <ArtworkGrid>
@@ -69,7 +74,13 @@ function ArtworkCategorySection({
           ))}
         </ArtworkGrid>
       ) : (
-        <p className="m-0 leading-relaxed text-muted">{t("art.noArtworkInCategory")}</p>
+        <p
+          className={
+            tone === "dark" ? "m-0 leading-relaxed text-white/70" : "m-0 leading-relaxed text-muted"
+          }
+        >
+          {t("art.noArtworkInCategory")}
+        </p>
       )}
       {items.length > initialArtworkCount ? (
         <div className="mt-8 flex justify-center">
@@ -92,12 +103,14 @@ export function ArtworkCollection({
   language,
   locale,
   artworks,
+  tone = "light",
 }: {
   eyebrow?: string;
   from: string;
   language: string;
   locale: Locale;
   artworks: ArtworkCollectionItem[];
+  tone?: "light" | "dark";
 }) {
   const byCategory = new Map<ArtCategory, ArtworkCollectionItem[]>();
   for (const artwork of artworks) {
@@ -119,6 +132,7 @@ export function ArtworkCollection({
             key={`${from}:${category}`}
             language={language}
             locale={locale}
+            tone={tone}
           />
         );
       })}

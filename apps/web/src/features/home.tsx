@@ -1,19 +1,13 @@
 import { use } from "react";
 import { useParams } from "react-router";
-import { getHomeCollections, type ArtCategory } from "../api";
+import { getHomeCollections } from "../api/home";
+import type { ArchiveKind } from "../api/types";
 import { useUi } from "../i18n";
-import {
-  requiredLocale,
-  storySections,
-  TransitionLink,
-  useCategoryLabel,
-  useStorySections,
-  type StorySection,
-} from "../navigation";
+import { archiveKindLabel, archiveKinds, requiredLocale, TransitionLink } from "../navigation";
 import { ArchivePage } from "../shared/Page";
-import { ActionLink, Eyebrow, SectionHeading, cn } from "../shared/ui";
-
-const artCategories: ArtCategory[] = ["image", "background", "item", "character"];
+import { ActionLink } from "../shared/ui/Action";
+import { cn } from "../shared/ui/cn";
+import { Eyebrow, SectionHeading } from "../shared/ui/Typography";
 
 function EntryCard({
   count,
@@ -31,12 +25,12 @@ function EntryCard({
   return (
     <TransitionLink
       className={cn(
-        "group grid min-h-48 grid-cols-[2.5rem_minmax(0,1fr)_auto] gap-4 border-r-2 border-b-2 border-ink bg-surface p-5 no-underline transition-colors hover:bg-brand-soft",
+        "group grid min-h-48 grid-cols-[2.5rem_minmax(0,1fr)_auto] gap-4 border-r-2 border-b-2 border-ink bg-surface p-5 no-underline transition-colors hover:bg-brand-soft [contain-intrinsic-size:auto_12rem] [content-visibility:auto]",
         featured && "bg-brand text-white hover:bg-brand/90",
       )}
       to={to}
     >
-      <span className="font-mono text-xs font-extrabold tabular-nums opacity-70" aria-hidden="true">
+      <span className="font-mono text-xs font-extrabold opacity-70 tabular-nums" aria-hidden="true">
         {index}
       </span>
       <h3 className="m-0 self-center text-[clamp(1.5rem,3vw,2.75rem)] leading-none font-black tracking-tight text-balance uppercase">
@@ -52,16 +46,12 @@ function EntryCard({
 export function HomePage() {
   const { t } = useUi();
   const locale = requiredLocale(useParams().locale);
-  const localizedSections = useStorySections();
-  const labelCategory = useCategoryLabel();
-  const [groups, galleries] = use(getHomeCollections(locale));
-
-  const counts = Object.fromEntries(
-    Object.entries(storySections).map(([slug, section]) => [
-      slug,
-      groups.filter((group) => group.type === section.type).length,
-    ]),
-  ) as Record<StorySection, number>;
+  const { movements, archives, galleries } = use(getHomeCollections(locale));
+  const archiveCounts = new Map(archives.map((summary) => [summary.kind, summary.groupCount]));
+  const scoreCollectionCount = movements.reduce(
+    (count, movement) => count + movement.sectionCount,
+    0,
+  );
 
   return (
     <ArchivePage description={t("home.description")} title={t("home.pageTitle")}>
@@ -78,11 +68,11 @@ export function HomePage() {
             {t("home.description")}
           </p>
           <div className="mt-8 flex flex-wrap gap-4 max-[42rem]:grid">
-            <ActionLink adornment="forward" to={`/${locale}/stories/main`} transition="forward">
-              {t("home.browseStories")}
+            <ActionLink adornment="forward" to={`/${locale}/scores`} transition="forward">
+              {t("home.openScores")}
             </ActionLink>
-            <ActionLink variant="secondary" to={`/${locale}/galleries`}>
-              {t("home.openGalleries")}
+            <ActionLink variant="secondary" to={`/${locale}/archives`}>
+              {t("home.openArchives")}
             </ActionLink>
           </div>
         </div>
@@ -106,40 +96,29 @@ export function HomePage() {
           titleId="archive-summary-title"
         />
         <div className="grid border-t-2 border-l-2 border-ink md:grid-cols-2">
-          {Object.entries(localizedSections).map(([slug, section]) => (
+          <EntryCard
+            count={scoreCollectionCount}
+            featured
+            index="S"
+            label={t("score.title")}
+            to={`/${locale}/scores`}
+          />
+          {(Object.keys(archiveKinds) as ArchiveKind[]).map((kind) => (
             <EntryCard
-              count={counts[slug as StorySection]}
-              index={section.index}
-              key={slug}
-              label={section.title}
-              to={`/${locale}/stories/${slug}`}
+              count={archiveCounts.get(kind) ?? 0}
+              index={archiveKinds[kind].index}
+              key={kind}
+              label={archiveKindLabel(kind, t)}
+              to={`/${locale}/archives/${kind}`}
             />
           ))}
           <EntryCard
             count={galleries.length}
-            featured
-            index="08"
-            label={t("navigation.galleries")}
+            index="C1"
+            label={t("gallery.title")}
             to={`/${locale}/galleries`}
           />
         </div>
-      </section>
-
-      <section className="mt-[clamp(4rem,9vw,8rem)]" aria-labelledby="art-taxonomy-title">
-        <SectionHeading
-          eyebrow={t("home.taxonomyEyebrow")}
-          title={t("home.taxonomyTitle")}
-          titleId="art-taxonomy-title"
-        />
-        <ul className="m-0 grid list-none border-t-2 border-l-2 border-ink p-0 sm:grid-cols-2 lg:grid-cols-4">
-          {artCategories.map((category) => (
-            <li className="border-r-2 border-b-2 border-ink bg-surface p-5" key={category}>
-              <strong className="text-lg font-black uppercase">
-                {labelCategory(category, true)}
-              </strong>
-            </li>
-          ))}
-        </ul>
       </section>
     </ArchivePage>
   );

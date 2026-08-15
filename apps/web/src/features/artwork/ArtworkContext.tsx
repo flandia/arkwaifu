@@ -1,34 +1,39 @@
-import type { ArtContext, ArtOccurrence, Locale, StoryGroupType } from "../../api";
+import type { ArtContext, ArtOccurrence, Locale, StoryParent } from "../../api/types";
 import { useUi } from "../../i18n";
 import {
+  archiveKindLabel,
   localeLanguageTag,
-  sectionForType,
+  storyParentPath,
+  storyPath,
   TransitionLink,
-  useStorySections,
 } from "../../navigation";
-import { ArtworkGrid, Eyebrow, SectionHeading } from "../../shared/ui";
+import { ArtworkGrid } from "../../shared/ui/ArtworkGrid";
+import { Eyebrow, SectionHeading } from "../../shared/ui/Typography";
 import { ArtworkCard } from "./ArtworkCard";
 
 interface OccurrenceGroup {
-  id: string;
-  name: string;
-  type: StoryGroupType;
+  key: string;
+  parent: StoryParent;
   stories: ArtOccurrence[];
 }
 
 function groupOccurrences(occurrences: ArtOccurrence[]): OccurrenceGroup[] {
   const groups = new Map<string, OccurrenceGroup>();
   for (const occurrence of occurrences) {
-    const group = groups.get(occurrence.groupID) ?? {
-      id: occurrence.groupID,
-      name: occurrence.groupName,
-      type: occurrence.groupType,
+    const parent = occurrence.parent;
+    const key =
+      parent.kind === "score"
+        ? `score:${parent.movementID}:${parent.sectionID}`
+        : `archive:${parent.archiveKind}:${parent.groupID}`;
+    const group = groups.get(key) ?? {
+      key,
+      parent,
       stories: [],
     };
     if (!group.stories.some((story) => story.storyID === occurrence.storyID)) {
       group.stories.push(occurrence);
     }
-    groups.set(group.id, group);
+    groups.set(group.key, group);
   }
   return [...groups.values()];
 }
@@ -77,7 +82,6 @@ export function SiblingCharacters({
 
 export function ArtworkOccurrences({ context, locale }: { context: ArtContext; locale: Locale }) {
   const { t } = useUi();
-  const sections = useStorySections();
   const language = localeLanguageTag(locale);
   const groups = groupOccurrences(context.occurrences);
   if (!groups.length) return null;
@@ -93,19 +97,24 @@ export function ArtworkOccurrences({ context, locale }: { context: ArtContext; l
       />
       <div className="grid gap-6 lg:grid-cols-2">
         {groups.map((group) => {
-          const section = sectionForType(group.type);
-          const groupPath = `/${locale}/stories/${section}/${encodeURIComponent(group.id)}`;
+          const groupPath = storyParentPath(locale, group.parent);
+          const ownerName =
+            group.parent.kind === "score" ? group.parent.sectionName : group.parent.groupName;
+          const hierarchy =
+            group.parent.kind === "score"
+              ? group.parent.movementName
+              : archiveKindLabel(group.parent.archiveKind, t);
           return (
-            <article className="border-2 border-ink bg-surface" key={group.id}>
+            <article className="border-2 border-ink bg-surface" key={group.key}>
               <header className="border-b-2 border-ink p-5">
-                <Eyebrow>{sections[section].title}</Eyebrow>
+                <Eyebrow>{hierarchy}</Eyebrow>
                 <h3 className="m-0 text-2xl font-black" lang={language}>
                   <TransitionLink className="hover:bg-brand-soft" to={groupPath}>
-                    {group.name || t("story.untitledGroup")}
+                    {ownerName || t("story.untitledGroup")}
                   </TransitionLink>
                 </h3>
                 <code className="mt-2 block text-xs text-muted" translate="no">
-                  {group.id}
+                  {group.parent.kind === "score" ? group.parent.sectionID : group.parent.groupID}
                 </code>
               </header>
               <ul className="m-0 list-none divide-y divide-line p-0">
@@ -113,7 +122,7 @@ export function ArtworkOccurrences({ context, locale }: { context: ArtContext; l
                   <li key={story.storyID}>
                     <TransitionLink
                       className="grid min-h-14 grid-cols-[minmax(0,1fr)_auto] items-center gap-4 px-5 py-3 no-underline hover:bg-brand-soft"
-                      to={`${groupPath}/${encodeURIComponent(story.storyID)}`}
+                      to={storyPath(locale, story.parent, story.storyID)}
                       transition="forward"
                     >
                       <strong className="min-w-0 break-words" lang={language}>
