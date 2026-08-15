@@ -135,7 +135,9 @@ let fixture_schema =
     CREATE TABLE gallery_display_artwork_panels (locale TEXT NOT NULL,
       gallery_id TEXT NOT NULL, display_id TEXT NOT NULL,
       artwork_position INTEGER NOT NULL, position INTEGER NOT NULL,
-      panel_art_id TEXT NOT NULL, width INTEGER NOT NULL, height INTEGER NOT NULL,
+      panel_art_id TEXT NOT NULL CHECK(length(panel_art_id) > 0
+        AND panel_art_id = lower(panel_art_id) AND instr(panel_art_id, '/') = 0),
+      width INTEGER NOT NULL, height INTEGER NOT NULL,
       PRIMARY KEY(locale, gallery_id, display_id, artwork_position, position));
     PRAGMA user_version = 2;
     COMMIT;
@@ -152,16 +154,16 @@ let fixture_rows =
       ('amiya', 'character', 'ART/art-v1/composition/character/amiya.png', 104, 80, 160),
       ('amiya#1', 'character', 'ART/art-v1/composition/character/amiya%231.png', 104, 80, 160),
       ('amiyaa#1', 'character', 'ART/art-v1/composition/character/amiyaa%231.png', 104, 80, 160),
-      ('panel/source', 'image', 'ART/art-v1/composition/image/panel%2Fsource.png', 51, 70, 60),
+      ('panel_source', 'image', 'ART/art-v1/composition/image/panel_source.png', 51, 70, 60),
       ('unused', 'image', 'ART/art-v1/composition/image/unused.png', 105, 80, 80);
     INSERT INTO source_arts VALUES
       ('character', 'amiya-body', 'character', 'amiya', 'body', 'default',
        'ART/art-v1/source/character/amiya-body.png', 50, 80, 160),
-      ('image', 'panel/source', 'composite_panel', NULL, NULL, NULL,
-       'ART/art-v1/source/image/panel%2Fsource.png', 51, 70, 60);
+      ('image', 'panel_source', 'composite_panel', NULL, NULL, NULL,
+       'ART/art-v1/source/image/panel_source.png', 51, 70, 60);
     INSERT INTO art_source_refs VALUES
       ('character', 'amiya', 0, 'character', 'amiya-body'),
-      ('image', 'cg/part', 0, 'image', 'panel/source');
+      ('image', 'cg/part', 0, 'image', 'panel_source');
     INSERT INTO score_assets VALUES
       ('icon', 'icon-main', 'SCORE/icon/icon-main.png', 10, 64, 64),
       ('background', 'background-main', 'SCORE/background/background-main.png', 20, 1920, 1080),
@@ -227,7 +229,7 @@ let fixture_rows =
       ('CN', 'event-gallery', 'event-display', 0, 'upstream-event',
        'display-second', 'image', 'none');
     INSERT INTO gallery_display_artwork_panels VALUES
-      ('CN', 'score-gallery', 'display-two', 0, 0, 'panel/source', 70, 60);
+      ('CN', 'score-gallery', 'display-two', 0, 0, 'panel_source', 70, 60);
     COMMIT;
   |}
 
@@ -282,7 +284,7 @@ let test_art_json () =
             width = 10;
             height = 20;
           };
-        source_arts = [ { id = "panel/source"; category = "image" } ];
+        source_arts = [ { id = "panel_source"; category = "image" } ];
       }
   in
   let open Yojson.Safe.Util in
@@ -347,7 +349,7 @@ let test_database_contract () =
   Alcotest.(check string) "event subtype" "side_story"
     (List.hd groups).group.group_type;
   let source =
-    Lwt_main.run (Database.source_art database "image" "panel/source")
+    Lwt_main.run (Database.source_art database "image" "panel_source")
     |> require_ok "composite source"
   in
   Alcotest.(check string) "source kind" "composite_panel" source.kind;
@@ -445,7 +447,7 @@ let test_http_contract () =
   let composite = response handler "/api/arts/image/cg%2Fpart" in
   Alcotest.(check int) "encoded composite art ID" 200
     (Dream.status composite |> Dream.status_to_int);
-  let source = response handler "/api/source-arts/image/panel%2Fsource" in
+  let source = response handler "/api/source-arts/image/panel_source" in
   Alcotest.(check int) "category-qualified source art" 200
     (Dream.status source |> Dream.status_to_int);
   let mirror_art =
