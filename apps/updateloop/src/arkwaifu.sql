@@ -375,6 +375,34 @@ CREATE TABLE gallery_display_artwork_panels (
         ) ON DELETE CASCADE
 ) STRICT;
 
+-- Search rows are a derived, locale-scoped index. The hierarchy and asset
+-- tables remain authoritative; the updater rebuilds this table after every
+-- art or locale transaction so the reader never observes a stale index.
+CREATE TABLE search_entries (
+    entry_key TEXT PRIMARY KEY CHECK (length(entry_key) > 0),
+    locale TEXT NOT NULL
+        CHECK (locale IN ('CN', 'EN', 'JP', 'KR', 'TW')),
+    kind TEXT NOT NULL
+        CHECK (kind IN (
+            'story', 'movement', 'section', 'archive_group', 'gallery', 'art'
+        )),
+    entry_id TEXT NOT NULL CHECK (length(entry_id) > 0),
+    category TEXT
+        CHECK (category IS NULL OR category IN ('image', 'background', 'item', 'character')),
+    collection_id TEXT,
+    title TEXT NOT NULL,
+    subtitle TEXT,
+    search_text TEXT NOT NULL CHECK (length(search_text) > 0),
+    parent_json TEXT CHECK (parent_json IS NULL OR json_valid(parent_json)),
+    thumbnail_object_key TEXT,
+    UNIQUE (locale, kind, entry_id, category),
+    CHECK ((kind = 'art') = (category IS NOT NULL)),
+    FOREIGN KEY (locale) REFERENCES unit_versions (unit) ON DELETE CASCADE
+) STRICT;
+
+CREATE INDEX search_entries_by_locale
+    ON search_entries (locale, kind, entry_id);
+
 PRAGMA user_version = 2;
 
 COMMIT;

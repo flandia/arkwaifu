@@ -50,6 +50,7 @@ type t = {
     (Model.story_detail, error) result Lwt.t;
   galleries : string -> (Model.gallery_summary list, error) result Lwt.t;
   gallery : string -> string -> (Model.gallery, error) result Lwt.t;
+  search : string -> string -> (Model.search_result list, error) result Lwt.t;
 }
 
 let unique_story_art_references references =
@@ -767,6 +768,52 @@ module Query = struct
         WHERE gallery.locale = ?
         ORDER BY gallery.position, display.position
       |}
+
+  let search =
+    (t2 string string ->* string)
+      {|
+        WITH input(query) AS (SELECT lower(trim(?)))
+        SELECT json_object(
+          'kind', entry.kind,
+          'id', entry.entry_id,
+          'category', entry.category,
+          'title', entry.title,
+          'subtitle', entry.subtitle,
+          'thumbnailObjectKey', entry.thumbnail_object_key,
+          'parent', CASE
+            WHEN entry.parent_json IS NULL THEN NULL
+            ELSE json(entry.parent_json)
+          END
+        )
+        FROM search_entries AS entry
+        CROSS JOIN input
+        WHERE entry.locale = ?
+          AND instr(lower(entry.search_text), input.query) > 0
+        ORDER BY
+          CASE
+            WHEN lower(entry.entry_id) = input.query
+              OR (entry.kind = 'story' AND lower(entry.subtitle) = input.query)
+              THEN 0
+            WHEN lower(entry.title) = input.query THEN 1
+            WHEN instr(lower(entry.entry_id), input.query) = 1
+              OR (entry.kind = 'story'
+                  AND instr(lower(entry.subtitle), input.query) = 1)
+              THEN 2
+            WHEN instr(lower(entry.title), input.query) = 1 THEN 3
+            ELSE 4
+          END,
+          CASE entry.kind
+            WHEN 'story' THEN 0
+            WHEN 'art' THEN 1
+            WHEN 'gallery' THEN 2
+            WHEN 'section' THEN 3
+            WHEN 'archive_group' THEN 4
+            WHEN 'movement' THEN 5
+            ELSE 6
+          END,
+          lower(entry.title), lower(entry.entry_id), COALESCE(entry.category, '')
+        LIMIT 100
+      |}
 end
 
 let unavailable error = `Unavailable (Caqti_error.show error)
@@ -1002,6 +1049,24 @@ let decode_parent value =
           group_name = Json.string value "groupName";
         }
   | kind -> invalid_arg ("unknown collection parent: " ^ kind)
+
+let decode_search_result raw =
+  let value = Json.parse raw in
+  let parent =
+    match Yojson.Safe.Util.member "parent" value with
+    | `Null -> None
+    | parent -> Some (decode_parent parent)
+  in
+  Model.
+    {
+      kind = Json.string value "kind";
+      id = Json.string value "id";
+      category = Json.string_opt value "category";
+      title = Json.string value "title";
+      subtitle = Json.string_opt value "subtitle";
+      thumbnail_object_key = Json.string_opt value "thumbnailObjectKey";
+      parent;
+    }
 
 let decode_archive_group raw =
   let value = Json.parse raw in
@@ -1366,6 +1431,16 @@ let sqlite_with_pool_observer ~on_acquire path =
             decode_result "gallery" (fun () ->
                 decode_gallery base displays artworks)
       in
+      let search locale query =
+        let query = String.trim query in
+        if String.equal query "" then Lwt.return (Ok [])
+        else
+          use (fun (module Db) ->
+              Db.collect_list Query.search (query, locale))
+          >|= function
+          | Error error -> Error error
+          | Ok raws -> decode_result "search results" (fun () -> List.map decode_search_result raws)
+      in
       let gallery_by_collection locale collection_id =
         use (fun (module Db) ->
             Db.find_opt Query.gallery_by_collection (locale, collection_id))
@@ -1677,6 +1752,7 @@ let sqlite_with_pool_observer ~on_acquire path =
           archive_story;
           galleries;
           gallery;
+          search;
         }
 
 let sqlite path = sqlite_with_pool_observer ~on_acquire:(fun () -> ()) path
@@ -1885,6 +1961,9 @@ let start_live ~fetch ~cache_dir ~download_timeout_seconds =
             gallery =
               (fun locale id ->
                 with_current (fun value -> value.gallery locale id));
+            search =
+              (fun locale query ->
+                with_current (fun value -> value.search locale query));
           }
         in
         Lwt.return (Ok (database, state))
@@ -1993,3 +2072,4 @@ let archive_story (database : t) locale kind group_id story_id =
 
 let galleries (database : t) locale = database.galleries locale
 let gallery (database : t) locale id = database.gallery locale id
+let search (database : t) locale query = database.search locale query

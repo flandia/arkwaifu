@@ -103,3 +103,4 @@ val archive_story :
 
 val galleries : t -> string -> (Model.gallery_summary list, error) result Lwt.t
 val gallery : t -> string -> string -> (Model.gallery, error) result Lwt.t
+val search : t -> string -> string -> (Model.search_result list, error) result Lwt.t

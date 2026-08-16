@@ -138,6 +138,13 @@ export function SiteNavigation({
             onNavigate={onNavigate}
             to={`/${locale}`}
           />
+          <NavItem
+            active={pathname === `/${locale}/search`}
+            index="01"
+            label={t("navigation.search")}
+            onNavigate={onNavigate}
+            to={`/${locale}/search`}
+          />
         </ul>
 
         <SectionLabel>{t("navigation.scores")}</SectionLabel>

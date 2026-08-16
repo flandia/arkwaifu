@@ -218,6 +218,16 @@ type art_context = {
   occurrences : art_occurrence list;
 }
 
+type search_result = {
+  kind : string;
+  id : string;
+  category : string option;
+  title : string;
+  subtitle : string option;
+  thumbnail_object_key : string option;
+  parent : collection_parent option;
+}
+
 val content_url : object_base_url:string -> string -> string
 val art_json : object_base_url:string -> art -> Yojson.Safe.t
 val source_art_json : object_base_url:string -> source_art -> Yojson.Safe.t
@@ -240,3 +250,4 @@ val gallery_summary_json :
   object_base_url:string -> gallery_summary -> Yojson.Safe.t
 val gallery_json : object_base_url:string -> gallery -> Yojson.Safe.t
 val art_context_json : object_base_url:string -> art_context -> Yojson.Safe.t
+val search_result_json : object_base_url:string -> search_result -> Yojson.Safe.t

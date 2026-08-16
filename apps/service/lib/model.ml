@@ -216,6 +216,16 @@ type art_context = {
   occurrences : art_occurrence list;
 }
 
+type search_result = {
+  kind : string;
+  id : string;
+  category : string option;
+  title : string;
+  subtitle : string option;
+  thumbnail_object_key : string option;
+  parent : collection_parent option;
+}
+
 let trim_trailing_slash value =
   if String.length value > 0 && value.[String.length value - 1] = '/' then
     String.sub value 0 (String.length value - 1)
@@ -625,4 +635,23 @@ let art_context_json ~object_base_url (context : art_context) =
       ( "siblings",
         `List (List.map (art_sibling_json ~object_base_url) context.siblings) );
       ("occurrences", `List (List.map art_occurrence_json context.occurrences));
+    ]
+
+let search_result_json ~object_base_url (result : search_result) =
+  `Assoc
+    [
+      ("kind", `String result.kind);
+      ("id", `String result.id);
+      ("category", option_string result.category);
+      ("title", `String result.title);
+      ("subtitle", option_string result.subtitle);
+      ( "thumbnailContentUrl",
+        match result.thumbnail_object_key with
+        | None -> `Null
+        | Some object_key ->
+            `String (thumbnail_content_url ~object_base_url object_key) );
+      ( "parent",
+        match result.parent with
+        | None -> `Null
+        | Some parent -> collection_parent_json parent );
     ]

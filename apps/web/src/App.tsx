@@ -59,6 +59,9 @@ const ScoreSectionPage = lazy(async () => ({
 const ScoreStoryPage = lazy(async () => ({
   default: (await import("./features/scores/ScoreStoryPage")).ScoreStoryPage,
 }));
+const SearchPage = lazy(async () => ({
+  default: (await import("./features/search")).SearchPage,
+}));
 const UnreferencedArtPage = lazy(async () => ({
   default: (await import("./features/artwork/UnreferencedArtPage")).UnreferencedArtPage,
 }));
@@ -179,6 +182,7 @@ export default function App() {
       <Route element={<Navigate replace to={`/${preferredLocale()}`} />} path="/" />
       <Route element={<LocalizedLayout />} path="/:locale">
         <Route element={<HomePage />} index />
+        <Route element={<SearchPage />} path="search" />
         <Route element={<ScoreIndexPage />} path="scores" />
         <Route element={<MovementPage />} path="scores/:movementID" />
         <Route element={<ScoreSectionPage />} path="scores/:movementID/:sectionID" />

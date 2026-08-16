@@ -8,6 +8,7 @@ import {
 import { getArt, getArtContext, getArtWithSources } from "./api/artwork";
 import { ApiError, clearApiCache, resolveApiBaseUrl } from "./api/client";
 import { getGalleries, getGallery } from "./api/galleries";
+import { getSearchResults } from "./api/search";
 import { getMovement, getMovements, getScoreSection, getScoreStory } from "./api/scores";
 import type {
   ArchiveGroupDetail,
@@ -397,6 +398,25 @@ describe("archive API client", () => {
     expect(getUnreferencedArts()).toBe(first);
     expect(await first).toEqual(summaries);
     expect(fetch).toHaveBeenCalledTimes(1);
+  });
+
+  it("encodes locale search queries and caches identical requests", async () => {
+    const results = [
+      {
+        kind: "art" as const,
+        id: "amiya",
+        category: "character" as const,
+        title: "Amiya",
+        subtitle: "character",
+        thumbnailContentUrl: "https://objects.example/amiya.webp",
+        parent: null,
+      },
+    ];
+    const fetch = spyOn(globalThis, "fetch").mockResolvedValue(jsonResponse(results));
+    const first = getSearchResults("EN", "Amiya & Grani");
+    expect(getSearchResults("EN", "Amiya & Grani")).toBe(first);
+    expect(await first).toEqual(results);
+    expect(fetch.mock.calls[0]?.[0]).toBe(apiUrl("/api/EN/search?q=Amiya%20%26%20Grani"));
   });
 
   it("retains a failed section request across Suspense renders", async () => {

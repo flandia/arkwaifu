@@ -21,6 +21,7 @@ or metadata failure returns HTTP 503 with
 | `GET /api/arts/:category/:id` | Composed artwork |
 | `GET /api/source-arts/:category/:id` | Category-qualified source artwork |
 | `GET /api/unreferenced-arts` | Unreferenced artwork array |
+| `GET /api/:locale/search?q=...` | Up to 100 ranked metadata search results |
 | `GET /api/:locale/arts/:category/:id/context` | Localized artwork context |
 | `GET /api/:locale/scores` | Movement summaries |
 | `GET /api/:locale/scores/:movementID` | Movement and ordered items |
@@ -119,6 +120,17 @@ panels leave all three null. Unreferenced artwork objects contain `id`,
 Artwork context contains `names`, character `siblings`, and `occurrences`.
 Every occurrence carries the same discriminated `parent` described below plus
 `storyID`, `storyName`, `storyCode`, and `storyTagText`.
+
+Search returns at most 100 unified results; the cap is fixed and cannot be
+changed by callers. A blank or missing `q` returns an empty JSON array, and
+queries are not rejected based on length. Each result has `kind`, `id`,
+`category` (or `null`),
+`title`, `subtitle` (or `null`), `thumbnailContentUrl` (or `null`), and
+`parent` (or `null`). Result kinds are `story`, `movement`, `section`,
+`archive_group`, `gallery`, and `art`. Story, section, archive-group, and
+gallery results include the structured hierarchy parent used by the frontend
+to construct an existing route. Search matches localized metadata and uses
+deterministic exact, prefix, and substring ranking.
 
 ## Parents and Stories
 

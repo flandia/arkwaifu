@@ -254,6 +254,11 @@ def test_gallery_writer_constraints_cascade_and_composite_missing_art(tmp_path):
         score_video_keys={},
     )
 
+    with sqlite3.connect(path) as connection:
+        assert connection.execute(
+            "SELECT kind, entry_id FROM search_entries ORDER BY kind, entry_id"
+        ).fetchall() == [("gallery", "gallery")]
+
     assert find_missing_art_references(path) == ("background/top/bottom",)
     with sqlite3.connect(path) as connection:
         connection.execute("PRAGMA foreign_keys = ON")
@@ -295,6 +300,15 @@ def test_gallery_writer_constraints_cascade_and_composite_missing_art(tmp_path):
         score_asset_keys={},
         score_video_keys={},
     )
+
+    with sqlite3.connect(path) as connection:
+        assert connection.execute(
+            "SELECT title, thumbnail_object_key FROM search_entries "
+            "WHERE kind = 'art'"
+        ).fetchone() == (
+            "top/bottom",
+            "ART/art-v1/composition/background/top/bottom.png",
+        )
 
     assert find_missing_art_references(path) == ()
     with sqlite3.connect(path) as connection:

@@ -139,6 +139,10 @@ let fixture_schema =
         AND panel_art_id = lower(panel_art_id) AND instr(panel_art_id, '/') = 0),
       width INTEGER NOT NULL, height INTEGER NOT NULL,
       PRIMARY KEY(locale, gallery_id, display_id, artwork_position, position));
+    CREATE TABLE search_entries (entry_key TEXT PRIMARY KEY,
+      locale TEXT NOT NULL, kind TEXT NOT NULL, entry_id TEXT NOT NULL,
+      category TEXT, collection_id TEXT, title TEXT NOT NULL, subtitle TEXT,
+      search_text TEXT NOT NULL, parent_json TEXT, thumbnail_object_key TEXT);
     PRAGMA user_version = 2;
     COMMIT;
   |}
@@ -228,6 +232,35 @@ let fixture_rows =
        'cg/part', 'image', 'vertical'),
       ('CN', 'event-gallery', 'event-display', 0, 'upstream-event',
        'display-second', 'image', 'none');
+    INSERT INTO search_entries VALUES
+      ('story:CN:score-story', 'CN', 'story', 'score-story', NULL,
+       'movement_section:section-a', '序幕', '0-1', 'score-story 0-1 序幕 阿米娅 amiya',
+       '{"parentKind":"movement_section","movementID":"movement-a","movementName":"为了明日","sectionID":"section-a","sectionName":"方舟"}',
+       'ART/art-v1/composition/image/display-first.png'),
+      ('story:CN:archive-story', 'CN', 'story', 'archive-story', NULL,
+       'archive_group:event-a', '归航', 'CW-ST-1', 'archive-story CW-ST-1 归航',
+       '{"parentKind":"archive_group","archiveKind":"events","groupID":"event-a","groupName":"孤星"}', NULL),
+      ('movement:CN:movement-a', 'CN', 'movement', 'movement-a', NULL, NULL,
+       '为了明日', 'continue', 'movement-a 为了明日 continue', NULL, NULL),
+      ('section:CN:section-a', 'CN', 'section', 'section-a', NULL,
+       'movement_section:section-a', '方舟', 'Main theme movement',
+       'section-a 方舟 Main theme movement',
+       '{"parentKind":"movement_section","movementID":"movement-a","movementName":"为了明日","sectionID":"section-a","sectionName":"方舟"}',
+       'ART/art-v1/composition/image/display-first.png'),
+      ('archive_group:CN:event-a', 'CN', 'archive_group', 'event-a', NULL,
+       'archive_group:event-a', '孤星', 'events', 'event-a 孤星 events',
+       '{"parentKind":"archive_group","archiveKind":"events","groupID":"event-a","groupName":"孤星"}', NULL),
+      ('gallery:CN:score-gallery', 'CN', 'gallery', 'score-gallery', NULL,
+       'movement_section:section-a', '方舟画集', 'Score gallery',
+       'score-gallery 方舟画集 Score gallery',
+       '{"parentKind":"movement_section","movementID":"movement-a","movementName":"为了明日","sectionID":"section-a","sectionName":"方舟"}',
+       'ART/art-v1/composition/image/display-first.png'),
+      ('art:CN:image:display-first', 'CN', 'art', 'display-first', 'image', NULL,
+       '牺牲火炬', 'image', 'display-first image 牺牲火炬', NULL,
+       'ART/art-v1/composition/image/display-first.png'),
+      ('art:CN:character:amiya', 'CN', 'art', 'amiya', 'character', NULL,
+       '阿米娅', 'character', 'amiya character 阿米娅', NULL,
+       'ART/art-v1/composition/character/amiya.png');
     INSERT INTO gallery_display_artwork_panels VALUES
       ('CN', 'score-gallery', 'display-two', 0, 0, 'panel_source', 70, 60);
     COMMIT;
@@ -376,6 +409,18 @@ let test_database_contract () =
             "score-story")
      with
     | Error `Not_found -> true
+    | _ -> false);
+  let search =
+    Lwt_main.run (Database.search database "CN" "amiya")
+    |> require_ok "search"
+  in
+  Alcotest.(check string) "exact artwork ID ranks first" "art"
+    (List.hd search).kind;
+  Alcotest.(check string) "exact artwork ID" "amiya"
+    (List.hd search).id;
+  Alcotest.(check bool) "story parent is decoded" true
+    (match List.find_opt (fun (result : Model.search_result) -> result.kind = "story") search with
+    | Some { parent = Some (Model.Score_parent { section_id = "section-a"; _ }); _ } -> true
     | _ -> false)
 
 let response handler target =
@@ -453,6 +498,12 @@ let test_http_contract () =
   let source = response handler "/api/source-arts/image/panel_source" in
   Alcotest.(check int) "category-qualified source art" 200
     (Dream.status source |> Dream.status_to_int);
+  let search = response handler "/api/CN/search?q=amiya" |> response_json |> to_list in
+  Alcotest.(check bool) "search returns ranked artwork" true
+    (search |> List.hd |> member "kind" |> to_string = "art");
+  Alcotest.(check string) "search result thumbnail"
+    "https://objects.example/bucket/ART/art-v1/thumbnail/character/amiya.webp"
+    (search |> List.hd |> member "thumbnailContentUrl" |> to_string);
   let mirror_art =
     Dream.test handler
       (Dream.request ~method_:`GET

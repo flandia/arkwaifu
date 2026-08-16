@@ -180,6 +180,16 @@ let routes ?china_object_base_url ~database ~object_base_url =
                        (List.map
                           (Model.unreferenced_art_json ~object_base_url)
                           arts)));
+         Dream.get "/api/:locale/search" (fun request ->
+             let object_base_url = object_url request in
+             with_locale request (fun locale ->
+                 let query = Dream.query request "q" |> Option.value ~default:"" in
+                 Database.search database locale query
+                 >>= respond (fun results ->
+                         `List
+                           (List.map
+                              (Model.search_result_json ~object_base_url)
+                              results))));
          Dream.get "/api/:locale/arts/:category/:id/context" (fun request ->
              let object_base_url = object_url request in
              with_locale request (fun locale ->

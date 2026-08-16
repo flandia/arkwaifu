@@ -277,3 +277,22 @@ export interface GalleryDisplay {
 export interface GalleryDetail extends GalleryMetadata {
   displays: GalleryDisplay[];
 }
+
+export type SearchResultKind =
+  | "story"
+  | "movement"
+  | "section"
+  | "archive_group"
+  | "gallery"
+  | "art";
+
+/** One ranked result from the locale-scoped metadata search. */
+export interface SearchResult {
+  kind: SearchResultKind;
+  id: string;
+  category: ArtCategory | null;
+  title: string;
+  subtitle: string | null;
+  thumbnailContentUrl: string | null;
+  parent: StoryParent | null;
+}

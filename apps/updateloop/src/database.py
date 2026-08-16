@@ -120,6 +120,7 @@ def apply_changes(
             for manifest in manifests:
                 if isinstance(manifest, LocaleManifest):
                     _replace_locale(connection, manifest)
+            _rebuild_search_entries(connection)
             connection.execute("COMMIT")
         except BaseException:
             connection.execute("ROLLBACK")
@@ -645,6 +646,288 @@ def _replace_locale(connection: sqlite3.Connection, manifest: LocaleManifest) ->
             for artwork in display.artworks
             for panel in artwork.panels
         ),
+    )
+
+
+def _rebuild_search_entries(connection: sqlite3.Connection) -> None:
+    """Rebuild the locale-scoped derived search index inside the write transaction."""
+    connection.execute("DELETE FROM search_entries")
+    connection.execute(
+        """
+        WITH
+        locale_units AS (
+            SELECT unit AS locale FROM unit_versions WHERE unit <> 'art'
+        ),
+        story_terms AS (
+            SELECT reference.locale, reference.story_id,
+                   group_concat(name.value, ' ') AS names,
+                   group_concat(
+                       COALESCE(reference.title, '') || ' ' ||
+                       COALESCE(reference.subtitle, ''), ' '
+                   ) AS labels,
+                   group_concat(
+                       reference.category || ' ' || reference.art_id, ' '
+                   ) AS arts
+            FROM story_art_references AS reference
+            LEFT JOIN json_each(reference.names_json) AS name ON true
+            GROUP BY reference.locale, reference.story_id
+        ),
+        story_thumbnails AS (
+            SELECT locale, story_id, object_key
+            FROM (
+                SELECT reference.locale, reference.story_id, art.object_key,
+                       ROW_NUMBER() OVER (
+                           PARTITION BY reference.locale, reference.story_id
+                           ORDER BY CASE reference.category
+                               WHEN 'image' THEN 0
+                               WHEN 'background' THEN 1
+                               ELSE 2
+                           END, reference.position
+                       ) AS thumbnail_rank
+                FROM story_art_references AS reference
+                JOIN arts AS art
+                  ON art.category = reference.category
+                 AND art.art_id = reference.art_id
+                WHERE reference.category IN ('image', 'background')
+            )
+            WHERE thumbnail_rank = 1
+        ),
+        collection_thumbnails AS (
+            SELECT locale, collection_id, object_key
+            FROM (
+                SELECT story.locale, story.collection_id, art.object_key,
+                       ROW_NUMBER() OVER (
+                           PARTITION BY story.locale, story.collection_id
+                           ORDER BY CASE reference.category
+                               WHEN 'image' THEN 0
+                               WHEN 'background' THEN 1
+                               ELSE 2
+                           END, story.position, reference.position
+                       ) AS thumbnail_rank
+                FROM stories AS story
+                JOIN story_art_references AS reference
+                  ON reference.locale = story.locale
+                 AND reference.story_id = story.story_id
+                JOIN arts AS art
+                  ON art.category = reference.category
+                 AND art.art_id = reference.art_id
+                WHERE reference.category IN ('image', 'background')
+            )
+            WHERE thumbnail_rank = 1
+        ),
+        gallery_thumbnails AS (
+            SELECT locale, gallery_id, object_key
+            FROM (
+                SELECT artwork.locale, artwork.gallery_id, art.object_key,
+                       ROW_NUMBER() OVER (
+                           PARTITION BY artwork.locale, artwork.gallery_id
+                           ORDER BY CASE artwork.category
+                               WHEN 'image' THEN 0
+                               WHEN 'background' THEN 1
+                               ELSE 2
+                           END, display.position, artwork.position
+                       ) AS thumbnail_rank
+                FROM gallery_display_artworks AS artwork
+                JOIN gallery_displays AS display
+                  ON display.locale = artwork.locale
+                 AND display.gallery_id = artwork.gallery_id
+                 AND display.display_id = artwork.display_id
+                JOIN arts AS art
+                  ON art.category = artwork.category
+                 AND art.art_id = artwork.art_id
+                WHERE artwork.category IN ('image', 'background')
+            )
+            WHERE thumbnail_rank = 1
+        ),
+        art_names AS (
+            SELECT reference.locale, reference.category, reference.art_id,
+                   min(name.value) AS first_name,
+                   group_concat(name.value, ' ') AS names
+            FROM story_art_references AS reference
+            JOIN json_each(reference.names_json) AS name ON true
+            GROUP BY reference.locale, reference.category, reference.art_id
+        ),
+        art_labels AS (
+            SELECT reference.locale, reference.category, reference.art_id,
+                   group_concat(
+                       COALESCE(reference.title, '') || ' ' ||
+                       COALESCE(reference.subtitle, ''), ' '
+                   ) AS labels
+            FROM story_art_references AS reference
+            WHERE reference.title IS NOT NULL OR reference.subtitle IS NOT NULL
+            GROUP BY reference.locale, reference.category, reference.art_id
+            ),
+        entries AS (
+        SELECT 'story:' || story.locale || ':' || story.story_id,
+               story.locale, 'story', story.story_id, NULL, story.collection_id,
+               story.name, story.code,
+               trim(
+                   story.story_id || ' ' || story.code || ' ' || story.name ||
+                   ' ' || story.info || ' ' || COALESCE(terms.names, '') ||
+                   ' ' || COALESCE(terms.labels, '') || ' ' ||
+                   COALESCE(terms.arts, '')
+               ),
+               CASE
+                   WHEN section.section_id IS NOT NULL THEN json_object(
+                       'parentKind', 'movement_section',
+                       'movementID', movement.movement_id,
+                       'movementName', movement.name,
+                       'sectionID', section.section_id,
+                       'sectionName', section.name
+                   )
+                   WHEN archive.archive_id IS NOT NULL THEN json_object(
+                       'parentKind', 'archive_group',
+                       'archiveKind', archive.archive_kind,
+                       'groupID', archive.archive_id,
+                       'groupName', archive.name
+                   )
+               END,
+               story_thumbnail.object_key
+        FROM stories AS story
+        LEFT JOIN story_terms AS terms
+          ON terms.locale = story.locale AND terms.story_id = story.story_id
+        LEFT JOIN story_thumbnails AS story_thumbnail
+          ON story_thumbnail.locale = story.locale
+         AND story_thumbnail.story_id = story.story_id
+        LEFT JOIN movement_sections AS section
+          ON section.locale = story.locale
+         AND section.collection_id = story.collection_id
+        LEFT JOIN movement_locations AS location
+          ON location.locale = section.locale
+         AND location.section_id = section.section_id
+         AND location.location_type = 'story_set'
+        LEFT JOIN movements AS movement
+          ON movement.locale = location.locale
+         AND movement.movement_id = location.movement_id
+        LEFT JOIN archive_groups AS archive
+          ON archive.locale = story.locale
+         AND archive.collection_id = story.collection_id
+
+        UNION ALL
+
+        SELECT 'movement:' || movement.locale || ':' || movement.movement_id,
+               movement.locale, 'movement', movement.movement_id, NULL, NULL,
+               movement.name, movement.movement_type,
+               trim(movement.movement_id || ' ' || movement.name || ' ' ||
+                    movement.movement_type),
+               NULL, NULL
+        FROM movements AS movement
+
+        UNION ALL
+
+        SELECT 'section:' || section.locale || ':' || section.section_id,
+               section.locale, 'section', section.section_id, NULL,
+               section.collection_id, section.name, section.description,
+               trim(section.section_id || ' ' || section.name || ' ' ||
+                    section.description),
+               json_object(
+                   'parentKind', 'movement_section',
+                   'movementID', movement.movement_id,
+                   'movementName', movement.name,
+                   'sectionID', section.section_id,
+                   'sectionName', section.name
+               ),
+               collection_thumbnail.object_key
+        FROM movement_sections AS section
+        JOIN movement_locations AS location
+          ON location.locale = section.locale
+         AND location.section_id = section.section_id
+         AND location.location_type = 'story_set'
+        JOIN movements AS movement
+          ON movement.locale = location.locale
+         AND movement.movement_id = location.movement_id
+        LEFT JOIN collection_thumbnails AS collection_thumbnail
+          ON collection_thumbnail.locale = section.locale
+         AND collection_thumbnail.collection_id = section.collection_id
+
+        UNION ALL
+
+        SELECT 'archive_group:' || archive.locale || ':' || archive.archive_id,
+               archive.locale, 'archive_group', archive.archive_id, NULL,
+               archive.collection_id, archive.name, archive.archive_kind,
+               trim(archive.archive_id || ' ' || archive.name || ' ' ||
+                    archive.archive_kind),
+               json_object(
+                   'parentKind', 'archive_group',
+                   'archiveKind', archive.archive_kind,
+                   'groupID', archive.archive_id,
+                   'groupName', archive.name
+               ),
+               collection_thumbnail.object_key
+        FROM archive_groups AS archive
+        LEFT JOIN collection_thumbnails AS collection_thumbnail
+          ON collection_thumbnail.locale = archive.locale
+         AND collection_thumbnail.collection_id = archive.collection_id
+
+        UNION ALL
+
+        SELECT 'gallery:' || gallery.locale || ':' || gallery.gallery_id,
+               gallery.locale, 'gallery', gallery.gallery_id, NULL,
+               gallery.collection_id, gallery.name, gallery.description,
+               trim(gallery.gallery_id || ' ' || gallery.name || ' ' ||
+                    gallery.description),
+               CASE
+                   WHEN section.section_id IS NOT NULL THEN json_object(
+                       'parentKind', 'movement_section',
+                       'movementID', movement.movement_id,
+                       'movementName', movement.name,
+                       'sectionID', section.section_id,
+                       'sectionName', section.name
+                   )
+                   WHEN archive.archive_id IS NOT NULL THEN json_object(
+                       'parentKind', 'archive_group',
+                       'archiveKind', archive.archive_kind,
+                       'groupID', archive.archive_id,
+                       'groupName', archive.name
+                   )
+               END,
+               gallery_thumbnail.object_key
+        FROM gallery_groups AS gallery
+        LEFT JOIN gallery_thumbnails AS gallery_thumbnail
+          ON gallery_thumbnail.locale = gallery.locale
+         AND gallery_thumbnail.gallery_id = gallery.gallery_id
+        LEFT JOIN movement_sections AS section
+          ON section.locale = gallery.locale
+         AND section.collection_id = gallery.collection_id
+        LEFT JOIN movement_locations AS location
+          ON location.locale = section.locale
+         AND location.section_id = section.section_id
+         AND location.location_type = 'story_set'
+        LEFT JOIN movements AS movement
+          ON movement.locale = location.locale
+         AND movement.movement_id = location.movement_id
+        LEFT JOIN archive_groups AS archive
+          ON archive.locale = gallery.locale
+         AND archive.collection_id = gallery.collection_id
+
+        UNION ALL
+
+        SELECT 'art:' || locale_units.locale || ':' || art.category || ':' || art.art_id,
+               locale_units.locale, 'art', art.art_id, art.category, NULL,
+               COALESCE(art_name.first_name, art.art_id), art.category,
+               trim(
+                   art.art_id || ' ' || art.category || ' ' ||
+                   COALESCE(art_name.names, '') || ' ' ||
+                   COALESCE(art_label.labels, '')
+               ),
+               NULL, art.object_key
+        FROM locale_units
+        CROSS JOIN arts AS art
+        LEFT JOIN art_names AS art_name
+          ON art_name.locale = locale_units.locale
+         AND art_name.category = art.category
+         AND art_name.art_id = art.art_id
+        LEFT JOIN art_labels AS art_label
+          ON art_label.locale = locale_units.locale
+         AND art_label.category = art.category
+         AND art_label.art_id = art.art_id
+        )
+        INSERT INTO search_entries (
+            entry_key, locale, kind, entry_id, category, collection_id, title,
+            subtitle, search_text, parent_json, thumbnail_object_key
+        )
+        SELECT * FROM entries
+        """
     )
 
 
