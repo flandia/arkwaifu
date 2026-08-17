@@ -219,10 +219,12 @@ let fixture_rows =
        '0-1', '序幕', 'Score story', 'The opening story text.', 0),
       ('CN', 'archive-story', 'archive_group:event-a', 'after', '行动后',
        'CW-ST-1', '归航', 'Archive story', 'Archive story text.', 0),
-      ('CN', 'others:activities:review-a:level_review-a_entry', 'entry-helper',
-       '', '', '', '', '', '', 0),
-      ('CN', 'others:activities:event-a:level_event-a_entry', 'entry-helper',
-       '', '', '', '', '', '', 1);
+      ('CN', 'others:activities:review-a:level_review-a_entry',
+       'archive_group:encoded:组/100%',
+       'before', '', '', '', '', '', 0),
+      ('CN', 'others:activities:event-a:level_event-a_entry',
+       'archive_group:encoded:组/100%',
+       'before', '', '', '', '', '', 1);
     INSERT INTO story_art_references VALUES
       ('CN', 'score-story', 0, 'display-first', 'picture', 'image',
        'First', NULL, '["阿米娅"]'),
