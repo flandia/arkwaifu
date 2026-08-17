@@ -43,10 +43,32 @@ type story_art_reference = {
   art_id : string;
   kind : string;
   category : string;
+  is_anime_kv : bool;
   title : string option;
   subtitle : string option;
   names : string list;
   composition_object_key : string option;
+}
+
+type story_media_reference = {
+  media_id : string;
+  kind : string;
+  content_type : string option;
+  byte_size : int64 option;
+  object_key : string option;
+}
+
+type media_asset = {
+  id : string;
+  kind : string;
+  object_key : string;
+  content_type : string;
+  byte_size : int64;
+  duration : float option;
+  width : int option;
+  height : int option;
+  frame_rate : float option;
+  frame_count : int option;
 }
 
 type collection_parent =
@@ -69,6 +91,8 @@ type story = {
   code : string;
   name : string;
   info : string;
+  text : string;
+  media_references : story_media_reference list;
   art_references : story_art_reference list;
 }
 
@@ -148,6 +172,7 @@ type movement_section = {
   decoration : score_image_reference option;
   retro_background : score_image_reference option;
   story_count : int;
+  opening_media_references : story_media_reference list;
 }
 
 type movement_split = {
@@ -193,6 +218,7 @@ type archive_group_detail = {
   representative_art_reference : story_art_reference option;
   preview_art_references : story_art_reference list;
   art_references : story_art_reference list;
+  opening_media_references : story_media_reference list;
   gallery : gallery option;
 }
 
@@ -213,6 +239,7 @@ type art_occurrence = {
 type art_context = {
   names : string list;
   siblings : art_sibling list;
+  textures : art_sibling list;
   occurrences : art_occurrence list;
 }
 
@@ -322,6 +349,7 @@ let story_art_reference_json ~object_base_url (reference : story_art_reference)
       ("artID", `String reference.art_id);
       ("kind", `String reference.kind);
       ("category", `String reference.category);
+      ("isAnimeKV", `Bool reference.is_anime_kv);
       ("title", option_string reference.title);
       ("subtitle", option_string reference.subtitle);
       ("names", string_list reference.names);
@@ -336,6 +364,47 @@ let option_story_art_reference ~object_base_url = function
 
 let story_art_reference_list ~object_base_url references =
   `List (List.map (story_art_reference_json ~object_base_url) references)
+
+let story_media_reference_json ~object_base_url
+    (reference : story_media_reference) =
+  `Assoc
+    [
+      ("id", `String reference.media_id);
+      ("kind", `String reference.kind);
+      ("contentType", option_string reference.content_type);
+      ( "byteSize",
+        match reference.byte_size with
+        | None -> `Null
+        | Some byte_size -> `Intlit (Int64.to_string byte_size) );
+      ( "contentUrl",
+        match reference.object_key with
+        | None -> `Null
+        | Some object_key ->
+            `String (content_url ~object_base_url object_key) );
+    ]
+
+let story_media_reference_list ~object_base_url references =
+  `List
+    (List.map
+       (story_media_reference_json ~object_base_url)
+       references)
+
+let media_asset_json ~object_base_url (asset : media_asset) =
+  let option_float = function None -> `Null | Some value -> `Float value in
+  let option_int = function None -> `Null | Some value -> `Int value in
+  `Assoc
+    [
+      ("id", `String asset.id);
+      ("kind", `String asset.kind);
+      ("contentType", `String asset.content_type);
+      ("byteSize", `Intlit (Int64.to_string asset.byte_size));
+      ("duration", option_float asset.duration);
+      ("width", option_int asset.width);
+      ("height", option_int asset.height);
+      ("frameRate", option_float asset.frame_rate);
+      ("frameCount", option_int asset.frame_count);
+      ("contentUrl", `String (content_url ~object_base_url asset.object_key));
+    ]
 
 let collection_parent_json = function
   | Score_parent { movement_id; movement_name; section_id; section_name } ->
@@ -383,6 +452,10 @@ let story_detail_json ~object_base_url (detail : story_detail) =
     (story_fields detail.story
     @ [
         ("parent", collection_parent_json detail.parent);
+        ("text", `String detail.story.text);
+        ( "media",
+          story_media_reference_list ~object_base_url
+            detail.story.media_references );
         ( "artReferences",
           story_art_reference_list ~object_base_url
             detail.story.art_references );
@@ -516,6 +589,9 @@ let movement_section_fields ~object_base_url (section : movement_section) =
       option_score_image_reference ~object_base_url section.decoration );
     ( "retroBackground",
       option_score_image_reference ~object_base_url section.retro_background );
+    ( "openingMedia",
+      story_media_reference_list ~object_base_url
+        section.opening_media_references );
   ]
 
 let movement_section_json ~object_base_url section =
@@ -604,6 +680,9 @@ let archive_group_detail_json ~object_base_url (detail : archive_group_detail) =
             (List.map (story_summary_json ~object_base_url) detail.stories) );
         ( "artReferences",
           story_art_reference_list ~object_base_url detail.art_references );
+        ( "openingMedia",
+          story_media_reference_list ~object_base_url
+            detail.opening_media_references );
         ("gallery", option_gallery ~object_base_url detail.gallery);
       ])
 
@@ -634,6 +713,8 @@ let art_context_json ~object_base_url (context : art_context) =
       ("names", string_list context.names);
       ( "siblings",
         `List (List.map (art_sibling_json ~object_base_url) context.siblings) );
+      ( "textures",
+        `List (List.map (art_sibling_json ~object_base_url) context.textures) );
       ("occurrences", `List (List.map art_occurrence_json context.occurrences));
     ]
 

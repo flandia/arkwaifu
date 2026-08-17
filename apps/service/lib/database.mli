@@ -52,6 +52,8 @@ val art : t -> string -> string -> (Model.art, error) result Lwt.t
 val source_art :
   t -> string -> string -> (Model.source_art, error) result Lwt.t
 
+val media : t -> string -> string -> (Model.media_asset, error) result Lwt.t
+
 val unreferenced_arts : t -> (Model.unreferenced_art list, error) result Lwt.t
 
 val art_context :

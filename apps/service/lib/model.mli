@@ -45,10 +45,32 @@ type story_art_reference = {
   art_id : string;
   kind : string;
   category : string;
+  is_anime_kv : bool;
   title : string option;
   subtitle : string option;
   names : string list;
   composition_object_key : string option;
+}
+
+type story_media_reference = {
+  media_id : string;
+  kind : string;
+  content_type : string option;
+  byte_size : int64 option;
+  object_key : string option;
+}
+
+type media_asset = {
+  id : string;
+  kind : string;
+  object_key : string;
+  content_type : string;
+  byte_size : int64;
+  duration : float option;
+  width : int option;
+  height : int option;
+  frame_rate : float option;
+  frame_count : int option;
 }
 
 type collection_parent =
@@ -71,6 +93,8 @@ type story = {
   code : string;
   name : string;
   info : string;
+  text : string;
+  media_references : story_media_reference list;
   art_references : story_art_reference list;
 }
 
@@ -150,6 +174,7 @@ type movement_section = {
   decoration : score_image_reference option;
   retro_background : score_image_reference option;
   story_count : int;
+  opening_media_references : story_media_reference list;
 }
 
 type movement_split = {
@@ -195,6 +220,7 @@ type archive_group_detail = {
   representative_art_reference : story_art_reference option;
   preview_art_references : story_art_reference list;
   art_references : story_art_reference list;
+  opening_media_references : story_media_reference list;
   gallery : gallery option;
 }
 
@@ -215,6 +241,7 @@ type art_occurrence = {
 type art_context = {
   names : string list;
   siblings : art_sibling list;
+  textures : art_sibling list;
   occurrences : art_occurrence list;
 }
 
@@ -236,6 +263,7 @@ val unreferenced_art_json :
 val story_summary_json :
   object_base_url:string -> story_summary -> Yojson.Safe.t
 val story_detail_json : object_base_url:string -> story_detail -> Yojson.Safe.t
+val media_asset_json : object_base_url:string -> media_asset -> Yojson.Safe.t
 val movement_json : object_base_url:string -> movement -> Yojson.Safe.t
 val movement_detail_json :
   object_base_url:string -> movement_detail -> Yojson.Safe.t

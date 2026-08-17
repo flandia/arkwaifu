@@ -39,7 +39,7 @@ Startup fails closed so the service never accepts requests without a valid datab
 1. Download `arkwaifu.sqlite3` into `ARKWAIFU_DATABASE_CACHE_DIR` with a unique `.part` filename.
 2. Rename the completed download.
 3. Open SQLite with `write=false` and `create=false`.
-4. Require schema version 2.
+4. Require schema version 2 and successfully read the required schema. This also rejects SQLite runtimes too old to parse its `STRICT` tables.
 5. Start Dream after the generation passes its schema check.
 
 The service polls at `ARKWAIFU_DATABASE_POLL_SECONDS` and sends the last entity tag (ETag) as `If-None-Match`. Hypertext Transfer Protocol (HTTP) 304 preserves the current generation. For a changed object, the service downloads and validates the new file before switching readers.
@@ -81,27 +81,26 @@ docker buildx build --target contract-test \
   -f Dockerfile .
 ```
 
-For a native opam switch, install the dependencies from `arkwaifu_service.opam`. Then run `dune runtest` and `dune exec arkwaifu-service`.
+For a native opam switch, install the dependencies from `arkwaifu_service.opam`. On Windows, use the command below so the process enters the project opam switch and then loads a modern MSYS2 `mingw64` SQLite runtime. You can copy the command into the ignored repository-local `.vscode/tasks.json`; do not commit machine-specific tasks. The opam-managed SQLite 3.34 DLL cannot parse schema version 2's `STRICT` tables.
 
 ## Run the local stack
 
-Start MinIO in Docker, serve the complete development archive from the host,
-and run this service natively from `apps/service/`:
+Start MinIO in Docker and run this service natively from `apps/service/`:
 
 ```console
-Push-Location infra
+Push-Location dev
 docker compose up -d minio minio-init
 Pop-Location
 ```
 
-In a separate terminal, after starting the host runtime server on port 5175:
+After starting local MinIO, use its public `arkwaifu` bucket as the development archive ground truth:
 
 ```console
-$env:ARKWAIFU_OBJECT_BASE_URL = "http://127.0.0.1:5175"
-$env:ARKWAIFU_DATABASE_URL = "http://127.0.0.1:5175/arkwaifu.sqlite3"
-$env:ARKWAIFU_DATABASE_CACHE_DIR = "E:\arkwaifu\dev-runtime\service-database"
+$env:ARKWAIFU_OBJECT_BASE_URL = "http://127.0.0.1:59000/arkwaifu"
+$env:ARKWAIFU_DATABASE_URL = "http://127.0.0.1:59000/arkwaifu/arkwaifu.sqlite3"
+$env:ARKWAIFU_DATABASE_CACHE_DIR = "E:\arkwaifu\service-database"
 $env:ARKWAIFU_PORT = "5174"
-dune exec arkwaifu-service
+cmd.exe /d /c 'opam exec -- cmd.exe /d /v:on /c "set PATH=C:\opt\msys64\mingw64\bin;!PATH!& dune exec arkwaifu-service"'
 ```
 
 Check `http://127.0.0.1:5174/health` from another terminal.

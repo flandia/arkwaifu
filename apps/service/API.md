@@ -20,6 +20,7 @@ or metadata failure returns HTTP 503 with
 | `GET /sitemap.txt` | UTF-8 text sitemap |
 | `GET /api/arts/:category/:id` | Composed artwork |
 | `GET /api/source-arts/:category/:id` | Category-qualified source artwork |
+| `GET /api/media/:kind/:id` | Audio or video resource details |
 | `GET /api/unreferenced-arts` | Unreferenced artwork array |
 | `GET /api/:locale/search?q=...` | Up to 100 ranked metadata search results |
 | `GET /api/:locale/arts/:category/:id/context` | Localized artwork context |
@@ -117,7 +118,10 @@ Character sources populate `characterID`, `role`, and `variant`; composite
 panels leave all three null. Unreferenced artwork objects contain `id`,
 `category`, and `thumbnailContentUrl`.
 
-Artwork context contains `names`, character `siblings`, and `occurrences`.
+Artwork context contains `names`, character `siblings`, bundle `textures`, and
+`occurrences`. `textures` contains `image` artwork whose identifier begins with
+the selected artwork identifier followed by `/`; each item has the same compact
+shape as a sibling (`artID`, `names`, and `thumbnailContentUrl`).
 Every occurrence carries the same discriminated `parent` described below plus
 `storyID`, `storyName`, `storyCode`, and `storyTagText`.
 
@@ -156,10 +160,48 @@ Stories and galleries identify their hierarchy owner with one of:
 ```
 
 A Story summary contains `id`, `tag`, `tagText`, `code`, `name`, `info`,
-`representativeArtReference`, and `previewArtReferences`. A Story detail
-replaces the two preview fields with `parent` and the complete ordered
-`artReferences` array. The deep route verifies that the Story belongs to the
-Movement Section or Archive Group in its path.
+`representativeArtReference`, and `previewArtReferences`. Summaries do not load
+the full story text or media references. A Story detail replaces the two
+preview fields with `parent`, the complete ordered `artReferences` array, and
+the source story text:
+
+Each artwork reference includes `isAnimeKV`. It is `true` for the background
+poster representing an extracted Anime KV bundle and `false` for ordinary
+artwork and the bundle's individual texture images.
+
+```json
+{
+  "id":"score-story",
+  "text":"The source story text…",
+  "media":[
+    {
+      "id":"m_story",
+      "kind":"sound",
+      "contentType":"audio/wav",
+      "byteSize":321,
+      "contentUrl":"https://…/MEDIA/cn/audio/m_story.wav"
+    },
+    {
+      "id":"missing-video",
+      "kind":"video",
+      "contentType":null,
+      "byteSize":null,
+      "contentUrl":null
+    }
+  ]
+}
+```
+
+`media.kind` is `sound`, `music`, or `video`. A media reference remains in
+source order even when its corresponding `media_assets` row is unavailable;
+unresolved asset fields are `null`. The deep route verifies that the Story
+belongs to the Movement Section or Archive Group in its path.
+
+Available references link to the independent media resource endpoint. Its
+`:kind` is `audio` or `video`; the response contains `id`, `kind`,
+`contentType`, `byteSize`, `duration`, `width`, `height`, `frameRate`,
+`frameCount`, and `contentUrl`. Audio-only video fields are `null`. When a video
+has no stored duration, the service derives it from frame count and frame rate.
 
 ## Scores
 
@@ -208,6 +250,7 @@ position:
       "sortByYear":0,
       "sortWithinYear":0,
       "storyCount":10,
+      "openingMedia":[],
       "keyVisual":null,
       "titleImage":null,
       "background":null,
@@ -218,7 +261,11 @@ position:
 ]
 ```
 
-Section `type` is `main_theme`, `side_story`, or `vignette`. Section detail adds
+Section `type` is `main_theme`, `side_story`, or `vignette`. `openingMedia`
+contains opening videos associated through the section's upstream review-group
+metadata. It is intentionally separate from media directly referenced by a
+Story.
+Section detail adds
 `activeBackgroundVideo`, `stories`, aggregate `artReferences`, and
 `gallery: GalleryDetail|null`. Its active video is the latest preceding
 `mainline_split` video in the same Movement.
@@ -235,7 +282,8 @@ An Archive Group summary contains `id`, `name`, route `kind`, semantic `type`,
 `representativeArtReference`, and `previewArtReferences`. Event `type` is
 `side_story` or `vignette`; other values are `operator_record`,
 `integrated_strategies`, `reclamation_algorithm`, or `others`. Group detail adds
-`stories`, aggregate `artReferences`, and `gallery: GalleryDetail|null`.
+`stories`, aggregate `artReferences`, inferred entry-video `openingMedia`, and
+`gallery: GalleryDetail|null`.
 
 ## Galleries
 

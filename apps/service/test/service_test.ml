@@ -88,6 +88,12 @@ let fixture_schema =
       byte_size INTEGER NOT NULL, width INTEGER NOT NULL, height INTEGER NOT NULL,
       frame_rate_numerator INTEGER NOT NULL, frame_rate_denominator INTEGER NOT NULL,
       frame_count INTEGER NOT NULL);
+    CREATE TABLE media_assets (
+      media_kind TEXT NOT NULL, media_id TEXT NOT NULL,
+      object_key TEXT NOT NULL, content_type TEXT NOT NULL,
+      byte_size INTEGER NOT NULL, duration REAL, width INTEGER, height INTEGER,
+      frame_rate_numerator INTEGER, frame_rate_denominator INTEGER,
+      frame_count INTEGER, PRIMARY KEY(media_kind, media_id));
     CREATE TABLE story_collections (locale TEXT NOT NULL, collection_id TEXT NOT NULL,
       collection_kind TEXT NOT NULL, PRIMARY KEY(locale, collection_id));
     CREATE TABLE movements (locale TEXT NOT NULL, movement_id TEXT NOT NULL,
@@ -114,10 +120,15 @@ let fixture_schema =
     CREATE TABLE stories (locale TEXT NOT NULL, story_id TEXT NOT NULL,
       collection_id TEXT NOT NULL, tag TEXT NOT NULL, tag_text TEXT NOT NULL,
       code TEXT NOT NULL, name TEXT NOT NULL, info TEXT NOT NULL,
+      text TEXT NOT NULL,
       position INTEGER NOT NULL, PRIMARY KEY(locale, story_id));
     CREATE TABLE story_art_references (locale TEXT NOT NULL, story_id TEXT NOT NULL,
       position INTEGER NOT NULL, art_id TEXT NOT NULL, kind TEXT NOT NULL,
       category TEXT NOT NULL, title TEXT, subtitle TEXT, names_json TEXT NOT NULL,
+      PRIMARY KEY(locale, story_id, position));
+    CREATE TABLE story_media_references (
+      locale TEXT NOT NULL, story_id TEXT NOT NULL, position INTEGER NOT NULL,
+      media_id TEXT NOT NULL, kind TEXT NOT NULL,
       PRIMARY KEY(locale, story_id, position));
     CREATE TABLE gallery_groups (locale TEXT NOT NULL, gallery_id TEXT NOT NULL,
       collection_id TEXT NOT NULL, position INTEGER NOT NULL, name TEXT NOT NULL,
@@ -153,6 +164,9 @@ let fixture_rows =
     INSERT INTO unit_versions VALUES ('art', 'art-v1'), ('CN', 'cn-v1');
     INSERT INTO arts VALUES
       ('display-first', 'image', 'ART/art-v1/composition/image/display-first.png', 101, 100, 60),
+      ('display-first/texture-a', 'image', 'ART/art-v1/composition/image/display-first%2Ftexture-a.png', 101, 100, 60),
+      ('anime-poster', 'background', 'ART/art-v1/composition/background/anime-poster.png', 101, 1920, 1080),
+      ('anime-poster/texture-a', 'image', 'ART/art-v1/composition/image/anime-poster%2Ftexture-a.png', 101, 1920, 1080),
       ('display-second', 'image', 'ART/art-v1/composition/image/display-second.png', 102, 100, 60),
       ('cg/part', 'image', 'ART/art-v1/composition/image/cg%2Fpart.png', 103, 70, 120),
       ('amiya', 'character', 'ART/art-v1/composition/character/amiya.png', 104, 80, 160),
@@ -175,6 +189,11 @@ let fixture_rows =
       ('split', 'split-one', 'SCORE/split/split-one.png', 11, 64, 64);
     INSERT INTO score_videos VALUES
       ('video-one', 'SCORE/video/video-one.webm', 1000, 1920, 1080, 30000, 1001, 90);
+    INSERT INTO media_assets VALUES
+      ('audio', 'm_story', 'MEDIA/cn/audio/m_story.wav', 'audio/wav', 321, 4.5,
+       NULL, NULL, NULL, NULL, NULL),
+      ('video', 'video/story.mp4', 'MEDIA/cn/video/story.webm', 'video/webm', 654,
+       8.25, 1920, 1080, 30000, 1001, 248);
     INSERT INTO story_collections VALUES
       ('CN', 'movement_section:section-a', 'movement_section'),
       ('CN', 'archive_group:event-a', 'archive_group'),
@@ -197,9 +216,13 @@ let fixture_rows =
        '编码', 'others', NULL);
     INSERT INTO stories VALUES
       ('CN', 'score-story', 'movement_section:section-a', 'before', '行动前',
-       '0-1', '序幕', 'Score story', 0),
+       '0-1', '序幕', 'Score story', 'The opening story text.', 0),
       ('CN', 'archive-story', 'archive_group:event-a', 'after', '行动后',
-       'CW-ST-1', '归航', 'Archive story', 0);
+       'CW-ST-1', '归航', 'Archive story', 'Archive story text.', 0),
+      ('CN', 'others:activities:review-a:level_review-a_entry', 'entry-helper',
+       '', '', '', '', '', '', 0),
+      ('CN', 'others:activities:event-a:level_event-a_entry', 'entry-helper',
+       '', '', '', '', '', '', 1);
     INSERT INTO story_art_references VALUES
       ('CN', 'score-story', 0, 'display-first', 'picture', 'image',
        'First', NULL, '["阿米娅"]'),
@@ -209,8 +232,22 @@ let fixture_rows =
        NULL, NULL, '["阿米娅"]'),
       ('CN', 'score-story', 3, 'amiyaa#1', 'character', 'character',
        NULL, NULL, '["错误前缀"]'),
+      ('CN', 'score-story', 4, 'display-first/texture-a', 'picture', 'image',
+       NULL, NULL, '[]'),
+      ('CN', 'score-story', 5, 'anime-poster', 'picture', 'background',
+       NULL, NULL, '[]'),
+      ('CN', 'score-story', 6, 'anime-poster/texture-a', 'picture', 'image',
+       NULL, NULL, '[]'),
       ('CN', 'archive-story', 0, 'missing-background', 'picture', 'background',
        NULL, NULL, '[]');
+    INSERT INTO story_media_references VALUES
+      ('CN', 'score-story', 0, 'm_story', 'sound'),
+      ('CN', 'score-story', 1, 'video/story.mp4', 'video'),
+      ('CN', 'archive-story', 0, 'missing-story-audio', 'music'),
+      ('CN', 'others:activities:review-a:level_review-a_entry', 0,
+       'video/story.mp4', 'video'),
+      ('CN', 'others:activities:event-a:level_event-a_entry', 0,
+       'video/story.mp4', 'video');
     INSERT INTO gallery_groups VALUES
       ('CN', 'score-gallery', 'movement_section:section-a', 0,
        '方舟画集', 'Score gallery', 'story-set-a'),
@@ -352,6 +389,19 @@ let test_database_contract () =
   in
   Alcotest.(check int) "split and canonical section only" 2
     (List.length detail.items);
+  let section_summary =
+    List.find_map
+      (function
+        | Model.Movement_section { section; _ } -> Some section
+        | Model.Movement_split _ -> None)
+      detail.items
+    |> Option.get
+  in
+  Alcotest.(check (list string)) "movement lists section entry media"
+    [ "video/story.mp4" ]
+    (List.map
+       (fun (media : Model.story_media_reference) -> media.media_id)
+       section_summary.opening_media_references);
   let section =
     Lwt_main.run
       (Database.movement_section database "CN" "movement-a" "section-a")
@@ -362,6 +412,11 @@ let test_database_contract () =
     (match section.active_background_video with
     | Some { id = "video-one"; video = Some _ } -> true
     | _ -> false);
+  Alcotest.(check (list string)) "section lists inferred entry media"
+    [ "video/story.mp4" ]
+    (List.map
+       (fun (media : Model.story_media_reference) -> media.media_id)
+       section.section.opening_media_references);
   Alcotest.(check bool)
     "section embeds gallery hierarchy" true
     (match section.gallery with
@@ -370,6 +425,32 @@ let test_database_contract () =
         && List.length second.artworks = 1
         && (List.hd second.artworks).art_id = "cg/part"
     | _ -> false);
+  let score_story =
+    Lwt_main.run
+      (Database.score_story database "CN" "movement-a" "section-a"
+         "score-story")
+    |> require_ok "score story"
+  in
+  Alcotest.(check string) "story text is retained" "The opening story text."
+    score_story.story.text;
+  Alcotest.(check (list string)) "story media keeps source order"
+    [ "sound"; "video" ]
+    (List.map
+       (fun (media : Model.story_media_reference) -> media.kind)
+       score_story.story.media_references);
+  Alcotest.(check (option string)) "audio content type is decoded"
+    (Some "audio/wav")
+    (List.hd score_story.story.media_references).content_type;
+  Alcotest.(check (option string)) "video object key is decoded"
+    (Some "MEDIA/cn/video/story.webm")
+    (List.nth score_story.story.media_references 1).object_key;
+  let media =
+    Lwt_main.run (Database.media database "video" "video/story.mp4")
+    |> require_ok "media asset"
+  in
+  Alcotest.(check (option int)) "media width" (Some 1920) media.width;
+  Alcotest.(check (option (float 0.001))) "media duration" (Some 8.25)
+    media.duration;
   let archives =
     Lwt_main.run (Database.archive_index database "CN")
     |> require_ok "archive index"
@@ -381,6 +462,15 @@ let test_database_contract () =
   in
   Alcotest.(check string) "event subtype" "side_story"
     (List.hd groups).group.group_type;
+  let archive_group =
+    Lwt_main.run (Database.archive_group database "CN" "events" "event-a")
+    |> require_ok "archive group"
+  in
+  Alcotest.(check (list string)) "archive lists inferred entry media"
+    [ "video/story.mp4" ]
+    (List.map
+       (fun (media : Model.story_media_reference) -> media.media_id)
+       archive_group.opening_media_references);
   let source =
     Lwt_main.run (Database.source_art database "image" "panel_source")
     |> require_ok "composite source"
@@ -401,6 +491,14 @@ let test_database_contract () =
     "siblings require exact prefix before hash" [ "amiya#1" ]
     (List.map (fun (sibling : Model.art_sibling) -> sibling.art_id)
        context.siblings);
+  let texture_context =
+    Lwt_main.run (Database.art_context database "CN" "image" "display-first")
+    |> require_ok "texture context"
+  in
+  Alcotest.(check (list string)) "bundle textures use the parent ID prefix"
+    [ "display-first/texture-a" ]
+    (List.map (fun (texture : Model.art_sibling) -> texture.art_id)
+       texture_context.textures);
   Alcotest.(check bool)
     "route ownership is enforced" true
     (match
@@ -421,7 +519,21 @@ let test_database_contract () =
   Alcotest.(check bool) "story parent is decoded" true
     (match List.find_opt (fun (result : Model.search_result) -> result.kind = "story") search with
     | Some { parent = Some (Model.Score_parent { section_id = "section-a"; _ }); _ } -> true
-    | _ -> false)
+    | _ -> false);
+  let context_search =
+    Lwt_main.run (Database.search database "CN" "opening story text")
+    |> require_ok "story context search"
+  in
+  Alcotest.(check bool) "story context finds story" true
+    (List.exists
+       (fun (result : Model.search_result) ->
+         result.kind = "story" && result.id = "score-story")
+       context_search);
+  Alcotest.(check bool) "story context finds artwork" true
+    (List.exists
+       (fun (result : Model.search_result) ->
+         result.kind = "art" && result.id = "display-first")
+       context_search)
 
 let response handler target =
   Dream.test handler (Dream.request ~method_:`GET ~target "")
@@ -466,6 +578,51 @@ let test_http_contract () =
   Alcotest.(check string)
     "section active video" "video-one"
     (section |> member "activeBackgroundVideo" |> member "id" |> to_string);
+  Alcotest.(check string) "section entry video" "video/story.mp4"
+    (section |> member "openingMedia" |> index 0 |> member "id" |> to_string);
+  let anime_reference =
+    section |> member "artReferences" |> to_list
+    |> List.find (fun reference ->
+           reference |> member "artID" |> to_string = "anime-poster")
+  in
+  Alcotest.(check bool) "Anime KV reference is explicit" true
+    (anime_reference |> member "isAnimeKV" |> to_bool);
+  let summary_story = section |> member "stories" |> to_list |> List.hd in
+  Alcotest.(check bool) "story summary omits source text" true
+    (summary_story |> member "text" = `Null);
+  Alcotest.(check bool) "story summary omits media" true
+    (summary_story |> member "media" = `Null);
+  let story =
+    response handler "/api/CN/scores/movement-a/section-a/score-story"
+    |> response_json
+  in
+  Alcotest.(check string) "story detail text" "The opening story text."
+    (story |> member "text" |> to_string);
+  let media = story |> member "media" |> to_list in
+  Alcotest.(check int) "story detail media count" 2 (List.length media);
+  Alcotest.(check string) "story audio URL"
+    "https://objects.example/bucket/MEDIA/cn/audio/m_story.wav"
+    (List.hd media |> member "contentUrl" |> to_string);
+  let media_asset =
+    response handler "/api/media/video/video%2Fstory.mp4" |> response_json
+  in
+  Alcotest.(check string) "media detail kind" "video"
+    (media_asset |> member "kind" |> to_string);
+  Alcotest.(check int) "media detail width" 1920
+    (media_asset |> member "width" |> to_int);
+  Alcotest.(check string) "media detail URL"
+    "https://objects.example/bucket/MEDIA/cn/video/story.webm"
+    (media_asset |> member "contentUrl" |> to_string);
+  let unresolved_story =
+    response handler "/api/CN/archives/events/event-a/archive-story"
+    |> response_json
+  in
+  Alcotest.(check bool) "unresolved story media URL is null" true
+    (unresolved_story |> member "media" |> index 0 |> member "contentUrl" = `Null);
+  Alcotest.(check bool) "unresolved story media type is null" true
+    (unresolved_story |> member "media" |> index 0 |> member "contentType" = `Null);
+  Alcotest.(check bool) "unresolved story media size is null" true
+    (unresolved_story |> member "media" |> index 0 |> member "byteSize" = `Null);
   Alcotest.(check int)
     "embedded sibling displays" 2
     (section |> member "gallery" |> member "displays" |> to_list |> List.length);
@@ -474,6 +631,15 @@ let test_http_contract () =
   in
   Alcotest.(check string) "archive route kind" "events"
     (archive |> member "kind" |> to_string);
+  Alcotest.(check string) "archive entry video" "video/story.mp4"
+    (archive |> member "openingMedia" |> index 0 |> member "id" |> to_string);
+  let texture_context =
+    response handler "/api/CN/arts/image/display-first/context" |> response_json
+  in
+  Alcotest.(check string) "art context texture"
+    "display-first/texture-a"
+    (texture_context |> member "textures" |> index 0 |> member "artID"
+   |> to_string);
   let gallery_index =
     response handler "/api/CN/galleries" |> response_json |> to_list
   in
@@ -692,6 +858,24 @@ let test_live_rejects_initial_schema () =
           (Database.For_test.live ~fetch ~cache_dir
              ~download_timeout_seconds:5.)))
 
+let test_live_rejects_missing_required_schema () =
+  with_sqlite_fixture @@ fun source ->
+  with_temporary_directory @@ fun cache_dir ->
+  let fetch ~etag:_ ~destination =
+    copy_file source destination;
+    let raw = Sqlite3.db_open destination in
+    Fun.protect
+      ~finally:(fun () -> ignore (Sqlite3.db_close raw))
+      (fun () -> execute raw "DROP TABLE unit_versions");
+    Lwt.return (`Fetched None)
+  in
+  Alcotest.(check bool)
+    "missing required schema fails startup" true
+    (Result.is_error
+       (Lwt_main.run
+          (Database.For_test.live ~fetch ~cache_dir
+             ~download_timeout_seconds:5.)))
+
 let test_refreshes_are_serialized () =
   with_sqlite_fixture @@ fun source ->
   with_temporary_directory @@ fun cache_dir ->
@@ -730,6 +914,8 @@ let () =
           Alcotest.test_case "live refresh" `Quick test_live_refresh;
           Alcotest.test_case "schema rejection" `Quick
             test_live_rejects_initial_schema;
+          Alcotest.test_case "required schema rejection" `Quick
+            test_live_rejects_missing_required_schema;
           Alcotest.test_case "serialized refresh" `Quick
             test_refreshes_are_serialized;
         ] );

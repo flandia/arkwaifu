@@ -18,6 +18,7 @@ type t = {
   sitemap_data : unit -> (sitemap_data, error) result Lwt.t;
   art : string -> string -> (Model.art, error) result Lwt.t;
   source_art : string -> string -> (Model.source_art, error) result Lwt.t;
+  media : string -> string -> (Model.media_asset, error) result Lwt.t;
   unreferenced_arts : unit -> (Model.unreferenced_art list, error) result Lwt.t;
   art_context :
     string -> string -> string -> (Model.art_context, error) result Lwt.t;
@@ -104,7 +105,9 @@ module Query = struct
   open Caqti_request.Infix
 
   let schema_version = (unit ->! int) "PRAGMA user_version"
-  let ping = (unit ->! int) "SELECT 1"
+  let ping =
+    (unit ->! int)
+      "SELECT EXISTS(SELECT 1 FROM sqlite_schema WHERE name = 'unit_versions')"
 
   let sitemap_movements =
     (unit ->* t2 string string)
@@ -166,6 +169,30 @@ module Query = struct
                byte_size, width, height
         FROM source_arts
         WHERE category = ? AND source_art_id = ?
+      |}
+
+  let media =
+    (t2 string string ->? string)
+      {|
+        SELECT json_object(
+          'id', media_id,
+          'kind', media_kind,
+          'objectKey', object_key,
+          'contentType', content_type,
+          'byteSize', byte_size,
+          'duration', COALESCE(
+            duration,
+            CAST(frame_count AS REAL) * frame_rate_denominator /
+              frame_rate_numerator
+          ),
+          'width', width,
+          'height', height,
+          'frameRate', CAST(frame_rate_numerator AS REAL) /
+            frame_rate_denominator,
+          'frameCount', frame_count
+        )
+        FROM media_assets
+        WHERE media_kind = ? AND media_id = ?
       |}
 
   let unreferenced_arts =
@@ -269,6 +296,16 @@ module Query = struct
             OR substr(art.art_id, 1, length(?) + 1) = ? || '#'
           )
         ORDER BY art.art_id, reference.story_id, reference.position
+      |}
+
+  let art_context_textures =
+    (t2 string string ->* t2 string string)
+      {|
+        SELECT art_id, object_key
+        FROM arts
+        WHERE category = 'image'
+          AND substr(art_id, 1, length(?) + 1) = ? || '/'
+        ORDER BY art_id
       |}
 
   let movements =
@@ -394,7 +431,33 @@ module Query = struct
           'videoHeight', video.height,
           'videoRateNumerator', video.frame_rate_numerator,
           'videoRateDenominator', video.frame_rate_denominator,
-          'videoFrameCount', video.frame_count
+          'videoFrameCount', video.frame_count,
+          'openingMedia', COALESCE((
+            SELECT json_group_array(json_object(
+              'id', reference.media_id,
+              'kind', reference.kind,
+              'contentType', asset.content_type,
+              'byteSize', asset.byte_size,
+              'objectKey', asset.object_key
+            ))
+            FROM stories AS entry_story
+            JOIN story_media_references AS reference
+              ON reference.locale = entry_story.locale
+             AND reference.story_id = entry_story.story_id
+            LEFT JOIN media_assets AS asset
+              ON asset.media_kind = 'video'
+             AND asset.media_id = reference.media_id
+            WHERE entry_story.locale = section.locale
+              AND reference.kind = 'video'
+              AND (
+                entry_story.story_id =
+                  'others:obt:main:' || section.review_group_id || '_zone_enter'
+                OR entry_story.story_id =
+                  'others:activities:' || section.review_group_id ||
+                  ':level_' || section.review_group_id || '_entry'
+              )
+            ORDER BY reference.position
+          ), json('[]'))
         )
         FROM movement_locations AS location
         JOIN movement_sections AS section
@@ -471,7 +534,33 @@ module Query = struct
           'videoHeight', video.height,
           'videoRateNumerator', video.frame_rate_numerator,
           'videoRateDenominator', video.frame_rate_denominator,
-          'videoFrameCount', video.frame_count
+          'videoFrameCount', video.frame_count,
+          'openingMedia', COALESCE((
+            SELECT json_group_array(json_object(
+              'id', reference.media_id,
+              'kind', reference.kind,
+              'contentType', asset.content_type,
+              'byteSize', asset.byte_size,
+              'objectKey', asset.object_key
+            ))
+            FROM stories AS entry_story
+            JOIN story_media_references AS reference
+              ON reference.locale = entry_story.locale
+             AND reference.story_id = entry_story.story_id
+            LEFT JOIN media_assets AS asset
+              ON asset.media_kind = 'video'
+             AND asset.media_id = reference.media_id
+            WHERE entry_story.locale = section.locale
+              AND reference.kind = 'video'
+              AND (
+                entry_story.story_id =
+                  'others:obt:main:' || section.review_group_id || '_zone_enter'
+                OR entry_story.story_id =
+                  'others:activities:' || section.review_group_id ||
+                  ':level_' || section.review_group_id || '_entry'
+              )
+            ORDER BY reference.position
+          ), json('[]'))
         )
         FROM movement_locations AS location
         JOIN movement_sections AS section
@@ -556,12 +645,56 @@ module Query = struct
         ORDER BY position
       |}
 
+  let story_detail =
+    (t2 string (t2 string string) ->? string)
+      {|
+        SELECT json_object(
+          'id', story.story_id, 'tag', story.tag, 'tagText', story.tag_text,
+          'code', story.code, 'name', story.name, 'info', story.info,
+          'text', story.text,
+          'media', COALESCE(
+            (
+              SELECT json_group_array(json_object(
+                'id', reference.media_id,
+                'kind', reference.kind,
+                'contentType', asset.content_type,
+                'byteSize', asset.byte_size,
+                'objectKey', asset.object_key
+              ))
+              FROM story_media_references AS reference
+              LEFT JOIN media_assets AS asset
+                ON asset.media_kind = CASE
+                  WHEN reference.kind = 'video' THEN 'video'
+                  ELSE 'audio'
+                END
+               AND asset.media_id = reference.media_id
+              WHERE reference.locale = story.locale
+                AND reference.story_id = story.story_id
+              ORDER BY reference.position
+            ),
+            json('[]')
+          )
+        )
+        FROM stories AS story
+        WHERE story.locale = ?
+          AND story.collection_id = ?
+          AND story.story_id = ?
+      |}
+
   let collection_story_references =
     (t2 string string ->* string)
       {|
         SELECT json_object(
           'storyID', story.story_id, 'artID', reference.art_id,
           'kind', reference.kind, 'category', reference.category,
+          'isAnimeKV', json(CASE
+            WHEN reference.category = 'background' AND EXISTS (
+              SELECT 1
+              FROM arts AS texture
+              WHERE texture.category = 'image'
+                AND substr(texture.art_id, 1, length(reference.art_id) + 1) =
+                    reference.art_id || '/'
+            ) THEN 'true' ELSE 'false' END),
           'title', reference.title, 'subtitle', reference.subtitle,
           'names', json(reference.names_json), 'objectKey', art.object_key
         )
@@ -574,6 +707,31 @@ module Query = struct
          AND art.art_id = reference.art_id
         WHERE story.locale = ? AND story.collection_id = ?
         ORDER BY story.position, reference.position
+      |}
+
+  let story_references =
+    (t2 string string ->* string)
+      {|
+        SELECT json_object(
+          'storyID', reference.story_id, 'artID', reference.art_id,
+          'kind', reference.kind, 'category', reference.category,
+          'isAnimeKV', json(CASE
+            WHEN reference.category = 'background' AND EXISTS (
+              SELECT 1
+              FROM arts AS texture
+              WHERE texture.category = 'image'
+                AND substr(texture.art_id, 1, length(reference.art_id) + 1) =
+                    reference.art_id || '/'
+            ) THEN 'true' ELSE 'false' END),
+          'title', reference.title, 'subtitle', reference.subtitle,
+          'names', json(reference.names_json), 'objectKey', art.object_key
+        )
+        FROM story_art_references AS reference
+        LEFT JOIN arts AS art
+          ON art.category = reference.category
+         AND art.art_id = reference.art_id
+        WHERE reference.locale = ? AND reference.story_id = ?
+        ORDER BY reference.position
       |}
 
   let archive_index =
@@ -611,6 +769,14 @@ module Query = struct
           'groupID', archive.archive_id, 'storyID', story.story_id,
           'artID', reference.art_id, 'kind', reference.kind,
           'category', reference.category, 'title', reference.title,
+          'isAnimeKV', json(CASE
+            WHEN reference.category = 'background' AND EXISTS (
+              SELECT 1
+              FROM arts AS texture
+              WHERE texture.category = 'image'
+                AND substr(texture.art_id, 1, length(reference.art_id) + 1) =
+                    reference.art_id || '/'
+            ) THEN 'true' ELSE 'false' END),
           'subtitle', reference.subtitle, 'names', json(reference.names_json),
           'objectKey', art.object_key
         )
@@ -636,6 +802,30 @@ module Query = struct
         )
         FROM archive_groups
         WHERE locale = ? AND archive_kind = ? AND archive_id = ?
+      |}
+
+  let archive_entry_media =
+    (t2 string (t2 string string) ->* string)
+      {|
+        SELECT json_object(
+          'id', reference.media_id,
+          'kind', reference.kind,
+          'contentType', asset.content_type,
+          'byteSize', asset.byte_size,
+          'objectKey', asset.object_key
+        )
+        FROM stories AS entry_story
+        JOIN story_media_references AS reference
+          ON reference.locale = entry_story.locale
+         AND reference.story_id = entry_story.story_id
+        LEFT JOIN media_assets AS asset
+          ON asset.media_kind = 'video'
+         AND asset.media_id = reference.media_id
+        WHERE entry_story.locale = ?
+          AND entry_story.story_id =
+            'others:activities:' || ? || ':level_' || ? || '_entry'
+          AND reference.kind = 'video'
+        ORDER BY reference.position
       |}
 
   let gallery_bases =
@@ -772,7 +962,24 @@ module Query = struct
   let search =
     (t2 string string ->* string)
       {|
-        WITH input(query) AS (SELECT lower(trim(?)))
+        WITH input(query, locale) AS (SELECT lower(trim(?)), ?),
+        matching_stories AS MATERIALIZED (
+          SELECT story.locale, story.story_id
+          FROM stories AS story
+          CROSS JOIN input
+          WHERE story.locale = input.locale
+            AND instr(
+            lower(COALESCE(story.info, '') || ' ' || COALESCE(story.text, '')),
+            input.query
+          ) > 0
+        ),
+        story_context_arts AS MATERIALIZED (
+          SELECT DISTINCT reference.locale, reference.category, reference.art_id
+          FROM matching_stories AS story
+          JOIN story_art_references AS reference
+            ON reference.locale = story.locale
+           AND reference.story_id = story.story_id
+        )
         SELECT json_object(
           'kind', entry.kind,
           'id', entry.entry_id,
@@ -787,8 +994,29 @@ module Query = struct
         )
         FROM search_entries AS entry
         CROSS JOIN input
-        WHERE entry.locale = ?
-          AND instr(lower(entry.search_text), input.query) > 0
+        WHERE entry.locale = input.locale
+          AND (
+            instr(lower(entry.search_text), input.query) > 0
+            OR (
+              entry.kind = 'story'
+              AND EXISTS (
+                SELECT 1
+                FROM matching_stories AS story
+                WHERE story.locale = entry.locale
+                  AND story.story_id = entry.entry_id
+              )
+            )
+            OR (
+              entry.kind = 'art'
+              AND EXISTS (
+                SELECT 1
+                FROM story_context_arts AS context
+                WHERE context.locale = entry.locale
+                  AND context.category = entry.category
+                  AND context.art_id = entry.entry_id
+              )
+            )
+          )
         ORDER BY
           CASE
             WHEN lower(entry.entry_id) = input.query
@@ -838,6 +1066,7 @@ module Json = struct
 
   let parse raw = Yojson.Safe.from_string raw
   let string value key = value |> member key |> to_string
+  let bool value key = value |> member key |> to_bool
   let int value key = value |> member key |> to_int
 
   let int64 value key =
@@ -859,6 +1088,9 @@ module Json = struct
     | `Intlit number -> Some (Int64.of_string number)
     | _ -> invalid_arg ("expected nullable integer field " ^ key)
 
+  let float_opt value key =
+    match value |> member key with `Null -> None | json -> Some (to_float json)
+
   let names_value = function
     | `List values -> List.filter_map to_string_option values
     | `String raw ->
@@ -867,6 +1099,8 @@ module Json = struct
     | _ -> invalid_arg "expected names array"
 
   let names value key = value |> member key |> names_value
+
+  let list value key = value |> member key |> to_list
 end
 
 let decode_image_reference prefix value =
@@ -929,6 +1163,16 @@ let decode_movement raw =
       background_video = decode_video_reference value;
     }
 
+let decode_story_media_reference value =
+  Model.
+    {
+      media_id = Json.string value "id";
+      kind = Json.string value "kind";
+      content_type = Json.string_opt value "contentType";
+      byte_size = Json.int64_opt value "byteSize";
+      object_key = Json.string_opt value "objectKey";
+    }
+
 let decode_section raw =
   let value = Json.parse raw in
   let section =
@@ -947,6 +1191,9 @@ let decode_section raw =
         decoration = decode_image_reference "decoration" value;
         retro_background = decode_image_reference "retroBackground" value;
         story_count = Json.int value "storyCount";
+        opening_media_references =
+          Json.list value "openingMedia"
+          |> List.map decode_story_media_reference;
       }
   in
   (section, Json.string value "collectionID", decode_video_reference value)
@@ -962,8 +1209,7 @@ let decode_split raw =
       video = decode_video_reference value;
     }
 
-let decode_story raw =
-  let value = Json.parse raw in
+let decode_story_value value =
   Model.
     {
       id = Json.string value "id";
@@ -972,8 +1218,22 @@ let decode_story raw =
       code = Json.string value "code";
       name = Json.string value "name";
       info = Json.string value "info";
+      text = Json.string_opt value "text" |> Option.value ~default:"";
+      media_references = [];
       art_references = [];
     }
+
+let decode_story raw = decode_story_value (Json.parse raw)
+
+let decode_story_detail raw =
+  let value = Json.parse raw in
+  let story = decode_story_value value in
+  {
+    story with
+    media_references =
+      Json.list value "media"
+      |> List.map decode_story_media_reference;
+  }
 
 let decode_story_reference raw =
   let value = Json.parse raw in
@@ -983,6 +1243,7 @@ let decode_story_reference raw =
         art_id = Json.string value "artID";
         kind = Json.string value "kind";
         category = Json.string value "category";
+        is_anime_kv = Json.bool value "isAnimeKV";
         title = Json.string_opt value "title";
         subtitle = Json.string_opt value "subtitle";
         names = Json.names value "names";
@@ -1164,20 +1425,21 @@ let sqlite_with_pool_observer ~on_acquire path =
         | Ok value -> Ok value
         | Error error -> Error (unavailable error)
       in
-      let check () =
-        use (fun (module Db) -> Db.find Query.schema_version ()) >|= function
-        | Error error -> Error error
-        | Ok version when version <> 2 ->
-            Error
-              (`Unavailable
-                 (Printf.sprintf "unsupported SQLite schema version %d" version))
-        | Ok _ -> Ok ()
-      in
       let health () =
         use (fun (module Db) -> Db.find Query.ping ()) >|= function
         | Ok 1 -> Ok ()
-        | Ok _ -> Error (`Unavailable "unexpected SQLite health-check result")
+        | Ok _ -> Error (`Unavailable "required SQLite schema is unavailable")
         | Error error -> Error error
+      in
+      let check () =
+        use (fun (module Db) -> Db.find Query.schema_version ()) >>= function
+        | Error error -> Lwt.return (Error error)
+        | Ok version when version <> 2 ->
+            Lwt.return
+              (Error
+                 (`Unavailable
+                   (Printf.sprintf "unsupported SQLite schema version %d" version)))
+        | Ok _ -> health ()
       in
       let sitemap_data () =
         use (fun (module Db) ->
@@ -1264,6 +1526,28 @@ let sqlite_with_pool_observer ~on_acquire path =
                   image = { object_key; byte_size; width; height };
                 }
       in
+      let media kind id =
+        use (fun (module Db) -> Db.find_opt Query.media (kind, id))
+        >|= function
+        | Error error -> Error error
+        | Ok None -> Error `Not_found
+        | Ok (Some raw) ->
+            decode_result "media asset" (fun () ->
+                let value = Json.parse raw in
+                Model.
+                  {
+                    id = Json.string value "id";
+                    kind = Json.string value "kind";
+                    object_key = Json.string value "objectKey";
+                    content_type = Json.string value "contentType";
+                    byte_size = Json.int64 value "byteSize";
+                    duration = Json.float_opt value "duration";
+                    width = Json.int_opt value "width";
+                    height = Json.int_opt value "height";
+                    frame_rate = Json.float_opt value "frameRate";
+                    frame_count = Json.int_opt value "frameCount";
+                  })
+      in
       let unreferenced_arts () =
         use (fun (module Db) -> Db.collect_list Query.unreferenced_arts ())
         >|= Result.map (fun rows ->
@@ -1288,12 +1572,16 @@ let sqlite_with_pool_observer ~on_acquire path =
                        Db.collect_list Query.art_context_siblings
                          (locale, (id, (prefix, (prefix, prefix))))
                      else Lwt.return (Ok []))
-                    >|= Result.map (fun siblings ->
-                            Some (occurrences, siblings)) ))
+                    >>= ( function
+                    | Error error -> Lwt.return (Error error)
+                    | Ok siblings ->
+                        Db.collect_list Query.art_context_textures (id, id)
+                        >|= Result.map (fun textures ->
+                                Some (occurrences, siblings, textures)) ) ))
         >|= function
         | Error error -> Error error
         | Ok None -> Error `Not_found
-        | Ok (Some (occurrence_raws, sibling_raws)) ->
+        | Ok (Some (occurrence_raws, sibling_raws, texture_rows)) ->
             decode_result "art context" (fun () ->
                 let occurrence_values = List.map Json.parse occurrence_raws in
                 let names =
@@ -1354,6 +1642,12 @@ let sqlite_with_pool_observer ~on_acquire path =
                   {
                     names;
                     siblings = decode_siblings [] sibling_raws;
+                    textures =
+                      List.map
+                        (fun (art_id, composition_object_key) ->
+                          Model.
+                            { art_id; names = []; composition_object_key })
+                        texture_rows;
                     occurrences;
                   })
       in
@@ -1531,41 +1825,35 @@ let sqlite_with_pool_observer ~on_acquire path =
       in
       let story_detail_for_collection locale collection_id parent story_id =
         use (fun (module Db) ->
-            Db.collect_list Query.collection_stories (locale, collection_id)
+            Db.find_opt Query.story_detail
+              (locale, (collection_id, story_id))
             >>= function
             | Error error -> Lwt.return (Error error)
-            | Ok stories ->
-                Db.collect_list Query.collection_story_references
-                  (locale, collection_id)
-                >|= Result.map (fun references -> (stories, references)))
+            | Ok None -> Lwt.return (Ok None)
+            | Ok (Some story) ->
+                Db.collect_list Query.story_references (locale, story_id)
+                >|= Result.map (fun references -> Some (story, references)))
         >|= function
         | Error error -> Error error
-        | Ok (story_raws, reference_raws) ->
+        | Ok None -> Error `Not_found
+        | Ok (Some (story_raw, reference_raws)) ->
             decode_result "story" (fun () ->
-                let stories, _, _ = story_data story_raws reference_raws in
-                match
-                  List.find_opt
-                    (fun (story : Model.story) -> String.equal story.id story_id)
-                    stories
-                with
-                | None -> None
-                | Some story ->
-                    let references =
-                      List.map decode_story_reference reference_raws
-                      |> List.filter_map (fun (candidate, reference) ->
-                             if String.equal candidate story_id then
-                               Some reference
-                             else None)
-                    in
-                    Some
-                      Model.
-                        {
-                          story = { story with art_references = references };
-                          parent;
-                        })
+                let story = decode_story_detail story_raw in
+                let references =
+                  List.map decode_story_reference reference_raws
+                  |> List.filter_map (fun (candidate, reference) ->
+                         if String.equal candidate story_id then Some reference
+                         else None)
+                in
+                Some
+                  Model.
+                    {
+                      story = { story with art_references = references };
+                      parent;
+                    })
             |> (function
-                 | Ok None -> Error `Not_found
                  | Ok (Some detail) -> Ok detail
+                 | Ok None -> Error `Not_found
                  | Error error -> Error error)
       in
       let score_story locale movement_id section_id story_id =
@@ -1674,16 +1962,28 @@ let sqlite_with_pool_observer ~on_acquire path =
                     | Ok stories ->
                         Db.collect_list Query.collection_story_references
                           (locale, collection_id)
-                        >|= Result.map (fun references ->
-                                Some
-                                  ( group_raw,
-                                    collection_id,
-                                    stories,
-                                    references )) ))
+                        >>= ( function
+                        | Error error -> Lwt.return (Error error)
+                        | Ok references ->
+                            Db.collect_list Query.archive_entry_media
+                              (locale, (id, id))
+                            >|= Result.map (fun media ->
+                                    Some
+                                      ( group_raw,
+                                        collection_id,
+                                        stories,
+                                        references,
+                                        media )) ) ))
             >>= ( function
             | Error error -> Lwt.return (Error error)
             | Ok None -> Lwt.return (Error `Not_found)
-            | Ok (Some (group_raw, collection_id, story_raws, reference_raws)) ->
+            | Ok
+                (Some
+                  ( group_raw,
+                    collection_id,
+                    story_raws,
+                    reference_raws,
+                    media_raws )) ->
                 gallery_by_collection locale collection_id >|= ( function
                 | Error error -> Error error
                 | Ok gallery ->
@@ -1707,6 +2007,11 @@ let sqlite_with_pool_observer ~on_acquire path =
                                 preview_art_references;
                             preview_art_references;
                             art_references;
+                            opening_media_references =
+                              List.map
+                                (fun raw ->
+                                  decode_story_media_reference (Json.parse raw))
+                                media_raws;
                             gallery;
                           }) ) )
       in
@@ -1740,6 +2045,7 @@ let sqlite_with_pool_observer ~on_acquire path =
           sitemap_data;
           art;
           source_art;
+          media;
           unreferenced_arts;
           art_context;
           movements;
@@ -1925,6 +2231,9 @@ let start_live ~fetch ~cache_dir ~download_timeout_seconds =
             source_art =
               (fun category id ->
                 with_current (fun value -> value.source_art category id));
+            media =
+              (fun kind id ->
+                with_current (fun value -> value.media kind id));
             unreferenced_arts =
               (fun () -> with_current (fun value -> value.unreferenced_arts ()));
             art_context =
@@ -2044,6 +2353,8 @@ let art (database : t) category id = database.art category id
 
 let source_art (database : t) category id =
   database.source_art category id
+
+let media (database : t) kind id = database.media kind id
 
 let unreferenced_arts (database : t) = database.unreferenced_arts ()
 

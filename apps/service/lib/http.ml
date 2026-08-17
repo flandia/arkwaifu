@@ -172,6 +172,12 @@ let routes ?china_object_base_url ~database ~object_base_url =
                (Dream.param request "category")
                (Dream.param request "id")
              >>= respond (Model.source_art_json ~object_base_url));
+         Dream.get "/api/media/:kind/:id" (fun request ->
+             let object_base_url = object_url request in
+             Database.media database
+               (Dream.param request "kind")
+               (Dream.param request "id")
+             >>= respond (Model.media_asset_json ~object_base_url));
          Dream.get "/api/unreferenced-arts" (fun request ->
              let object_base_url = object_url request in
              Database.unreferenced_arts database
