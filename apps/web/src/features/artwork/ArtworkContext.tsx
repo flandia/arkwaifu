@@ -17,6 +17,45 @@ interface OccurrenceGroup {
   stories: ArtOccurrence[];
 }
 
+export function BundleTextures({
+  context,
+  from,
+  locale,
+}: {
+  context: ArtContext;
+  from: string;
+  locale: Locale;
+}) {
+  const { t } = useUi();
+  const language = localeLanguageTag(locale);
+  if (!context.textures.length) return null;
+
+  return (
+    <section className="mt-[clamp(4rem,9vw,8rem)]" aria-labelledby="bundle-textures-title">
+      <SectionHeading
+        eyebrow={t("art.bundleContents")}
+        meta={new Intl.NumberFormat(language).format(context.textures.length)}
+        title={t("art.textures")}
+        titleId="bundle-textures-title"
+      />
+      <ArtworkGrid>
+        {context.textures.map((texture) => (
+          <ArtworkCard
+            category="image"
+            from={from}
+            id={texture.artID}
+            key={texture.artID}
+            language={language}
+            locale={locale}
+            thumbnailUrl={texture.thumbnailContentUrl}
+            title={texture.artID.split("/").at(-1) ?? texture.artID}
+          />
+        ))}
+      </ArtworkGrid>
+    </section>
+  );
+}
+
 function groupOccurrences(occurrences: ArtOccurrence[]): OccurrenceGroup[] {
   const groups = new Map<string, OccurrenceGroup>();
   for (const occurrence of occurrences) {

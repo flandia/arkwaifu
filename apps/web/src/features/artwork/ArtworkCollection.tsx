@@ -13,6 +13,7 @@ const initialArtworkCount = 7;
 export interface ArtworkCollectionItem {
   artID: string;
   category: ArtCategory;
+  isAnimeKV?: boolean;
   title?: string | null;
   subtitle?: string | null;
   names?: string[];
@@ -61,6 +62,7 @@ function ArtworkCategorySection({
         <ArtworkGrid>
           {visibleItems.map((artwork) => (
             <ArtworkCard
+              badge={artwork.isAnimeKV ? t("art.animeKV") : undefined}
               category={artwork.category}
               from={from}
               id={artwork.artID}

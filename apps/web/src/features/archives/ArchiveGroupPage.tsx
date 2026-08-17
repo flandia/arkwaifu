@@ -12,6 +12,7 @@ import {
 import { ArchivePage, BackLink, PageHeader } from "../../shared/Page";
 import { ArtworkCollection } from "../artwork/ArtworkCollection";
 import { GalleryDisplays } from "../galleries/GalleryDisplays";
+import { OpeningMediaCollection } from "../hierarchy/MediaCollection";
 import { StoryRecords } from "../hierarchy/StoryRecords";
 
 export function ArchiveGroupPage() {
@@ -48,6 +49,11 @@ export function ArchiveGroupPage() {
       />
       <StoryRecords basePath={basePath} locale={locale} stories={group.stories} />
       {group.gallery ? <GalleryDisplays gallery={group.gallery} locale={locale} /> : null}
+      <OpeningMediaCollection
+        from={`${location.pathname}${location.search}`}
+        locale={locale}
+        media={group.openingMedia}
+      />
       <ArtworkCollection
         artworks={group.artReferences}
         eyebrow={t("art.archiveReferences")}

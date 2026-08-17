@@ -1,10 +1,23 @@
-import type { ArtCategory, StoryArtReference } from "./types";
+import type { ArtCategory, StoryArtReference, StoryMediaReference } from "./types";
 
 /** Keeps the first reference for each category and artwork identifier pair. */
 export function uniqueStoryArtReferences(references: StoryArtReference[]): StoryArtReference[] {
   const seen = new Set<string>();
   return references.filter((reference) => {
     const key = `${reference.category}:${reference.artID}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
+/** Keeps the first reference for each media kind and source identifier pair. */
+export function uniqueStoryMediaReferences(
+  references: StoryMediaReference[],
+): StoryMediaReference[] {
+  const seen = new Set<string>();
+  return references.filter((reference) => {
+    const key = `${reference.kind}:${reference.id}`;
     if (seen.has(key)) return false;
     seen.add(key);
     return true;

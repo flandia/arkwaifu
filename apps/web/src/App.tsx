@@ -50,6 +50,9 @@ const NotFoundPage = lazy(async () => ({
 const MovementPage = lazy(async () => ({
   default: (await import("./features/scores/MovementPage")).MovementPage,
 }));
+const MediaDetailPage = lazy(async () => ({
+  default: (await import("./features/media/MediaDetailPage")).MediaDetailPage,
+}));
 const ScoreIndexPage = lazy(async () => ({
   default: (await import("./features/scores/ScoreIndexPage")).ScoreIndexPage,
 }));
@@ -200,6 +203,7 @@ export default function App() {
         <Route element={<GalleryDisplayPage />} path="galleries/:galleryID/displays/:displayID" />
         <Route element={<UnreferencedArtPage />} path="unreferenced" />
         <Route element={<ArtDetailPage />} path="art/:category/:artID" />
+        <Route element={<MediaDetailPage />} path="media/:kind/:mediaID" />
         <Route element={<AboutPage />} path="about" />
         <Route element={<NotFoundPage />} path="*" />
       </Route>

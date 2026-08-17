@@ -119,6 +119,7 @@ export interface ArtOccurrence {
 export interface ArtContext {
   names: string[];
   siblings: ArtSibling[];
+  textures: ArtSibling[];
   occurrences: ArtOccurrence[];
 }
 
@@ -127,10 +128,36 @@ export interface StoryArtReference {
   artID: string;
   kind: "picture" | "character";
   category: ArtCategory;
+  isAnimeKV: boolean;
   title: string | null;
   subtitle: string | null;
   names: string[];
   thumbnailContentUrl: string | null;
+}
+
+/** One story sound, music track, or video reference. */
+export interface StoryMediaReference {
+  id: string;
+  kind: "sound" | "music" | "video";
+  contentType: string | null;
+  byteSize: number | null;
+  contentUrl: string | null;
+}
+
+export type MediaKind = "audio" | "video";
+
+/** One independently addressable audio or video archive resource. */
+export interface MediaDetail {
+  id: string;
+  kind: MediaKind;
+  contentType: string;
+  byteSize: number;
+  duration: number | null;
+  width: number | null;
+  height: number | null;
+  frameRate: number | null;
+  frameCount: number | null;
+  contentUrl: string;
 }
 
 interface StoryMetadata {
@@ -151,6 +178,8 @@ export interface StorySummary extends StoryMetadata {
 /** One story with its owning hierarchy and complete artwork list. */
 export interface StoryDetail extends StoryMetadata {
   parent: StoryParent;
+  text: string;
+  media: StoryMediaReference[];
   artReferences: StoryArtReference[];
 }
 
@@ -171,6 +200,7 @@ export interface ScoreSectionSummary {
   decoration: ScoreImage | null;
   retroBackground: ScoreImage | null;
   storyCount: number;
+  openingMedia: StoryMediaReference[];
 }
 
 /** One section with its stories and aggregate artwork. */
@@ -238,6 +268,7 @@ export interface ArchiveGroupSummary {
 export interface ArchiveGroupDetail extends ArchiveGroupSummary {
   stories: StorySummary[];
   artReferences: StoryArtReference[];
+  openingMedia: StoryMediaReference[];
   gallery: GalleryDetail | null;
 }
 

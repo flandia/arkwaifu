@@ -80,6 +80,7 @@ export function ArtworkImage({
 }
 
 export interface ArtworkCardProps {
+  badge?: string;
   category: ArtCategory;
   id: string;
   locale: Locale;
@@ -92,6 +93,7 @@ export interface ArtworkCardProps {
 }
 
 export function ArtworkCard({
+  badge,
   category,
   from,
   id,
@@ -135,6 +137,11 @@ export function ArtworkCard({
         ) : (
           media
         )}
+        {badge ? (
+          <span className="absolute top-3 right-3 border-2 border-ink bg-paper px-2 py-1 font-mono text-[0.67rem] font-extrabold tracking-wider text-ink uppercase">
+            {badge}
+          </span>
+        ) : null}
         <span
           className="absolute right-3 bottom-3 grid size-10 place-items-center border-2 border-ink bg-brand font-black text-white transition-colors group-hover:bg-ink"
           aria-hidden="true"

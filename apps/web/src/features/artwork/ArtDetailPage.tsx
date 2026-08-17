@@ -11,7 +11,7 @@ import { ActionLink } from "../../shared/ui/Action";
 import { ArtworkGrid } from "../../shared/ui/ArtworkGrid";
 import { Eyebrow, SectionHeading } from "../../shared/ui/Typography";
 import { ArtworkImage } from "./ArtworkCard";
-import { ArtworkOccurrences, SiblingCharacters } from "./ArtworkContext";
+import { ArtworkOccurrences, BundleTextures, SiblingCharacters } from "./ArtworkContext";
 import { SourceLayerCard } from "./SourceLayerCard";
 
 function isArtCategory(value: string | undefined): value is ArtCategory {
@@ -137,6 +137,11 @@ export function ArtDetailPage() {
           </ArtworkGrid>
         </section>
       ) : null}
+      <BundleTextures
+        context={context}
+        from={`${location.pathname}${location.search}`}
+        locale={locale}
+      />
       {category === "character" ? (
         <SiblingCharacters context={context} currentArtID={art.id} from={backTo} locale={locale} />
       ) : null}

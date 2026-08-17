@@ -8,6 +8,7 @@ import {
 import { getArt, getArtContext, getArtWithSources } from "./api/artwork";
 import { ApiError, clearApiCache, resolveApiBaseUrl } from "./api/client";
 import { getGalleries, getGallery } from "./api/galleries";
+import { getMedia } from "./api/media";
 import { getSearchResults } from "./api/search";
 import { getMovement, getMovements, getScoreSection, getScoreStory } from "./api/scores";
 import type {
@@ -20,13 +21,19 @@ import type {
   GallerySummary,
   MovementDetail,
   MovementSummary,
+  MediaDetail,
   ScoreSectionDetail,
   StoryArtReference,
   StoryDetail,
   StorySummary,
 } from "./api/types";
 import { getUnreferencedArts } from "./api/unreferenced";
-import { artTransitionName, formatBytes, uniqueStoryArtReferences } from "./api/utils";
+import {
+  artTransitionName,
+  formatBytes,
+  uniqueStoryArtReferences,
+  uniqueStoryMediaReferences,
+} from "./api/utils";
 
 const configuredApiBaseUrl = resolveApiBaseUrl(import.meta.env.VITE_API_BASE_URL);
 
@@ -38,6 +45,7 @@ const reference: StoryArtReference = {
   artID: "char_220_grani#5$1",
   kind: "character",
   category: "character",
+  isAnimeKV: false,
   title: null,
   subtitle: null,
   names: ["Grani"],
@@ -86,6 +94,16 @@ const storyDetail: StoryDetail = {
   name: storySummary.name,
   info: "A story detail.",
   parent: scoreParent,
+  text: "The source story text.",
+  media: [
+    {
+      id: "m_story",
+      kind: "sound",
+      contentType: "audio/wav",
+      byteSize: 321,
+      contentUrl: "https://objects.example/m_story.wav",
+    },
+  ],
   artReferences: [reference],
 };
 
@@ -115,6 +133,19 @@ const galleryDetail: GalleryDetail = {
   ],
 };
 
+const mediaDetail: MediaDetail = {
+  id: "video/story.mp4",
+  kind: "video",
+  contentType: "video/webm",
+  byteSize: 654,
+  duration: 8.25,
+  width: 1920,
+  height: 1080,
+  frameRate: 30000 / 1001,
+  frameCount: 248,
+  contentUrl: "https://objects.example/MEDIA/cn/video/story.webm",
+};
+
 const sectionDetail: ScoreSectionDetail = {
   id: scoreParent.sectionID,
   name: scoreParent.sectionName,
@@ -129,6 +160,7 @@ const sectionDetail: ScoreSectionDetail = {
   decoration: null,
   retroBackground: null,
   storyCount: 1,
+  openingMedia: storyDetail.media,
   activeBackgroundVideo: null,
   stories: [storySummary],
   artReferences: [reference],
@@ -164,6 +196,12 @@ describe("archive helpers", () => {
     ]);
   });
 
+  it("deduplicates media identities while preserving distinct kinds", () => {
+    const sound = storyDetail.media[0]!;
+    const music = { ...sound, kind: "music" as const };
+    expect(uniqueStoryMediaReferences([sound, sound, music])).toEqual([sound, music]);
+  });
+
   it("creates stable CSS-safe transition names", () => {
     expect(artTransitionName("character", reference.artID)).toMatch(/^art-[a-z0-9]+$/);
     expect(artTransitionName("character", reference.artID)).toBe(
@@ -182,6 +220,13 @@ describe("archive helpers", () => {
 });
 
 describe("archive API client", () => {
+  it("loads independently addressable media resources", async () => {
+    const fetch = spyOn(globalThis, "fetch").mockResolvedValue(jsonResponse(mediaDetail));
+
+    expect(await getMedia("video", mediaDetail.id)).toEqual(mediaDetail);
+    expect(fetch.mock.calls[0]?.[0]).toBe(apiUrl("/api/media/video/video%2Fstory.mp4"));
+  });
+
   it("encodes art IDs and deduplicates in-flight requests", async () => {
     const fetch = spyOn(globalThis, "fetch").mockResolvedValue(jsonResponse(artResponse));
 
@@ -270,6 +315,7 @@ describe("archive API client", () => {
       ...group,
       stories: [storySummary],
       artReferences: [reference],
+      openingMedia: storyDetail.media,
       gallery: null,
     };
     const archiveStory: StoryDetail = {
@@ -366,6 +412,7 @@ describe("archive API client", () => {
     const context: ArtContext = {
       names: ["安洁莉娜"],
       siblings: [],
+      textures: [],
       occurrences: [
         {
           parent: scoreParent,

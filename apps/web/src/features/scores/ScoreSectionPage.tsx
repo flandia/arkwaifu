@@ -8,6 +8,7 @@ import { ArchivePage, BackLink } from "../../shared/Page";
 import { Eyebrow } from "../../shared/ui/Typography";
 import { ArtworkCollection } from "../artwork/ArtworkCollection";
 import { GalleryDisplays } from "../galleries/GalleryDisplays";
+import { OpeningMediaCollection } from "../hierarchy/MediaCollection";
 import { ScoreImageAsset } from "../hierarchy/ScoreVisual";
 import { StoryRecords } from "../hierarchy/StoryRecords";
 
@@ -122,6 +123,12 @@ export function ScoreSectionPage() {
             tone={heroPassed ? "light" : "dark"}
           />
         ) : null}
+        <OpeningMediaCollection
+          from={`${location.pathname}${location.search}`}
+          locale={locale}
+          media={section.openingMedia}
+          tone={heroPassed ? "light" : "dark"}
+        />
         <ArtworkCollection
           artworks={section.artReferences}
           eyebrow={t("art.sectionReferences")}

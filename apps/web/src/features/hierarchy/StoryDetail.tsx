@@ -4,7 +4,9 @@ import { uniqueStoryArtReferences } from "../../api/utils";
 import { useUi } from "../../i18n";
 import { localeLanguageTag } from "../../navigation";
 import { ArchivePage, BackLink, PageHeader } from "../../shared/Page";
+import { SectionHeading } from "../../shared/ui/Typography";
 import { ArtworkCollection } from "../artwork/ArtworkCollection";
+import { StoryMediaCollection } from "./MediaCollection";
 
 export function OwnedStoryDetail({
   backTo,
@@ -51,6 +53,26 @@ export function OwnedStoryDetail({
         language={language}
         locale={locale}
       />
+      <StoryMediaCollection
+        from={`${location.pathname}${location.search}`}
+        locale={locale}
+        media={story.media}
+      />
+      {story.text ? (
+        <section className="mt-[clamp(4rem,9vw,8rem)]" aria-labelledby="story-text-title">
+          <SectionHeading
+            eyebrow={t("story.record")}
+            title={t("story.text")}
+            titleId="story-text-title"
+          />
+          <div
+            className="border-y-2 border-ink/20 bg-surface px-5 py-6 font-mono text-sm leading-relaxed whitespace-pre-wrap [overflow-wrap:anywhere] sm:px-8 sm:py-8"
+            lang={language}
+          >
+            {story.text}
+          </div>
+        </section>
+      ) : null}
     </ArchivePage>
   );
 }

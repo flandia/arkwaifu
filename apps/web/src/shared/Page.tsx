@@ -68,7 +68,7 @@ export function PageHeader({
     <header className="grid border-b-[3px] border-ink pb-[clamp(2rem,5vw,4rem)]">
       <Eyebrow>{eyebrow}</Eyebrow>
       <h1
-        className="mb-6 max-w-[14ch] font-display text-[clamp(3.4rem,8vw,7.5rem)] leading-[0.88] font-black tracking-[-0.035em] uppercase max-sm:text-[clamp(3rem,15vw,5.5rem)]"
+        className="mb-6 max-w-[14ch] [overflow-wrap:anywhere] font-display text-[clamp(3.4rem,8vw,7.5rem)] leading-[0.88] font-black tracking-[-0.035em] uppercase max-sm:text-[clamp(3rem,15vw,5.5rem)]"
         lang={titleLanguage}
       >
         {title}
