@@ -31,6 +31,7 @@ from arkwaifu_updateloop.upstream.art import (
     _extract_and_render_art_resource,
     _ProcessingStageError,
     _Resource,
+    _unzip_resource,
 )
 from arkwaifu_updateloop.upstream.cache import CachedDirectory
 
@@ -52,6 +53,22 @@ def _empty_render(extracted: Path, rendered: Path, version: str) -> None:
     extracted.mkdir(parents=True, exist_ok=True)
     (extracted / "unity-export.txt").write_text("uncomposed", encoding="utf-8")
     write_art_manifest(ArtManifest(version, (), ()), rendered)
+
+
+def test_animated_kv_unwrap_keeps_adjacent_stream_resource(tmp_path: Path):
+    resource = _resource("avg/animatedkv/example.ab")
+    wrapper = tmp_path / "wrapper.dat"
+    with ZipFile(wrapper, "w", ZIP_DEFLATED) as archive:
+        archive.writestr(resource.name, b"bundle")
+        archive.writestr("avg/animatedkv/example.resource", b"stream")
+        archive.writestr("avg/animatedkv/ignored.ab", b"other bundle")
+
+    destination = tmp_path / "unwrapped"
+    _unzip_resource(wrapper, resource.name, destination, extract_companions=True)
+
+    assert (destination / resource.name).read_bytes() == b"bundle"
+    assert (destination / "avg/animatedkv/example.resource").read_bytes() == b"stream"
+    assert not (destination / "avg/animatedkv/ignored.ab").exists()
 
 
 @pytest.mark.parametrize(
@@ -424,6 +441,42 @@ async def test_current_gallery_image_bundles_are_selected(tmp_path: Path):
     assert [(resource.name, resource.md5) for resource in resources] == [
         ("avg/backgrounds/76_g1.ab", "bbcc"),
         ("avg/images/76_i01_2.ab", "aabb"),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_story_media_and_animated_bundles_are_selected(tmp_path: Path):
+    builder = UpstreamArtBuilder(
+        version_url="https://example.test/version",
+        asset_base_url="https://x",
+        cache=UpstreamCache(tmp_path / ".cache"),
+    )
+
+    async def respond(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "abInfos": [
+                    {"name": "avg/animatedkv/act3mainss_01.ab", "md5": "AA11"},
+                    {"name": "audio/sound_beta_2/music/act16main/intro.ab", "md5": "BB22"},
+                    {"name": "audio/custom_se/act50side/impact.ab", "md5": "CC33"},
+                    {"name": "audio/sound_beta_2/battle/b_char.ab", "md5": "BC44"},
+                    {"name": "raw/video/03.usm", "md5": "DD44"},
+                    {"name": "audio/sound_beta_2/voice_en/foo.ab", "md5": "EE55"},
+                    {"name": "avg/effects/background/spark.ab", "md5": "FF66"},
+                ]
+            },
+        )
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(respond)) as client:
+        resources = await builder._resources(client, "version")
+
+    assert [(resource.name, resource.md5) for resource in resources] == [
+        ("audio/custom_se/act50side/impact.ab", "cc33"),
+        ("audio/sound_beta_2/battle/b_char.ab", "bc44"),
+        ("audio/sound_beta_2/music/act16main/intro.ab", "bb22"),
+        ("avg/animatedkv/act3mainss_01.ab", "aa11"),
+        ("raw/video/03.usm", "dd44"),
     ]
 
 

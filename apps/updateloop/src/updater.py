@@ -23,11 +23,18 @@ from .asyncio_tools import await_owned
 from .database import (
     apply_changes,
     find_missing_art_references,
+    find_missing_media_references,
     find_missing_score_references,
     initialize_or_validate,
     read_versions,
 )
-from .domain import ArtManifest, FileVideoArtifact, LocaleManifest, PngImage
+from .domain import (
+    ArtManifest,
+    FileAudioArtifact,
+    FileVideoArtifact,
+    LocaleManifest,
+    PngImage,
+)
 from .object_store import ObjectStore
 from .thumbnail import make_thumbnail, thumbnail_object_key
 
@@ -111,8 +118,10 @@ def _prepare_art_publication(
     dict[tuple[str, str], str],
     dict[tuple[str, str], str],
     dict[str, str],
+    dict[tuple[str, str], str],
     tuple[tuple[str, PngImage], ...],
     tuple[tuple[str, FileVideoArtifact], ...],
+    tuple[tuple[str, FileAudioArtifact], ...],
 ]:
     """Derive object keys and candidate uploads from the requested art manifest."""
 
@@ -121,7 +130,7 @@ def _prepare_art_publication(
         None,
     )
     if manifest is None:
-        return {}, {}, {}, {}, (), ()
+        return {}, {}, {}, {}, {}, (), (), ()
     art_keys = {
         (art.category, art.id): art_object_key(
             res_version=art.res_version or manifest.upstream_version,
@@ -155,6 +164,15 @@ def _prepare_art_publication(
         )
         for video in manifest.score_videos
     }
+    media_keys = {
+        (media.kind, media.id): media_object_key(
+            res_version=media.res_version or manifest.upstream_version,
+            kind=media.kind,
+            identifier=media.id,
+            content_type=media.artifact.content_type,
+        )
+        for media in manifest.media
+    }
     png_uploads = tuple(
         [(art_keys[(art.category, art.id)], art.image) for art in manifest.arts]
         + [
@@ -167,15 +185,27 @@ def _prepare_art_publication(
         ]
     )
     video_uploads = tuple(
-        (score_video_keys[video.id], video.video) for video in manifest.score_videos
+        [(score_video_keys[video.id], video.video) for video in manifest.score_videos]
+        + [
+            (media_keys[(media.kind, media.id)], media.artifact)
+            for media in manifest.media
+            if isinstance(media.artifact, FileVideoArtifact)
+        ]
+    )
+    audio_uploads = tuple(
+        (media_keys[(media.kind, media.id)], media.artifact)
+        for media in manifest.media
+        if isinstance(media.artifact, FileAudioArtifact)
     )
     return (
         art_keys,
         source_keys,
         score_asset_keys,
         score_video_keys,
+        media_keys,
         png_uploads,
         video_uploads,
+        audio_uploads,
     )
 
 
@@ -222,6 +252,34 @@ def score_video_object_key(*, res_version: str, identifier: str) -> str:
     return "/".join(quote(segment, safe="") for segment in segments)
 
 
+def media_object_key(*, res_version: str, kind: str, identifier: str, content_type: str) -> str:
+    """Return the immutable object key for one story audio or video asset."""
+
+    if not isinstance(res_version, str) or not res_version:
+        raise ValueError("art resVersion cannot be empty")
+    if kind not in {"audio", "video"}:
+        raise ValueError(f"unknown media kind: {kind}")
+    if not isinstance(identifier, str) or not identifier or identifier != identifier.lower():
+        raise ValueError("media identifier must be a nonempty lower-case string")
+    suffixes = {
+        "audio/flac": "flac",
+        "audio/wav": "wav",
+        "audio/ogg": "ogg",
+        "audio/mp4": "m4a",
+        "audio/mpeg": "mp3",
+        "video/mp4": "mp4",
+        "video/quicktime": "mov",
+        "video/x-m4v": "m4v",
+        "video/webm": "webm",
+    }
+    try:
+        suffix = suffixes[content_type]
+    except KeyError as error:
+        raise ValueError(f"unsupported media content type: {content_type!r}") from error
+    segments = ("MEDIA", res_version, kind, f"{identifier}.{suffix}")
+    return "/".join(quote(segment, safe="") for segment in segments)
+
+
 class Updater:
     """Keep the remote Arkwaifu database and its art objects up-to-date."""
 
@@ -241,7 +299,7 @@ class Updater:
         """Prepare and publish all requested changes as one operation.
 
         Builders run concurrently. Successful manifests enter one local SQLite
-        transaction, immutable PNG and WebM winners and derived thumbnails upload
+        transaction, immutable PNG and video winners and derived thumbnails upload
         with bounded concurrency, and the database uploads last. A failure before
         the final upload leaves the previously published database current,
         although immutable creations can remain unreferenced and mutable thumbnails
@@ -292,8 +350,10 @@ class Updater:
                 source_keys,
                 score_asset_keys,
                 score_video_keys,
+                media_keys,
                 candidate_uploads,
                 candidate_video_uploads,
+                candidate_audio_uploads,
             ) = _prepare_art_publication(manifests)
             apply_started = time.perf_counter()
             try:
@@ -306,6 +366,7 @@ class Updater:
                         source_keys=source_keys,
                         score_asset_keys=score_asset_keys,
                         score_video_keys=score_video_keys,
+                        media_keys=media_keys,
                     )
                 )
             except Exception:
@@ -368,12 +429,30 @@ class Updater:
                     len(missing_score),
                     list(missing_score[:10]),
                 )
+            missing_media = await await_owned(
+                asyncio.to_thread(find_missing_media_references, database_path)
+            )
+            if missing_media:
+                _INCOMPLETE_UPSTREAM_LOGGER.warning(
+                    "database references unavailable story media; continuing count=%d sample=%s",
+                    len(missing_media),
+                    list(missing_media[:10]),
+                )
             await self._upload_artifacts(
                 referenced_uploads,
                 version=art_manifest.upstream_version if art_manifest is not None else None,
             )
             await self._upload_videos(
                 referenced_video_uploads,
+                version=art_manifest.upstream_version if art_manifest is not None else None,
+            )
+            referenced_audio_uploads = tuple(
+                (key, artifact)
+                for key, artifact in candidate_audio_uploads
+                if key in committed_object_keys
+            )
+            await self._upload_audio(
+                referenced_audio_uploads,
                 version=art_manifest.upstream_version if art_manifest is not None else None,
             )
             await self._publish_thumbnails(
@@ -646,7 +725,7 @@ class Updater:
         *,
         version: str | None,
     ) -> None:
-        """Upload immutable Score videos with bounded concurrency."""
+        """Upload immutable videos with bounded concurrency."""
 
         if not uploads:
             return
@@ -693,6 +772,71 @@ class Updater:
 
         tasks = [
             asyncio.create_task(worker(), name=f"batch-video-upload-{index}")
+            for index in range(min(self._upload_workers, len(uploads)))
+        ]
+        batch = asyncio.gather(*tasks)
+        try:
+            await asyncio.shield(batch)
+        except asyncio.CancelledError:
+            stop.set()
+            await await_owned(batch)
+            raise
+        if first_error is not None:
+            raise first_error
+
+    async def _upload_audio(
+        self,
+        uploads: Sequence[tuple[str, FileAudioArtifact]],
+        *,
+        version: str | None,
+    ) -> None:
+        """Upload immutable story audio with bounded concurrency."""
+
+        if not uploads:
+            return
+        iterator = iter(enumerate(uploads, start=1))
+        total = len(uploads)
+        stop = asyncio.Event()
+        first_error: Exception | None = None
+
+        async def worker() -> None:
+            nonlocal first_error
+            while not stop.is_set():
+                try:
+                    current, (key, artifact) = next(iterator)
+                except StopIteration:
+                    return
+                started = time.perf_counter()
+                try:
+                    await self._object_store.put_audio(key, artifact)
+                except Exception as error:  # noqa: BLE001 - adapter errors are opaque
+                    if version is not None:
+                        _log_art_action(
+                            "upload",
+                            version=version,
+                            resource=key,
+                            current=current,
+                            total=total,
+                            status="failed",
+                            elapsed_seconds=time.perf_counter() - started,
+                        )
+                    if first_error is None:
+                        first_error = error
+                    stop.set()
+                    return
+                if version is not None:
+                    _log_art_action(
+                        "upload",
+                        version=version,
+                        resource=key,
+                        current=current,
+                        total=total,
+                        status="done",
+                        elapsed_seconds=time.perf_counter() - started,
+                    )
+
+        tasks = [
+            asyncio.create_task(worker(), name=f"batch-audio-upload-{index}")
             for index in range(min(self._upload_workers, len(uploads)))
         ]
         batch = asyncio.gather(*tasks)

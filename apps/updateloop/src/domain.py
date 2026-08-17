@@ -12,6 +12,8 @@ from PIL import Image
 ArtCategory = Literal["image", "background", "item", "character"]
 SourceRole = Literal["body", "face", "whole_body"]
 SourceArtKind = Literal["character", "composite_panel"]
+StoryMediaKind = Literal["sound", "music", "video"]
+MediaAssetKind = Literal["audio", "video"]
 ScoreAssetKind = Literal[
     "icon",
     "logo",
@@ -137,7 +139,7 @@ PngImage = PngArtifact | FilePngArtifact
 
 @dataclass(frozen=True, slots=True)
 class FileVideoArtifact:
-    """Represent one validated WebM video backed by a stable file."""
+    """Represent one validated video backed by a stable file."""
 
     path: Path
     width: int
@@ -146,6 +148,7 @@ class FileVideoArtifact:
     frame_rate_numerator: int
     frame_rate_denominator: int
     frame_count: int
+    content_type: str = "video/webm"
 
     @classmethod
     def from_path(
@@ -157,8 +160,9 @@ class FileVideoArtifact:
         frame_rate_numerator: int,
         frame_rate_denominator: int,
         frame_count: int,
+        content_type: str = "video/webm",
     ) -> FileVideoArtifact:
-        """Resolve a WebM file and retain its validated stream metadata."""
+        """Resolve a video file and retain its validated stream metadata."""
 
         stable_path = path.resolve(strict=True)
         if not stable_path.is_file():
@@ -175,6 +179,8 @@ class FileVideoArtifact:
         for name, value in values.items():
             if not isinstance(value, int) or isinstance(value, bool) or value <= 0:
                 raise ValueError(f"invalid video {name}: {value!r}")
+        if not isinstance(content_type, str) or not content_type.startswith("video/"):
+            raise ValueError(f"invalid video content type: {content_type!r}")
         return cls(
             path=stable_path,
             width=width,
@@ -183,11 +189,57 @@ class FileVideoArtifact:
             frame_rate_numerator=frame_rate_numerator,
             frame_rate_denominator=frame_rate_denominator,
             frame_count=frame_count,
+            content_type=content_type,
         )
 
     @property
     def content(self) -> bytes:
         """Read the video without retaining it on the artifact."""
+
+        return self.path.read_bytes()
+
+
+@dataclass(frozen=True, slots=True)
+class FileAudioArtifact:
+    """Represent one playable audio file backed by a stable file."""
+
+    path: Path
+    content_type: str
+    byte_size: int
+    duration: float | None = None
+
+    @classmethod
+    def from_path(
+        cls,
+        path: Path,
+        *,
+        content_type: str,
+        duration: float | None = None,
+    ) -> FileAudioArtifact:
+        """Resolve one audio file and retain only its stable metadata."""
+
+        stable_path = path.resolve(strict=True)
+        if not stable_path.is_file():
+            raise ValueError(f"audio path is not a file: {stable_path}")
+        byte_size = stable_path.stat().st_size
+        if byte_size <= 0:
+            raise ValueError(f"invalid audio byte size: {byte_size}")
+        if not isinstance(content_type, str) or not content_type:
+            raise ValueError(f"invalid audio content type: {content_type!r}")
+        if duration is not None and (
+            not isinstance(duration, (int, float)) or isinstance(duration, bool) or duration <= 0
+        ):
+            raise ValueError(f"invalid audio duration: {duration!r}")
+        return cls(
+            path=stable_path,
+            content_type=content_type,
+            byte_size=byte_size,
+            duration=float(duration) if duration is not None else None,
+        )
+
+    @property
+    def content(self) -> bytes:
+        """Read the audio without retaining it on the artifact."""
 
         return self.path.read_bytes()
 
@@ -265,6 +317,17 @@ class ArtManifest:
     source_arts: tuple[SourceArtRecord, ...]
     score_assets: tuple[ScoreAssetRecord, ...] = ()
     score_videos: tuple[ScoreVideoRecord, ...] = ()
+    media: tuple[MediaRecord, ...] = ()
+
+
+@dataclass(frozen=True, slots=True)
+class MediaRecord:
+    """Represent one story media asset extracted from the Windows client."""
+
+    id: str
+    kind: MediaAssetKind
+    artifact: FileAudioArtifact | FileVideoArtifact
+    res_version: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -280,6 +343,14 @@ class StoryArtReference:
 
 
 @dataclass(frozen=True, slots=True)
+class StoryMediaReference:
+    """Describe one ordered sound, music, or video story reference."""
+
+    media_id: str
+    kind: StoryMediaKind
+
+
+@dataclass(frozen=True, slots=True)
 class StoryRecord:
     """Represent one localized story and its ordered art references."""
 
@@ -291,6 +362,8 @@ class StoryRecord:
     name: str
     info: str
     art_references: tuple[StoryArtReference, ...]
+    text: str = ""
+    media_references: tuple[StoryMediaReference, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)

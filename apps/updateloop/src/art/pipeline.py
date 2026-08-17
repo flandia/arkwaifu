@@ -23,9 +23,11 @@ from ..domain import (
     ArtCategory,
     ArtManifest,
     ArtRecord,
+    FileAudioArtifact,
     FilePngArtifact,
     FileVideoArtifact,
     GalleryArtwork,
+    MediaRecord,
     PngArtifact,
     PngImage,
     ScoreAssetKind,
@@ -37,6 +39,7 @@ from ..domain import (
 )
 
 _AVG_ROOT = Path("assets/torappu/dynamicassets/avg")
+_AUDIO_ROOT = Path("assets/torappu/dynamicassets/audio")
 _MIXSTORY_ROOT = Path("assets/torappu/dynamicassets/arts/ui/mixstory")
 _LOGGER = logging.getLogger(__name__)
 _PICTURE_CATEGORIES = {
@@ -60,6 +63,13 @@ _SCORE_ASSET_DIRECTORIES = {
 _SCORE_ASSET_KINDS = frozenset(_SCORE_ASSET_DIRECTORIES.values())
 _IMAGE_PATH_FIELD = "image_path"
 _VIDEO_PATH_FIELD = "video_path"
+_MEDIA_PATH_FIELD = "media_path"
+_VIDEO_CONTENT_TYPES = {
+    ".m4v": "video/x-m4v",
+    ".mov": "video/quicktime",
+    ".mp4": "video/mp4",
+    ".webm": "video/webm",
+}
 
 
 @dataclass(frozen=True, slots=True)
@@ -214,6 +224,143 @@ def _picture_records(extracted_root: Path) -> list[ArtRecord]:
     return records
 
 
+def _animated_records(extracted_root: Path) -> list[ArtRecord]:
+    """Create a poster and one image record for every Anime KV PNG."""
+
+    root = extracted_root / _AVG_ROOT / "animatedkv"
+    records: list[ArtRecord] = []
+    if not root.is_dir():
+        return records
+    for directory in sorted(path for path in root.iterdir() if path.is_dir()):
+        candidates = sorted(directory.rglob("*.png"))
+        if not candidates:
+            continue
+        ranked: list[tuple[int, int, str, Path]] = []
+        for path in candidates:
+            artifact = PngArtifact.from_bytes(path.read_bytes())
+            ranked.append((artifact.width * artifact.height, artifact.byte_size, str(path), path))
+        _area, _size, _path, selected = max(ranked)
+        bundle_id = directory.name.lower()
+        records.append(
+            ArtRecord(
+                id=bundle_id,
+                category="background",
+                image=PngArtifact.from_bytes(selected.read_bytes()),
+            )
+        )
+        for path in candidates:
+            relative_id = path.relative_to(directory).with_suffix("").as_posix().lower()
+            records.append(
+                ArtRecord(
+                    id=f"{bundle_id}/{relative_id}",
+                    category="image",
+                    image=PngArtifact.from_bytes(path.read_bytes()),
+                )
+            )
+    return records
+
+
+def _audio_records_under(root: Path, *, namespace: str | None) -> list[MediaRecord]:
+    """Read playable AudioClip exports from one normalized extraction root."""
+
+    records: list[MediaRecord] = []
+    if not root.is_dir():
+        return records
+    content_types = {
+        ".flac": "audio/flac",
+        ".m4a": "audio/mp4",
+        ".mp3": "audio/mpeg",
+        ".ogg": "audio/ogg",
+        ".wav": "audio/wav",
+    }
+    for path in sorted(candidate for candidate in root.rglob("*") if candidate.is_file()):
+        content_type = content_types.get(path.suffix.lower())
+        if content_type is None:
+            continue
+        duration: float | None = None
+        sidecar = path.with_suffix(path.suffix + ".audio.json")
+        if sidecar.is_file():
+            payload = _read_json(sidecar)
+            raw_duration = payload.get("duration") if isinstance(payload, dict) else None
+            if isinstance(raw_duration, (int, float)) and not isinstance(raw_duration, bool):
+                duration = float(raw_duration) if raw_duration > 0 else None
+        artifact = FileAudioArtifact.from_path(
+            path,
+            content_type=content_type,
+            duration=duration,
+        )
+        if namespace is None:
+            media_id = path.stem.lower()
+        else:
+            media_id = f"{namespace}/{path.relative_to(root).with_suffix('').as_posix()}".lower()
+        records.append(MediaRecord(id=media_id, kind="audio", artifact=artifact))
+    return records
+
+
+def _audio_records(extracted_root: Path) -> list[MediaRecord]:
+    """Read global sounds and namespaced AudioClips embedded in Anime KV bundles."""
+
+    records = _audio_records_under(extracted_root / _AUDIO_ROOT, namespace=None)
+    root = extracted_root / _AVG_ROOT / "animatedkv"
+    if root.is_dir():
+        for directory in sorted(path for path in root.iterdir() if path.is_dir()):
+            records.extend(_audio_records_under(directory, namespace=directory.name.lower()))
+    return records
+
+
+def _video_records(extracted_root: Path) -> list[MediaRecord]:
+    """Read VideoClip exports embedded in Anime KV bundles."""
+
+    root = extracted_root / _AVG_ROOT / "animatedkv"
+    records: list[MediaRecord] = []
+    if not root.is_dir():
+        return records
+    for directory in sorted(path for path in root.iterdir() if path.is_dir()):
+        namespace = directory.name.lower()
+        for path in sorted(candidate for candidate in directory.rglob("*") if candidate.is_file()):
+            content_type = _VIDEO_CONTENT_TYPES.get(path.suffix.lower())
+            if content_type is None:
+                continue
+            sidecar = path.with_suffix(path.suffix + ".video.json")
+            if not sidecar.is_file():
+                raise ValueError(f"missing VideoClip metadata: {sidecar}")
+            payload = _read_json(sidecar)
+            if not isinstance(payload, dict):
+                raise TypeError(f"invalid VideoClip metadata: {sidecar}")
+            declared_content_type = payload.get("content_type", content_type)
+            if declared_content_type != content_type:
+                raise ValueError(
+                    f"VideoClip metadata content type does not match {path}: "
+                    f"{declared_content_type!r} != {content_type!r}"
+                )
+            values: list[int] = []
+            for name in (
+                "width",
+                "height",
+                "frame_rate_numerator",
+                "frame_rate_denominator",
+                "frame_count",
+            ):
+                value = payload.get(name)
+                if not isinstance(value, int) or isinstance(value, bool) or value <= 0:
+                    raise ValueError(f"VideoClip metadata has invalid {name}: {value!r}")
+                values.append(value)
+            artifact = FileVideoArtifact.from_path(
+                path,
+                content_type=content_type,
+                width=values[0],
+                height=values[1],
+                frame_rate_numerator=values[2],
+                frame_rate_denominator=values[3],
+                frame_count=values[4],
+            )
+            media_id = (
+                f"{namespace}/{path.relative_to(directory).with_suffix('').as_posix()}".lower()
+            )
+            records.append(MediaRecord(id=media_id, kind="video", artifact=artifact))
+    return records
+
+
 def _score_asset_records(extracted_root: Path) -> list[ScoreAssetRecord]:
     """Read every dedicated Score sprite exported from the CN Windows client."""
 
@@ -313,6 +460,7 @@ def add_gallery_composites(
         ),
         score_assets=manifest.score_assets,
         score_videos=manifest.score_videos,
+        media=manifest.media,
     )
 
 
@@ -424,7 +572,7 @@ def _deduplicate_arts(records: tuple[ArtRecord, ...]) -> tuple[ArtRecord, ...]:
 
 def build_art_manifest(extracted_root: Path, upstream_version: str) -> ArtManifest:
     """Scan and process one extracted art delta into a manifest."""
-    pictures = _picture_records(extracted_root)
+    pictures = [*_picture_records(extracted_root), *_animated_records(extracted_root)]
     characters, sources = _character_records(extracted_root)
     return ArtManifest(
         upstream_version=upstream_version,
@@ -438,6 +586,12 @@ def build_art_manifest(extracted_root: Path, upstream_version: str) -> ArtManife
         score_assets=tuple(
             sorted(
                 _score_asset_records(extracted_root),
+                key=lambda record: (record.kind, record.id),
+            )
+        ),
+        media=tuple(
+            sorted(
+                [*_audio_records(extracted_root), *_video_records(extracted_root)],
                 key=lambda record: (record.kind, record.id),
             )
         ),
@@ -461,6 +615,7 @@ def merge_art_manifests(
     sources: dict[tuple[str, str], SourceArtRecord] = {}
     score_assets: dict[tuple[str, str], ScoreAssetRecord] = {}
     score_videos: dict[str, ScoreVideoRecord] = {}
+    media: dict[tuple[str, str], MediaRecord] = {}
     for manifest in manifests:
         for source in manifest.source_arts:
             sources[(source.category, source.id)] = source
@@ -468,6 +623,8 @@ def merge_art_manifests(
             score_assets[(asset.kind, asset.id)] = asset
         for video in manifest.score_videos:
             score_videos[video.id] = video
+        for record in manifest.media:
+            media[(record.kind, record.id)] = record
     return ArtManifest(
         upstream_version=upstream_version,
         arts=tuple(sorted(_deduplicate_arts(arts), key=lambda art: (art.category, art.id))),
@@ -476,6 +633,7 @@ def merge_art_manifests(
         ),
         score_assets=tuple(sorted(score_assets.values(), key=lambda asset: (asset.kind, asset.id))),
         score_videos=tuple(sorted(score_videos.values(), key=lambda video: video.id)),
+        media=tuple(sorted(media.values(), key=lambda record: (record.kind, record.id))),
     )
 
 
@@ -489,6 +647,7 @@ def write_art_manifest(manifest: ArtManifest, destination: Path) -> None:
 
     next_image_index = 0
     next_video_index = 0
+    next_media_index = 0
 
     def persist_image(artifact: PngImage) -> str:
         nonlocal next_image_index
@@ -505,6 +664,16 @@ def write_art_manifest(manifest: ArtManifest, destination: Path) -> None:
         nonlocal next_video_index
         relative = _cached_video_path(next_video_index)
         next_video_index += 1
+        output = destination / Path(relative)
+        if artifact.path != output.resolve():
+            shutil.copyfile(artifact.path, output)
+        return relative
+
+    def persist_media(artifact: FileAudioArtifact | FileVideoArtifact) -> str:
+        nonlocal next_media_index
+        suffix = artifact.path.suffix.lower()
+        relative = _cached_media_path(next_media_index, suffix)
+        next_media_index += 1
         output = destination / Path(relative)
         if artifact.path != output.resolve():
             shutil.copyfile(artifact.path, output)
@@ -556,6 +725,33 @@ def write_art_manifest(manifest: ArtManifest, destination: Path) -> None:
             }
             for video in manifest.score_videos
         ],
+        "media": [
+            {
+                "id": media.id,
+                "kind": media.kind,
+                _MEDIA_PATH_FIELD: persist_media(media.artifact),
+                "content_type": media.artifact.content_type,
+                "duration": media.artifact.duration
+                if isinstance(media.artifact, FileAudioArtifact)
+                else None,
+                "width": media.artifact.width
+                if isinstance(media.artifact, FileVideoArtifact)
+                else None,
+                "height": media.artifact.height
+                if isinstance(media.artifact, FileVideoArtifact)
+                else None,
+                "frame_rate_numerator": media.artifact.frame_rate_numerator
+                if isinstance(media.artifact, FileVideoArtifact)
+                else None,
+                "frame_rate_denominator": media.artifact.frame_rate_denominator
+                if isinstance(media.artifact, FileVideoArtifact)
+                else None,
+                "frame_count": media.artifact.frame_count
+                if isinstance(media.artifact, FileVideoArtifact)
+                else None,
+            }
+            for media in manifest.media
+        ],
     }
     (destination / "manifest.json").write_text(
         json.dumps(payload, ensure_ascii=False, separators=(",", ":")),
@@ -591,6 +787,22 @@ def _cached_video_path(index: int) -> str:
     return f"processed/{index:08d}.webm"
 
 
+def _cached_media_path(index: int, suffix: str) -> str:
+    if suffix not in {
+        ".flac",
+        ".m4a",
+        ".m4v",
+        ".mov",
+        ".mp3",
+        ".mp4",
+        ".ogg",
+        ".wav",
+        ".webm",
+    }:
+        raise ValueError(f"unsupported cached media suffix: {suffix!r}")
+    return f"processed/media-{index:08d}{suffix}"
+
+
 def _cached_identifier(record: dict[str, object], name: str, context: str) -> str:
     value = _required_string(record, name, context)
     if value != value.lower():
@@ -617,8 +829,12 @@ def _read_art_manifest(source: Path) -> ArtManifest:
     raw_sources = _required_records(payload, "source_arts", source)
     raw_score_assets = _required_records(payload, "score_assets", source)
     raw_score_videos = _required_records(payload, "score_videos", source)
+    raw_media = payload.get("media", [])
+    if not isinstance(raw_media, list):
+        raise TypeError(f"cached art manifest has an invalid media: {source}")
     next_image_index = 0
     next_video_index = 0
+    next_media_index = 0
 
     def artifact(record: dict[str, object], context: str) -> FilePngArtifact:
         nonlocal next_image_index
@@ -657,6 +873,51 @@ def _read_art_manifest(source: Path) -> ArtManifest:
             )
         except (OSError, TypeError, ValueError) as error:
             raise ValueError(f"cannot read cached Score video: {error}") from error
+
+    def media_artifact(
+        record: dict[str, object], context: str
+    ) -> FileAudioArtifact | FileVideoArtifact:
+        nonlocal next_media_index
+        relative = _required_string(record, _MEDIA_PATH_FIELD, context)
+        suffix = Path(relative).suffix.lower()
+        expected = _cached_media_path(next_media_index, suffix)
+        next_media_index += 1
+        if relative != expected:
+            raise ValueError(
+                f"cached {context} has an invalid {_MEDIA_PATH_FIELD}: "
+                f"{relative!r}, expected {expected!r}"
+            )
+        path = source / Path(expected)
+        kind = _required_string(record, "kind", context)
+        try:
+            if kind == "audio":
+                content_type = _required_string(record, "content_type", context)
+                duration = record.get("duration")
+                if duration is not None and (
+                    not isinstance(duration, (int, float)) or isinstance(duration, bool)
+                ):
+                    raise ValueError(f"cached {context} has an invalid duration: {duration!r}")
+                return FileAudioArtifact.from_path(
+                    path,
+                    content_type=content_type,
+                    duration=duration,
+                )
+            if kind == "video":
+                content_type = _required_string(record, "content_type", context)
+                return FileVideoArtifact.from_path(
+                    path,
+                    content_type=content_type,
+                    width=_positive_integer(record, "width", context),
+                    height=_positive_integer(record, "height", context),
+                    frame_rate_numerator=_positive_integer(record, "frame_rate_numerator", context),
+                    frame_rate_denominator=_positive_integer(
+                        record, "frame_rate_denominator", context
+                    ),
+                    frame_count=_positive_integer(record, "frame_count", context),
+                )
+            raise ValueError(f"cached {context} has an invalid kind: {kind!r}")
+        except (OSError, TypeError, ValueError) as error:
+            raise ValueError(f"cannot read cached media {path}: {error}") from error
 
     arts: list[ArtRecord] = []
     for index, value in enumerate(raw_arts):
@@ -757,12 +1018,29 @@ def _read_art_manifest(source: Path) -> ArtManifest:
             )
         )
 
+    media: list[MediaRecord] = []
+    for index, value in enumerate(raw_media):
+        context = f"media record {index}"
+        if not isinstance(value, dict):
+            raise TypeError(f"cached {context} is not an object: {value!r}")
+        kind = _required_string(value, "kind", context)
+        if kind not in {"audio", "video"}:
+            raise ValueError(f"cached {context} has an invalid kind: {kind!r}")
+        media.append(
+            MediaRecord(
+                id=_cached_identifier(value, "id", context),
+                kind=cast(Any, kind),
+                artifact=media_artifact(value, context),
+            )
+        )
+
     manifest = ArtManifest(
-        version,
-        tuple(arts),
-        tuple(sources),
-        tuple(score_assets),
-        tuple(score_videos),
+        upstream_version=version,
+        arts=tuple(arts),
+        source_arts=tuple(sources),
+        score_assets=tuple(score_assets),
+        score_videos=tuple(score_videos),
+        media=tuple(media),
     )
     _validate_cached_relationships(manifest)
     return manifest
@@ -775,6 +1053,7 @@ def _validate_cached_relationships(manifest: ArtManifest) -> None:
     source_ids = [(source.category, source.id) for source in manifest.source_arts]
     score_asset_ids = [(asset.kind, asset.id) for asset in manifest.score_assets]
     score_video_ids = [video.id for video in manifest.score_videos]
+    media_ids = [(media.kind, media.id) for media in manifest.media]
     if len(art_ids) != len(set(art_ids)):
         raise ValueError("cached art identities are not unique")
     if len(source_ids) != len(set(source_ids)):
@@ -783,6 +1062,8 @@ def _validate_cached_relationships(manifest: ArtManifest) -> None:
         raise ValueError("cached Score asset identifiers are not unique")
     if len(score_video_ids) != len(set(score_video_ids)):
         raise ValueError("cached Score video identifiers are not unique")
+    if len(media_ids) != len(set(media_ids)):
+        raise ValueError("cached media identifiers are not unique")
 
     available_sources = set(source_ids)
     for art in manifest.arts:

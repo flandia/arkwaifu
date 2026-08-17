@@ -35,6 +35,34 @@ def test_art_defaults_use_the_official_windows_asset_roots(monkeypatch):
     )
 
 
+def test_archive_defaults_use_the_cn_windows_space_with_existing_credentials(monkeypatch):
+    _set_required_environment(monkeypatch)
+
+    settings = Settings.from_environment()
+
+    assert settings.archive_s3_endpoint_url == "https://sgp1.digitaloceanspaces.com"
+    assert settings.archive_s3_region == "sgp1"
+    assert settings.archive_s3_bucket == "arkwaifu-ab"
+    assert settings.archive_s3_path_style is False
+    assert settings.s3_access_key_id == "access-key"
+    assert settings.s3_secret_access_key == "secret-key"
+
+
+def test_archive_destination_is_environment_controlled(monkeypatch):
+    _set_required_environment(monkeypatch)
+    monkeypatch.setenv("ARKWAIFU_ARCHIVE_S3_ENDPOINT_URL", "https://archive.example")
+    monkeypatch.setenv("ARKWAIFU_ARCHIVE_S3_REGION", "archive-region")
+    monkeypatch.setenv("ARKWAIFU_ARCHIVE_S3_BUCKET", "archive-bucket")
+    monkeypatch.setenv("ARKWAIFU_ARCHIVE_S3_PATH_STYLE", "true")
+
+    settings = Settings.from_environment()
+
+    assert settings.archive_s3_endpoint_url == "https://archive.example"
+    assert settings.archive_s3_region == "archive-region"
+    assert settings.archive_s3_bucket == "archive-bucket"
+    assert settings.archive_s3_path_style is True
+
+
 def test_worker_defaults_use_sixteen_downloaders_and_default_process_count(monkeypatch):
     _set_required_environment(monkeypatch)
 

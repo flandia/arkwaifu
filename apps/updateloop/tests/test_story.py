@@ -56,6 +56,124 @@ def test_directive_allows_space_before_closing_bracket():
     assert directive.params == {"slot": "r", "name": "char"}
 
 
+def test_directive_parser_handles_namespaces_nested_values_and_multiline_text():
+    directives = parse_directives(
+        "[Battle.Pause]\n"
+        '[Tutorial(text=\'a, b ) ]\', payload={x:(1,2)}, note="a\\"b")]\n'
+        "[name='Closure']"
+    )
+
+    assert [directive.name for directive in directives] == ["battle.pause", "tutorial", ""]
+    assert directives[0].params == {}
+    assert directives[1].params == {
+        "text": "a, b ) ]",
+        "payload": "{x:(1,2)}",
+        "note": 'a"b',
+    }
+    assert directives[2].params["name"] == "Closure"
+
+
+def test_directive_parser_removes_backslash_line_continuations_from_parameter_keys():
+    raw = (
+        "[Tutorial(focusX=30, "
+        + chr(92)
+        + '\n          animStyle="Highlight", '
+        + chr(92)
+        + "\n          protectTime=0.5)]"
+    )
+    (directive,) = parse_directives(raw)
+
+    assert directive.name == "tutorial"
+    assert directive.params == {
+        "focusx": "30",
+        "animstyle": "Highlight",
+        "protecttime": "0.5",
+    }
+
+
+def test_unknown_directive_name_warns_once_and_is_preserved(caplog):
+    story_module._DIRECTIVE_WARNING_KEYS.clear()
+
+    with caplog.at_level(logging.WARNING, logger="arkwaifu_updateloop.story_parser"):
+        directives = parse_directives("[FutureCommand(foo=1)] [FutureCommand(foo=1)]")
+
+    assert directives[0].name == "futurecommand"
+    assert directives[0].params == {"foo": "1"}
+    assert caplog.text.count("unknown story directive name=futurecommand") == 1
+
+
+def test_known_directive_unknown_parameter_warns_without_dropping_directive(caplog):
+    story_module._DIRECTIVE_WARNING_KEYS.clear()
+
+    with caplog.at_level(logging.WARNING, logger="arkwaifu_updateloop.story_parser"):
+        (directive,) = parse_directives('[PlaySound(key="$fx", futureParam="1")]')
+
+    assert directive.name == "playsound"
+    assert "futureparam" in directive.params
+    assert "unknown story directive shape name=playsound" in caplog.text
+
+
+def test_typo_directive_alias_is_declared_but_not_resource_indexed():
+    story_module._DIRECTIVE_WARNING_KEYS.clear()
+    spec = story_module.DIRECTIVE_SPECS["palysound"]
+
+    assert spec.canonical_name == "playsound"
+    assert spec.resource_indexed is False
+    assert story_module._directive_name(parse_directives("[palysound(name=fx)]")[0]) == "playsound"
+
+
+def test_story_directives_project_new_art_and_media_references():
+    directives = parse_directives(
+        '[avgdisplay(name="act3mainss_01",style="animekv")]'
+        '[avgdisplay(name="bg_black",style="bg")]'
+        '[verticalbg(imagegroup="bg_a/bg_b")]'
+        '[cgitem(image="cgitem_71_i01")]'
+        '[PlayMusic(key="$m_sys_loop",intro="$m_sys_intro")]'
+        '[PlaySound(key="$flashback")]'
+        '[palysound(name="$clothmovement")]'
+        '[Video(res="video/act53side/TO01.mp4")]'
+    )
+
+    pictures = story_module._pictures(directives, {})
+    media = story_module._media_references(directives)
+
+    assert [(reference.art_id, reference.category) for reference in pictures] == [
+        ("act3mainss_01", "background"),
+        ("bg_black", "background"),
+        ("bg_a", "background"),
+        ("bg_b", "background"),
+        ("cgitem_71_i01", "item"),
+    ]
+    assert [(reference.kind, reference.media_id) for reference in media] == [
+        ("music", "m_sys_loop"),
+        ("music", "m_sys_intro"),
+        ("sound", "flashback"),
+        ("sound", "clothmovement"),
+        ("video", "video/act53side/to01.mp4"),
+    ]
+
+
+def test_story_media_references_resolve_story_variables():
+    directives = parse_directives(
+        '[PlayMusic(key="$flashback",intro="$M_SYS_INTRO")][PlaySound(key="$blooddrop")]'
+    )
+
+    media = story_module._media_references(
+        directives,
+        {
+            "flashback": "Sound_Beta_2/General/g_ui/g_ui_stagepush",
+            "m_sys_intro": "Sound_Beta_2/Music/AVG/m_sys_intro",
+            "blooddrop": "Sound_Beta_2/AVG/d_avg_blooddrop",
+        },
+    )
+
+    assert [(reference.kind, reference.media_id) for reference in media] == [
+        ("music", "g_ui_stagepush"),
+        ("music", "m_sys_intro"),
+        ("sound", "d_avg_blooddrop"),
+    ]
+
+
 @pytest.mark.parametrize(
     "raw",
     ['[name="Closure",delay=0.1]', "[name='Closure',delay=0.1]"],

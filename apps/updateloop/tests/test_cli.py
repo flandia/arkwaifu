@@ -79,6 +79,33 @@ def test_no_cache_flag_is_available_on_run():
     assert args.no_cache is True
 
 
+def test_archive_is_available_for_default_or_explicit_art_runs():
+    parser = _parser()
+    for arguments in (["run", "--archive"], ["run", "art", "--archive"]):
+        args = parser.parse_args(arguments)
+        _validate_arguments(parser, args)
+        assert args.archive is True
+
+
+def test_archive_can_be_combined_with_complete():
+    parser = _parser()
+    args = parser.parse_args(["run", "art", "--complete", "--archive"])
+
+    _validate_arguments(parser, args)
+
+    assert args.complete is True
+    assert args.archive is True
+
+
+@pytest.mark.parametrize("units", [["CN"], ["EN", "JP"]])
+def test_archive_rejects_locale_only_runs(units):
+    parser = _parser()
+    args = parser.parse_args(["run", *units, "--archive"])
+
+    with pytest.raises(SystemExit, match="2"):
+        _validate_arguments(parser, args)
+
+
 def test_main_loads_dotenv_without_overriding_process_environment(monkeypatch, tmp_path):
     monkeypatch.chdir(tmp_path)
     (tmp_path / ".env").write_text(

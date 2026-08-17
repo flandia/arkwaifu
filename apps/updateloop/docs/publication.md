@@ -1,20 +1,21 @@
 # Understand publication and storage
 
-The updater converts selected upstream data into one SQLite database, immutable PNG and WebM objects, and replaceable WebP thumbnails. This reference explains its transaction boundary, object contracts, cache, and resource limits.
+The updater converts selected upstream data into one SQLite database, immutable PNG, audio, and video objects, and replaceable WebP thumbnails. This reference explains its transaction boundary, object contracts, cache, and resource limits.
 
 ## Follow the end-to-end publication sequence
 
 The updater completes these steps in order:
 
 1. Detect every requested unit’s current upstream `resVersion` concurrently
-2. Download `arkwaifu.sqlite3` to a temporary directory, or create schema version 2 when the object does not exist
-3. Validate the schema version, read each published unit version, and restore the additive `story_art_references_by_art (locale, art_id)` index when necessary
-4. Build every changed manifest concurrently and retain rendered PNGs and Score WebMs as files
-5. Assign ordinary art keys below `ART/` and dedicated Score visual keys below `SCORE/`
-6. Apply art changes first, then replace each changed locale in one local `BEGIN IMMEDIATE` transaction
-7. Upload every referenced immutable PNG and WebM with bounded concurrency
-8. Generate and upload every derived thumbnail
-9. Overwrite `arkwaifu.sqlite3` with `Cache-Control: no-cache`
+2. When `--archive` is enabled, archive every missing historical CN/Windows wrapper and publish each version manifest last
+3. Download `arkwaifu.sqlite3` to a temporary directory, or create schema version 2 when the object does not exist
+4. Validate the schema version, read each published unit version, and restore the additive `story_art_references_by_art (locale, art_id)` index when necessary
+5. Build every changed manifest concurrently and retain rendered PNGs, audio, and videos as files
+6. Assign ordinary art keys below `ART/` and dedicated Score visual keys below `SCORE/`
+7. Apply art changes first, then replace each changed locale in one local `BEGIN IMMEDIATE` transaction
+8. Upload every referenced immutable PNG, audio, and video with bounded concurrency
+9. Generate and upload every derived thumbnail
+10. Overwrite `arkwaifu.sqlite3` with `Cache-Control: no-cache`
 
 SQLite enforces strict tables, checks, primary keys, unique keys, and foreign keys during statements and commit. Publication does not run `quick_check`, `integrity_check`, or a post-write `foreign_key_check`.
 
@@ -27,7 +28,8 @@ The database overwrite makes prepared metadata visible. Before that overwrite, r
 Failure behavior depends on the completed work:
 
 - A preparation or SQLite failure exposes none of the requested database changes
-- A partial PNG or WebM batch may leave unreferenced immutable objects under a new version prefix
+- A partial asset-bundle archive can leave immutable wrappers without a completion manifest; the database remains unchanged
+- A partial PNG, audio, or video batch may leave unreferenced immutable objects under a new version prefix
 - A partial thumbnail batch may replace thumbnails referenced by the previous database
 - A database upload failure leaves the previous object current
 - S3 bucket versioning preserves overwritten database generations for inspection and recovery
@@ -76,9 +78,28 @@ Complete mode preserves art that disappears from later manifests. It uploads onl
 
 The updater never discovers history by listing object prefixes. It obtains candidate versions upstream and validates each selected bundle against the official content-delivery network (CDN).
 
+## Archive original asset-bundle wrappers
+
+`--archive` stores the exact `.dat` ZIP wrappers from the official CN Windows CDN in a dedicated S3-compatible bucket. It preserves companion files carried inside a wrapper and does not replace the normal art extraction pipeline.
+
+Archive keys have this structure:
+
+```text
+CN/Windows/<resVersion>/<flat-CDN-filename>.dat
+CN/Windows/<resVersion>/hot_update_list.json
+```
+
+On an empty archive, the updater reads the same ordered Windows history used by `--complete`. It uploads every wrapper in the oldest version, then uploads only resources whose `(name, md5)` pair differs from the immediate predecessor. This records bundles that appear temporarily and disappear from later manifests.
+
+On later runs, the newest archived manifest in that ordered history is the baseline. The updater resumes with every subsequent recorded version, so skipping `--archive` for one or more ordinary updates does not lose intermediate changes. `--complete --archive` deliberately uses one history sequence for both operations.
+
+For each version, wrapper downloads and uploads are bounded by `ARKWAIFU_DOWNLOAD_WORKERS`. The updater uploads `hot_update_list.json` only after every selected wrapper succeeds. That manifest is the completion marker and becomes the baseline for a later run. A failed batch can leave reusable wrapper objects but cannot mark the version complete or publish a new database generation.
+
+Wrappers and manifests are immutable and create-only. Existing objects are accepted only when their byte size, content type, immutable cache policy, and SHA-256 metadata match. Wrapper metadata also records the digest string from the official manifest. Most resources provide a full inner-bundle MD5; the exceptional `anon/*.bin` entries provide a four-digit value and rely on successful ZIP member and CRC validation instead. Conflicts fail the run.
+
 ## Enforce immutable object contracts
 
-PNG and WebM keys are immutable and create-only. Before upload, the S3 adapter uses `HEAD` to accept an existing object only when byte size, content type, and immutable cache policy match. PNGs use `image/png`; videos use `video/webm`.
+PNG, audio, and video keys are immutable and create-only. Before upload, the S3 adapter uses `HEAD` to accept an existing object only when byte size, content type, and immutable cache policy match. PNGs use `image/png`; media uses the source-derived audio or video content type.
 
 The metadata check does not compare image bytes. A metadata mismatch fails the run instead of replacing the object.
 
@@ -111,7 +132,7 @@ Downloads for later resources can overlap extraction and rendering for earlier r
 
 The process pool uses `max_tasks_per_child=1`. Each outer worker runs the resource extractor with `workers=1`, which avoids a nested process pool. The parent retains paths and metadata instead of all PNG bytes.
 
-Structured JSON logs use actions such as `list`, `version`, `fetch`, `unzip`, `extract`, `compose`, `apply`, `thumbnail`, `upload`, and `publish`. Each record identifies its `res_version` and status. Measurable work also reports elapsed milliseconds, and concurrent or complete-history work reports a stable `current` and `total` ordinal.
+Structured JSON logs use actions such as `list`, `version`, `fetch`, `archive`, `unzip`, `extract`, `compose`, `apply`, `thumbnail`, `upload`, and `publish`. Each record identifies its `res_version` and status. Measurable work also reports elapsed milliseconds, and concurrent or complete-history work reports a stable `current` and `total` ordinal.
 
 A terminal record uses `done`, a cache hit uses `cached`, and a failure uses `failed`.
 
@@ -135,7 +156,7 @@ Art cache entries use the percent-encoded upstream resource name and published M
             |   `-- <unity-exports>
             `-- rendered/
                 |-- processed/
-                |   `-- <png-and-webm-files>
+                |   `-- <png-audio-and-video-files>
                 `-- manifest.json
 ```
 

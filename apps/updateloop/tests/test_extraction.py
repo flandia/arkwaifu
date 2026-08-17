@@ -9,6 +9,7 @@ from arkwaifu_updateloop.extraction.lz4ak import decompress_lz4ak
 from arkwaifu_updateloop.extraction.unity import (
     EXTRACTOR_TASKS_PER_WORKER,
     ExtractionError,
+    _common_audio_suffix,
     extract_assets,
     mono_behaviour_name,
     normalize_container_path,
@@ -35,6 +36,20 @@ def test_sprite_hub_name_survives_missing_monoscript():
         mono_behaviour_name(obj, {"m_Script": {}, "spriteGroups": []})
         == "AVGCharacterSpriteHubGroup"
     )
+
+
+@pytest.mark.parametrize(
+    ("content", "suffix"),
+    [
+        (b"OggS" + b"source", ".ogg"),
+        (b"RIFF" + b"xxxxWAVE", ".wav"),
+        (b"fLaC" + b"source", ".flac"),
+        (b"ID3" + b"source", ".mp3"),
+        (b"\x00\x00\x00\x18ftypM4A " + b"source", ".m4a"),
+    ],
+)
+def test_common_audio_formats_are_detected_before_unitypy_decodes(content: bytes, suffix: str):
+    assert _common_audio_suffix(content) == suffix
 
 
 def test_generated_summary_name_cannot_escape_extraction_root(tmp_path, monkeypatch):

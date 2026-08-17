@@ -47,6 +47,7 @@ from ..art import (
     validate_ivf,
     write_art_manifest,
 )
+from ..asset_bundle_archive import AssetBundleArchiveStore
 from ..asyncio_tools import await_owned
 from ..domain import (
     ArtCategory,
@@ -54,6 +55,7 @@ from ..domain import (
     CompositePanel,
     CompositeType,
     GalleryArtwork,
+    MediaRecord,
     ScoreVideoRecord,
 )
 from ..extraction import extract_assets
@@ -66,9 +68,23 @@ _ART_PATTERNS = (
     "avg/backgrounds/**",
     "avg/items/**",
     "avg/characters/**",
+    "avg/animatedkv/**",
+    "audio/sound_beta_2/music/**",
+    "audio/sound_beta_2/voice/**",
+    "audio/sound_beta_2/avg_se_*.ab",
+    "audio/sound_beta_2/general_*.ab",
+    "audio/sound_beta_2/dialog.ab",
+    "audio/sound_beta_2/ambience.ab",
+    "audio/sound_beta_2/beta1leaveover.ab",
+    "audio/sound_beta_2/battle/**",
+    "audio/sound_beta_2/player/**",
+    "audio/sound_beta_2/enemy/**",
+    "audio/custom_se/**",
     "arts/ui/mixstory/**",
     "spritepack/mixstory_*.ab",
     "raw/video/mixstory/*.usm",
+    "raw/video/*.usm",
+    "raw/video/**/*.usm",
 )
 # A resource may hold one lock for each cache stage while it is materialized.
 # Bound the complete pipeline so a cold all-resource run cannot exhaust file handles.
@@ -78,8 +94,8 @@ _ART_RESOURCE_WORKERS = 32
 _ART_STAGE_FORMATS = {
     "fetched": "1",
     "unwrapped": "1",
-    "extracted": "1",
-    "rendered": "5",
+    "extracted": "5",
+    "rendered": "9",
 }
 _LOGGER = logging.getLogger(__name__)
 
@@ -203,8 +219,14 @@ def _archive_member_md5(archive: zipfile.ZipFile, resource_name: str) -> str:
     return digest.hexdigest()
 
 
-def _unzip_resource(wrapper: Path, resource_name: str, destination: Path) -> None:
-    """Unwrap one named Unity bundle without trusting archive paths."""
+def _unzip_resource(
+    wrapper: Path,
+    resource_name: str,
+    destination: Path,
+    *,
+    extract_companions: bool = False,
+) -> None:
+    """Unwrap one Unity bundle and, optionally, adjacent stream resources."""
 
     relative = _resource_member_path(resource_name)
     output = destination.joinpath(*relative.parts).resolve()
@@ -215,9 +237,26 @@ def _unzip_resource(wrapper: Path, resource_name: str, destination: Path) -> Non
             member = archive.getinfo(resource_name)
         except KeyError as error:
             raise ValueError(f"download does not contain {resource_name}") from error
-        with archive.open(member) as source, output.open("wb") as target:
-            while chunk := source.read(1024 * 1024):
-                target.write(chunk)
+        members = [member]
+        if extract_companions:
+            companion_suffixes = {".resource", ".ress", ".resss"}
+            for candidate in archive.infolist():
+                if candidate.filename == resource_name or candidate.is_dir():
+                    continue
+                candidate_path = _resource_member_path(candidate.filename)
+                if (
+                    candidate_path.parent == relative.parent
+                    and candidate_path.suffix.lower() in companion_suffixes
+                ):
+                    members.append(candidate)
+        for candidate in members:
+            candidate_path = _resource_member_path(candidate.filename)
+            candidate_output = destination.joinpath(*candidate_path.parts).resolve()
+            candidate_output.relative_to(destination.resolve())
+            candidate_output.parent.mkdir(parents=True, exist_ok=True)
+            with archive.open(candidate) as source, candidate_output.open("wb") as target:
+                while chunk := source.read(1024 * 1024):
+                    target.write(chunk)
 
 
 def _render_art_resource(
@@ -269,7 +308,8 @@ def _extract_and_render_art_resource(
 
 
 def _extract_score_video(source: Path, extracted: Path) -> IvfMetadata:
-    metadata = demux_usm_to_ivf(source, extracted / "video.ivf")
+    audio = extracted / "audio.adx"
+    metadata = demux_usm_to_ivf(source, extracted / "video.ivf", audio)
     (extracted / "metadata.json").write_text(
         json.dumps(
             {
@@ -278,6 +318,7 @@ def _extract_score_video(source: Path, extracted: Path) -> IvfMetadata:
                 "frame_rate_numerator": metadata.frame_rate_numerator,
                 "frame_rate_denominator": metadata.frame_rate_denominator,
                 "frame_count": metadata.frame_count,
+                "has_audio": audio.is_file(),
             },
             sort_keys=True,
             separators=(",", ":"),
@@ -306,30 +347,56 @@ def _read_score_video_metadata(extracted: Path) -> IvfMetadata:
     metadata = IvfMetadata(*values)
     if validate_ivf((extracted / "video.ivf").read_bytes()) != metadata:
         raise ValueError("Score IVF metadata does not match its stream")
+    has_audio = payload.get("has_audio")
+    if not isinstance(has_audio, bool):
+        raise TypeError(f"Score IVF metadata has invalid has_audio: {has_audio!r}")
+    audio = extracted / "audio.adx"
+    if audio.is_file() != has_audio:
+        raise ValueError("Score IVF metadata does not match its audio stream")
     return metadata
 
 
-def _render_score_video(
+def _render_usm_video(
     extracted: Path,
     rendered: Path,
     upstream_version: str,
     video_id: str,
+    *,
+    score: bool,
 ) -> None:
     metadata = _read_score_video_metadata(extracted)
     artifact = remux_ivf_to_webm(
         extracted / "video.ivf",
         rendered / "processed/00000000.webm",
         metadata,
+        extracted / "audio.adx" if (extracted / "audio.adx").is_file() else None,
     )
-    write_art_manifest(
-        ArtManifest(
+    if score:
+        manifest = ArtManifest(
             upstream_version,
             (),
             (),
             score_videos=(ScoreVideoRecord(video_id, artifact),),
-        ),
-        rendered,
-    )
+        )
+    else:
+        manifest = ArtManifest(
+            upstream_version,
+            (),
+            (),
+            media=(MediaRecord(video_id, "video", artifact),),
+        )
+    write_art_manifest(manifest, rendered)
+
+
+def _is_score_video(resource_name: str) -> bool:
+    return resource_name.lower().startswith("raw/video/mixstory/")
+
+
+def _story_video_id(resource_name: str) -> str:
+    relative = _resource_member_path(resource_name)
+    if relative.parts[:2] != ("raw", "video"):
+        raise ValueError(f"not a story video resource: {resource_name!r}")
+    return PurePosixPath("video", *relative.parts[2:]).with_suffix(".mp4").as_posix().lower()
 
 
 def _resource_member_path(resource_name: str) -> PurePosixPath:
@@ -354,6 +421,14 @@ def _resource_cache_path(resource: _Resource) -> PurePosixPath:
         quote(resource.name, safe=""),
         content_identity,
     )
+
+
+def _resource_filename(resource_name: str) -> str:
+    """Return the flat wrapper filename used by the official CDN."""
+
+    _resource_member_path(resource_name)
+    filename = resource_name.replace("/", "_").replace("#", "__")
+    return re.sub(r"\.(.*?)$", ".dat", filename)
 
 
 def _stage_fingerprint(
@@ -435,7 +510,7 @@ class UpstreamArtBuilder:
         active_version: str | None,
         force: bool,
     ) -> ArtManifest:
-        """Fetch, extract, and render the art resources that need updating."""
+        """Fetch, extract, and render the resources that need updating."""
 
         async with httpx.AsyncClient(timeout=120, follow_redirects=True) as client:
             gallery_recipes = await self._load_gallery_recipes(client)
@@ -485,6 +560,7 @@ class UpstreamArtBuilder:
         sources = {}
         score_assets = {}
         score_videos = {}
+        media = {}
         previous: str | None = None
         total = len(versions)
         for current, version in enumerate(versions, start=1):
@@ -537,6 +613,15 @@ class UpstreamArtBuilder:
                     for video in manifest.score_videos
                 }
             )
+            media.update(
+                {
+                    (record.kind, record.id): replace(
+                        record,
+                        res_version=record.res_version or manifest.upstream_version,
+                    )
+                    for record in manifest.media
+                }
+            )
             _log_art_action(
                 "version",
                 version=version,
@@ -556,10 +641,84 @@ class UpstreamArtBuilder:
                 sorted(score_assets.values(), key=lambda asset: (asset.kind, asset.id))
             ),
             score_videos=tuple(sorted(score_videos.values(), key=lambda video: video.id)),
+            media=tuple(sorted(media.values(), key=lambda record: (record.kind, record.id))),
         )
 
-    async def _resources(self, client: httpx.AsyncClient, version: str) -> list[_Resource]:
-        """Get the cached hot-update list for one resource version."""
+    async def archive_history(
+        self,
+        versions: tuple[str, ...],
+        archive: AssetBundleArchiveStore,
+    ) -> None:
+        """Archive every missing historical wrapper, publishing each manifest last."""
+
+        if not versions:
+            raise ValueError("asset-bundle archive history cannot be empty")
+        if any(not isinstance(version, str) or not version for version in versions):
+            raise ValueError("asset-bundle archive history contains an invalid resVersion")
+        if len(set(versions)) != len(versions):
+            raise ValueError("asset-bundle archive history contains a duplicate resVersion")
+
+        completed = await archive.completed_versions()
+        baseline_index = -1
+        for index, version in enumerate(versions):
+            if version not in completed:
+                break
+            baseline_index = index
+        previous: list[_Resource] = []
+        if baseline_index >= 0:
+            baseline_version = versions[baseline_index]
+            baseline = await archive.read_manifest(baseline_version)
+            previous = self._parse_all_resources(json.loads(baseline), baseline_version)
+
+        pending = versions[baseline_index + 1 :]
+        if not pending:
+            _LOGGER.info(
+                "asset-bundle archive status=current res_version=%s",
+                versions[-1],
+            )
+            return
+
+        async with httpx.AsyncClient(timeout=120, follow_redirects=True) as client:
+            for current, version in enumerate(pending, start=1):
+                manifest_path = await self._resource_list_path(client, version)
+                resources = self._parse_all_resources(
+                    json.loads(manifest_path.read_text(encoding="utf-8")),
+                    version,
+                )
+                previous_keys = {(resource.name, resource.md5) for resource in previous}
+                selected = [
+                    resource
+                    for resource in resources
+                    if (resource.name, resource.md5) not in previous_keys
+                ]
+                await self._archive_resources(client, archive, version, selected)
+                started = time.perf_counter()
+                try:
+                    uploaded = await archive.put_manifest(version, manifest_path)
+                except Exception:
+                    _log_art_action(
+                        "archive",
+                        version=version,
+                        resource="hot_update_list.json",
+                        current=current,
+                        total=len(pending),
+                        status="failed",
+                        elapsed_seconds=time.perf_counter() - started,
+                    )
+                    raise
+                _log_art_action(
+                    "archive",
+                    version=version,
+                    resource="hot_update_list.json",
+                    current=current,
+                    total=len(pending),
+                    status="done" if uploaded else "cached",
+                    elapsed_seconds=time.perf_counter() - started,
+                )
+                previous = resources
+
+    async def _resource_list_path(self, client: httpx.AsyncClient, version: str) -> Path:
+        """Get the cached exact hot-update list for one resource version."""
 
         url = f"{self._asset_base_url}/{quote(version, safe='')}/hot_update_list.json"
 
@@ -590,7 +749,7 @@ class UpstreamArtBuilder:
                 elapsed_seconds=time.perf_counter() - started,
             )
 
-        path = await self._cache.file(
+        return await self._cache.file(
             version,
             PurePosixPath("art", "hot_update_list.json"),
             fetch,
@@ -604,6 +763,11 @@ class UpstreamArtBuilder:
                 status="cached",
             ),
         )
+
+    async def _resources(self, client: httpx.AsyncClient, version: str) -> list[_Resource]:
+        """Select processable art resources from one cached hot-update list."""
+
+        path = await self._resource_list_path(client, version)
         payload = json.loads(path.read_text(encoding="utf-8"))
         return self._parse_resources(payload, version)
 
@@ -785,6 +949,42 @@ class UpstreamArtBuilder:
         ]
         return sorted(resources, key=lambda resource: resource.name)
 
+    @staticmethod
+    def _parse_all_resources(payload: object, version: str) -> list[_Resource]:
+        """Validate and return every asset-bundle entry in an upstream manifest."""
+
+        raw = payload.get("abInfos") if isinstance(payload, dict) else None
+        if not isinstance(raw, list):
+            raise TypeError(f"resource list for {version} does not contain abInfos")
+        resources: list[_Resource] = []
+        names: set[str] = set()
+        filenames: dict[str, str] = {}
+        for position, item in enumerate(raw):
+            if not isinstance(item, dict):
+                raise TypeError(f"resource list entry is not an object: {version}[{position}]")
+            name = item.get("name")
+            md5 = item.get("md5")
+            if not isinstance(name, str) or not name:
+                raise ValueError(f"resource list entry has no name: {version}[{position}]")
+            if not isinstance(md5, str) or not re.fullmatch(
+                r"(?:[0-9A-Fa-f]{4}|[0-9A-Fa-f]{32})",
+                md5,
+            ):
+                raise ValueError(f"resource list entry has an invalid MD5: {version}:{name}")
+            _resource_member_path(name)
+            if name in names:
+                raise ValueError(f"resource list contains a duplicate name: {version}:{name}")
+            filename = _resource_filename(name)
+            previous = filenames.setdefault(filename, name)
+            if previous != name:
+                raise ValueError(
+                    "resource list contains colliding CDN filenames: "
+                    f"{version}:{previous!r} and {name!r}"
+                )
+            names.add(name)
+            resources.append(_Resource(name, md5.lower()))
+        return sorted(resources, key=lambda resource: resource.name)
+
     @classmethod
     def _validate_resource_list(cls, path: Path) -> None:
         cls._parse_resources(json.loads(path.read_text(encoding="utf-8")), path.parent.name)
@@ -792,9 +992,104 @@ class UpstreamArtBuilder:
     def _resource_url(self, version: str, resource: _Resource) -> str:
         """Translate a logical bundle name to its CDN wrapper URL."""
 
-        filename = resource.name.replace("/", "_").replace("#", "__")
-        filename = re.sub(r"\.(.*?)$", ".dat", filename)
+        filename = _resource_filename(resource.name)
         return f"{self._asset_base_url}/{quote(version, safe='')}/{quote(filename, safe='')}"
+
+    async def _archive_resources(
+        self,
+        client: httpx.AsyncClient,
+        archive: AssetBundleArchiveStore,
+        version: str,
+        resources: list[_Resource],
+    ) -> None:
+        """Download and upload selected wrappers with bounded concurrency."""
+
+        if not resources:
+            return
+        iterator = iter(enumerate(resources, start=1))
+        total = len(resources)
+
+        async def archive_one(current: int, resource: _Resource) -> None:
+            resource_root = _resource_cache_path(resource)
+
+            def log_fetch(status: str, elapsed_seconds: float | None = None) -> None:
+                _log_art_action(
+                    "fetch",
+                    version=version,
+                    resource=resource.name,
+                    current=current,
+                    total=total,
+                    status=status,
+                    elapsed_seconds=elapsed_seconds,
+                )
+
+            async def materialize(fetched: Path) -> None:
+                started = time.perf_counter()
+                try:
+                    await self._download_resource(
+                        client,
+                        version,
+                        resource,
+                        fetched / "wrapper.dat",
+                    )
+                except Exception:
+                    log_fetch("failed", time.perf_counter() - started)
+                    raise
+                log_fetch("done", time.perf_counter() - started)
+
+            fetched = await self._cache.directory(
+                version,
+                resource_root / "fetched",
+                _stage_fingerprint("fetched", resource),
+                materialize,
+                lambda path: self._validate_fetched(path, resource),
+                on_hit=lambda: log_fetch("cached"),
+            )
+            started = time.perf_counter()
+            filename = _resource_filename(resource.name)
+            try:
+                uploaded = await archive.put_bundle(
+                    version,
+                    filename,
+                    fetched.path / "wrapper.dat",
+                    bundle_md5=resource.md5,
+                )
+            except Exception:
+                _log_art_action(
+                    "archive",
+                    version=version,
+                    resource=filename,
+                    current=current,
+                    total=total,
+                    status="failed",
+                    elapsed_seconds=time.perf_counter() - started,
+                )
+                raise
+            _log_art_action(
+                "archive",
+                version=version,
+                resource=filename,
+                current=current,
+                total=total,
+                status="done" if uploaded else "cached",
+                elapsed_seconds=time.perf_counter() - started,
+            )
+
+        async def worker() -> None:
+            for current, resource in iterator:
+                await archive_one(current, resource)
+
+        tasks = [
+            asyncio.create_task(worker(), name=f"asset-bundle-archive-{index}")
+            for index in range(min(self._download_workers, total))
+        ]
+        try:
+            await asyncio.gather(*tasks)
+        except BaseException:
+            for task in tasks:
+                task.cancel()
+            await asyncio.gather(*tasks, return_exceptions=True)
+            raise
 
     async def _process_resources(
         self,
@@ -845,7 +1140,12 @@ class UpstreamArtBuilder:
                 return manifest
 
             if resource.name.endswith(".usm"):
-                video_id = PurePosixPath(resource.name).stem.lower()
+                score_video = _is_score_video(resource.name)
+                video_id = (
+                    PurePosixPath(resource.name).stem.lower()
+                    if score_video
+                    else _story_video_id(resource.name)
+                )
 
                 async def materialize_video_rendered(rendered: Path) -> None:
                     async def materialize_video_extracted(extracted: Path) -> None:
@@ -880,6 +1180,9 @@ class UpstreamArtBuilder:
                                     fetched.path / "wrapper.dat",
                                     resource.name,
                                     unwrapped,
+                                    extract_companions=resource.name.lower().startswith(
+                                        "avg/animatedkv/"
+                                    ),
                                 )
                             )
                             log("unzip", "done", time.perf_counter() - started)
@@ -912,11 +1215,12 @@ class UpstreamArtBuilder:
                     started = time.perf_counter()
                     await await_owned(
                         asyncio.to_thread(
-                            _render_score_video,
+                            _render_usm_video,
                             extracted.path,
                             rendered,
                             version,
                             video_id,
+                            score=score_video,
                         )
                     )
                     log("compose", "done", time.perf_counter() - started)
@@ -930,7 +1234,7 @@ class UpstreamArtBuilder:
                     on_hit=lambda: log("compose", "cached"),
                 )
                 if not isinstance(rendered_video.value, ArtManifest):
-                    raise TypeError(f"rendered Score video has no manifest: {rendered_video.path}")
+                    raise TypeError(f"rendered USM video has no manifest: {rendered_video.path}")
                 return rendered_video.value
 
             async def materialize_rendered(rendered: Path) -> None:
@@ -971,6 +1275,9 @@ class UpstreamArtBuilder:
                                     fetched.path / "wrapper.dat",
                                     resource.name,
                                     unwrapped,
+                                    extract_companions=resource.name.lower().startswith(
+                                        "avg/animatedkv/"
+                                    ),
                                 )
                             )
                         except Exception:
@@ -1126,7 +1433,7 @@ class UpstreamArtBuilder:
 
         with zipfile.ZipFile(path) as archive:
             digest = _archive_member_md5(archive, resource.name)
-        if resource.md5 and digest != resource.md5:
+        if len(resource.md5) == 32 and digest != resource.md5:
             raise ValueError(
                 f"MD5 mismatch for {resource.name}: expected {resource.md5}, got {digest}"
             )

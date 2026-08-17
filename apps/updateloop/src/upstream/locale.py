@@ -67,7 +67,7 @@ _SELECTED_PATHS = {
 }
 # Bump this when the selected inputs or extracted directory layout changes;
 # resVersion identifies upstream content, not the local extraction recipe.
-_LOCALE_EXTRACTION_CACHE_FORMAT = "6"
+_LOCALE_EXTRACTION_CACHE_FORMAT = "7"
 _RAW_CONTENT_ACCEPT = "application/vnd.github.raw+json"
 
 _ASSET_PREFIX = Path("assets/torappu/dynamicassets")

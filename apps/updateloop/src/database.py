@@ -8,7 +8,7 @@ from collections.abc import Mapping, Sequence
 from importlib.resources import files
 from pathlib import Path
 
-from .domain import ArtManifest, LocaleManifest
+from .domain import ArtManifest, FileAudioArtifact, FileVideoArtifact, LocaleManifest
 
 SCHEMA_VERSION = 2
 _ART_REFERENCE_INDEX = "story_art_references_by_art"
@@ -100,6 +100,7 @@ def apply_changes(
     source_keys: Mapping[tuple[str, str], str],
     score_asset_keys: Mapping[tuple[str, str], str],
     score_video_keys: Mapping[str, str],
+    media_keys: Mapping[tuple[str, str], str] | None = None,
 ) -> frozenset[str]:
     """Apply all manifests atomically and return every referenced object key."""
 
@@ -116,6 +117,7 @@ def apply_changes(
                         source_keys,
                         score_asset_keys,
                         score_video_keys,
+                        media_keys or {},
                     )
             for manifest in manifests:
                 if isinstance(manifest, LocaleManifest):
@@ -133,6 +135,7 @@ def apply_changes(
                 UNION SELECT object_key FROM source_arts
                 UNION SELECT object_key FROM score_assets
                 UNION SELECT object_key FROM score_videos
+                UNION SELECT object_key FROM media_assets
                 """
             )
         )
@@ -147,6 +150,7 @@ def _apply_art(
     source_keys: Mapping[tuple[str, str], str],
     score_asset_keys: Mapping[tuple[str, str], str],
     score_video_keys: Mapping[str, str],
+    media_keys: Mapping[tuple[str, str], str],
 ) -> None:
     connection.execute(
         """
@@ -161,6 +165,7 @@ def _apply_art(
         DROP TABLE IF EXISTS candidate_source_arts;
         DROP TABLE IF EXISTS candidate_score_assets;
         DROP TABLE IF EXISTS candidate_score_videos;
+        DROP TABLE IF EXISTS candidate_media_assets;
 
         CREATE TEMP TABLE candidate_source_arts (
             category TEXT NOT NULL,
@@ -214,6 +219,20 @@ def _apply_art(
             frame_rate_denominator INTEGER NOT NULL CHECK (frame_rate_denominator > 0),
             frame_count INTEGER NOT NULL CHECK (frame_count > 0)
         ) STRICT;
+        CREATE TEMP TABLE candidate_media_assets (
+            media_kind TEXT NOT NULL CHECK (media_kind IN ('audio', 'video')),
+            media_id TEXT NOT NULL,
+            object_key TEXT NOT NULL UNIQUE,
+            content_type TEXT NOT NULL,
+            byte_size INTEGER NOT NULL CHECK (byte_size > 0),
+            duration REAL,
+            width INTEGER,
+            height INTEGER,
+            frame_rate_numerator INTEGER,
+            frame_rate_denominator INTEGER,
+            frame_count INTEGER,
+            PRIMARY KEY (media_kind, media_id)
+        ) STRICT;
         """
     for statement in candidate_schema.split(";"):
         if statement.strip():
@@ -239,6 +258,36 @@ def _apply_art(
                 source.image.height,
             )
             for source in manifest.source_arts
+        ),
+    )
+    connection.executemany(
+        """
+        INSERT INTO candidate_media_assets
+            (media_kind, media_id, object_key, content_type, byte_size, duration,
+             width, height, frame_rate_numerator, frame_rate_denominator, frame_count)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            (
+                media.kind,
+                media.id,
+                media_keys[(media.kind, media.id)],
+                media.artifact.content_type,
+                media.artifact.byte_size,
+                media.artifact.duration if isinstance(media.artifact, FileAudioArtifact) else None,
+                media.artifact.width if isinstance(media.artifact, FileVideoArtifact) else None,
+                media.artifact.height if isinstance(media.artifact, FileVideoArtifact) else None,
+                media.artifact.frame_rate_numerator
+                if isinstance(media.artifact, FileVideoArtifact)
+                else None,
+                media.artifact.frame_rate_denominator
+                if isinstance(media.artifact, FileVideoArtifact)
+                else None,
+                media.artifact.frame_count
+                if isinstance(media.artifact, FileVideoArtifact)
+                else None,
+            )
+            for media in manifest.media
         ),
     )
     connection.executemany(
@@ -381,6 +430,26 @@ def _apply_art(
     )
     connection.execute(
         """
+        INSERT INTO media_assets
+            (media_kind, media_id, object_key, content_type, byte_size, duration,
+             width, height, frame_rate_numerator, frame_rate_denominator, frame_count)
+        SELECT media_kind, media_id, object_key, content_type, byte_size, duration,
+               width, height, frame_rate_numerator, frame_rate_denominator, frame_count
+        FROM candidate_media_assets WHERE true
+        ON CONFLICT (media_kind, media_id) DO UPDATE SET
+            object_key = excluded.object_key,
+            content_type = excluded.content_type,
+            byte_size = excluded.byte_size,
+            duration = excluded.duration,
+            width = excluded.width,
+            height = excluded.height,
+            frame_rate_numerator = excluded.frame_rate_numerator,
+            frame_rate_denominator = excluded.frame_rate_denominator,
+            frame_count = excluded.frame_count
+        """
+    )
+    connection.execute(
+        """
         INSERT INTO art_source_refs
             (category, art_id, position, source_category, source_art_id)
         SELECT category, art_id, position, source_category, source_art_id
@@ -516,8 +585,8 @@ def _replace_locale(connection: sqlite3.Connection, manifest: LocaleManifest) ->
     connection.executemany(
         """
         INSERT INTO stories
-            (locale, story_id, collection_id, tag, tag_text, code, name, info, position)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            (locale, story_id, collection_id, tag, tag_text, code, name, info, text, position)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             (
@@ -529,6 +598,7 @@ def _replace_locale(connection: sqlite3.Connection, manifest: LocaleManifest) ->
                 story.code,
                 story.name,
                 story.info,
+                story.text,
                 story_position,
             )
             for group in groups
@@ -557,6 +627,25 @@ def _replace_locale(connection: sqlite3.Connection, manifest: LocaleManifest) ->
             for group in groups
             for story in group.stories
             for reference_position, reference in enumerate(story.art_references)
+        ),
+    )
+    connection.executemany(
+        """
+        INSERT INTO story_media_references
+            (locale, story_id, position, media_id, kind)
+        VALUES (?, ?, ?, ?, ?)
+        """,
+        (
+            (
+                unit,
+                story.id,
+                reference_position,
+                reference.media_id,
+                reference.kind,
+            )
+            for group in groups
+            for story in group.stories
+            for reference_position, reference in enumerate(story.media_references)
         ),
     )
     connection.executemany(
@@ -950,6 +1039,34 @@ def find_missing_art_references(path: Path) -> tuple[str, ...]:
                 LEFT JOIN arts USING (category, art_id)
                 WHERE arts.art_id IS NULL
                 ORDER BY referenced.category, referenced.art_id
+                """
+            )
+        )
+    finally:
+        connection.close()
+
+
+def find_missing_media_references(path: Path) -> tuple[str, ...]:
+    """Return story media identifiers absent from the current media set."""
+
+    connection = _connect(path)
+    try:
+        return tuple(
+            str(row[0])
+            for row in connection.execute(
+                """
+                SELECT reference.kind || '/' || reference.media_id
+                FROM story_media_references AS reference
+                LEFT JOIN media_assets AS media
+                  ON media.media_id = reference.media_id
+                 AND (
+                     (reference.kind = 'video' AND media.media_kind = 'video')
+                     OR
+                     (reference.kind <> 'video' AND media.media_kind = 'audio')
+                 )
+                WHERE media.media_id IS NULL
+                GROUP BY reference.kind, reference.media_id
+                ORDER BY reference.kind, reference.media_id
                 """
             )
         )

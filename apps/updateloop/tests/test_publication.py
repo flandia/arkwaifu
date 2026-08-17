@@ -500,7 +500,7 @@ async def test_s3_remote_rejects_conflicting_immutable_score_video(monkeypatch, 
         secret_access_key="secret",
     )
 
-    with pytest.raises(ValueError, match="immutable WebM object conflicts"):
+    with pytest.raises(ValueError, match="immutable video object conflicts"):
         await remote.put_video("SCORE/v1/video/background.webm", artifact)
 
 
@@ -584,7 +584,7 @@ async def test_memory_remote_does_not_replace_versioned_score_video(tmp_path):
 
     await remote.put_video(key, first)
     await remote.put_video(key, first)
-    with pytest.raises(ValueError, match="immutable WebM object conflicts"):
+    with pytest.raises(ValueError, match="immutable video object conflicts"):
         await remote.put_video(key, second)
 
     assert remote.objects[key] == first.content
@@ -1553,8 +1553,8 @@ def test_schema_rejects_non_string_story_reference_names(tmp_path):
         )
         connection.execute(
             """
-            INSERT INTO stories VALUES
-                ('EN', 'story', 'archive_group:group', 'before', '', '', 'Story', '', 0)
+                INSERT INTO stories VALUES
+                    ('EN', 'story', 'archive_group:group', 'before', '', '', 'Story', '', '', 0)
             """
         )
 

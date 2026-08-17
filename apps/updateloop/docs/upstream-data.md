@@ -14,11 +14,13 @@ The manifest, cache identity, and database store only `resVersion`. They do not 
 
 ## Discover complete Windows version history
 
-The official client endpoint exposes only the current `resVersion`. Complete art mode reads the `pfyy/OpenBachelorS` observation ledger to discover older official versions, then validates the resulting chronological sequence.
+The official client endpoint exposes only the current `resVersion`. Complete art mode and asset-bundle archive mode read the `pfyy/OpenBachelorS` observation ledger to discover older official versions, then validate the resulting chronological sequence.
 
 The ledger is not an authoritative archive. The updater always includes the current version supplied by the official endpoint and requires it to be the final version processed.
 
 The persistent cache stores only the ordered `resVersion` values. Repository revisions remain transient lookup details.
+
+The ledger supplies version order, not bundle bytes. `--archive` still downloads each selected wrapper and exact `hot_update_list.json` from the official CDN, validates the wrapper's inner bundle against the manifest MD5, and stores the manifest last. An empty archive begins at the oldest recorded version; an existing archive resumes after its newest completed version.
 
 ## Validate extracted paths and gallery schemas
 

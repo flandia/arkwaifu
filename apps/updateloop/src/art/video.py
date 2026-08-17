@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import heapq
 import struct
+from contextlib import ExitStack
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -24,13 +26,18 @@ class IvfMetadata:
     frame_count: int
 
 
-def demux_usm_to_ivf(source: Path, destination: Path) -> IvfMetadata:
-    """Extract channel-zero ``@SFV`` payloads and reject every other media shape."""
+def demux_usm_to_ivf(
+    source: Path,
+    destination: Path,
+    audio_destination: Path | None = None,
+) -> IvfMetadata:
+    """Extract channel-zero ``@SFV`` video and optional ``@SFA`` ADX audio."""
 
     content = source.read_bytes()
     if len(content) < 8 or content[:4] != b"CRID":
         raise ValueError(f"Score video is not a CRID USM: {source}")
     output = bytearray()
+    audio_output = bytearray()
     position = 0
     saw_video = False
     while position < len(content):
@@ -52,6 +59,16 @@ def demux_usm_to_ivf(source: Path, destination: Path) -> IvfMetadata:
             payload_end = chunk_end - padding_size
             if payload_offset < 24 or payload_start > payload_end or payload_end > chunk_end:
                 raise ValueError(f"invalid USM media payload at offset {position}")
+            if chunk_type == b"@SFA":
+                if audio_destination is not None and payload_type == 0:
+                    if channel != 0:
+                        raise ValueError(f"unsupported USM audio channel {channel}")
+                    audio_output.extend(content[payload_start:payload_end])
+                position = chunk_end
+                continue
+            if chunk_type in {b"@ALP", b"@SBT"}:
+                position = chunk_end
+                continue
             if chunk_type != b"@SFV":
                 raise ValueError(
                     f"unsupported USM media stream {chunk_type.decode('ascii')} at offset {position}"
@@ -68,6 +85,11 @@ def demux_usm_to_ivf(source: Path, destination: Path) -> IvfMetadata:
     metadata = validate_ivf(bytes(output))
     destination.parent.mkdir(parents=True, exist_ok=True)
     destination.write_bytes(output)
+    if audio_destination is not None:
+        audio_destination.unlink(missing_ok=True)
+        if audio_output:
+            audio_destination.parent.mkdir(parents=True, exist_ok=True)
+            audio_destination.write_bytes(audio_output)
     return metadata
 
 
@@ -104,32 +126,98 @@ def remux_ivf_to_webm(
     source: Path,
     destination: Path,
     metadata: IvfMetadata,
+    audio_source: Path | None = None,
 ) -> FileVideoArtifact:
-    """Losslessly remux one validated IVF stream into browser-native WebM."""
+    """Remux VP9 losslessly and encode optional ADX audio as browser-native Opus."""
 
     destination.parent.mkdir(parents=True, exist_ok=True)
-    with av.open(str(source), mode="r", format="ivf") as input_container:
+    with ExitStack() as stack:
+        input_container = stack.enter_context(av.open(str(source), mode="r", format="ivf"))
         if len(input_container.streams.video) != 1 or input_container.streams.audio:
             raise ValueError("IVF input does not contain exactly one video stream")
         input_stream = input_container.streams.video[0]
         if input_stream.codec_context.name != "vp9":
             raise ValueError(f"IVF codec is not VP9: {input_stream.codec_context.name}")
-        with av.open(
-            str(destination),
-            mode="w",
-            format="webm",
-            options={"fflags": "+bitexact"},
-        ) as output_container:
-            output_container.metadata.clear()
-            output_stream = output_container.add_stream_from_template(input_stream)
-            output_stream.metadata.clear()
+
+        audio_container = None
+        audio_stream = None
+        audio_sample_count = None
+        if audio_source is not None:
+            with audio_source.open("rb") as input_file:
+                audio_header = input_file.read(16)
+            if len(audio_header) < 16:
+                raise ValueError("USM ADX audio header is truncated")
+            audio_sample_count = struct.unpack_from(">I", audio_header, 12)[0]
+            if audio_sample_count <= 0:
+                raise ValueError("USM ADX audio declares no samples")
+            audio_container = stack.enter_context(
+                av.open(str(audio_source), mode="r", format="adx")
+            )
+            if len(audio_container.streams.audio) != 1 or audio_container.streams.video:
+                raise ValueError("ADX input does not contain exactly one audio stream")
+            audio_stream = audio_container.streams.audio[0]
+            if audio_stream.codec_context.name != "adpcm_adx":
+                raise ValueError(f"USM audio codec is not ADX: {audio_stream.codec_context.name}")
+
+        output_container = stack.enter_context(
+            av.open(
+                str(destination),
+                mode="w",
+                format="webm",
+                options={"fflags": "+bitexact"},
+            )
+        )
+        output_container.metadata.clear()
+        output_stream = output_container.add_stream_from_template(input_stream)
+        output_stream.metadata.clear()
+
+        def video_packets():
             for packet in input_container.demux(input_stream):
-                # PyAV emits one final, truly empty flushing packet. Packets
-                # with bytes are retained even when DTS is absent.
-                if packet.size == 0:
-                    continue
-                packet.stream = output_stream
-                output_container.mux(packet)
+                if packet.size > 0:
+                    packet.stream = output_stream
+                    yield packet
+
+        packets = video_packets()
+        if (
+            audio_stream is not None
+            and audio_container is not None
+            and audio_sample_count is not None
+        ):
+            output_audio = output_container.add_stream(
+                "libopus",
+                rate=audio_stream.codec_context.sample_rate,
+            )
+            output_audio.layout = audio_stream.codec_context.layout
+            output_audio.bit_rate = 96_000 * audio_stream.codec_context.channels
+            output_audio.metadata.clear()
+
+            def audio_packets():
+                decoded_samples = 0
+                for input_packet in audio_container.demux(audio_stream):
+                    for frame in input_packet.decode():
+                        decoded_samples += frame.samples
+                        if decoded_samples > audio_sample_count:
+                            raise ValueError("USM ADX audio exceeds its declared sample count")
+                        yield from output_audio.encode(frame)
+                    if decoded_samples == audio_sample_count:
+                        break
+                if decoded_samples != audio_sample_count:
+                    raise ValueError(
+                        "USM ADX audio sample count mismatch: "
+                        f"expected {audio_sample_count}, decoded {decoded_samples}"
+                    )
+                yield from output_audio.encode()
+
+            def packet_time(packet):
+                timestamp = packet.dts if packet.dts is not None else packet.pts
+                if timestamp is None:
+                    raise ValueError("USM media packet has no timestamp")
+                return timestamp * packet.time_base
+
+            packets = heapq.merge(packets, audio_packets(), key=packet_time)
+
+        for packet in packets:
+            output_container.mux(packet)
     artifact = FileVideoArtifact.from_path(
         destination,
         width=metadata.width,
@@ -138,25 +226,33 @@ def remux_ivf_to_webm(
         frame_rate_denominator=metadata.frame_rate_denominator,
         frame_count=metadata.frame_count,
     )
-    _validate_webm(artifact)
+    _validate_webm(artifact, expect_audio=audio_source is not None)
     return artifact
 
 
-def _validate_webm(artifact: FileVideoArtifact) -> None:
+def _validate_webm(artifact: FileVideoArtifact, *, expect_audio: bool) -> None:
     with av.open(str(artifact.path), mode="r", format="webm") as container:
-        if len(container.streams.video) != 1 or container.streams.audio:
-            raise ValueError("rendered WebM does not contain exactly one video stream")
+        if len(container.streams.video) != 1 or len(container.streams.audio) != int(expect_audio):
+            raise ValueError("rendered WebM has unexpected video or audio streams")
         stream = container.streams.video[0]
         if stream.codec_context.name != "vp9":
             raise ValueError(f"rendered WebM codec is not VP9: {stream.codec_context.name}")
+        if expect_audio and container.streams.audio[0].codec_context.name != "opus":
+            raise ValueError("rendered WebM audio codec is not Opus")
         if (stream.codec_context.width, stream.codec_context.height) != (
             artifact.width,
             artifact.height,
         ):
             raise ValueError("rendered WebM dimensions changed during remux")
-        packet_count = sum(1 for packet in container.demux(stream) if packet.size > 0)
+        packet_counts = {item.index: 0 for item in container.streams}
+        for packet in container.demux():
+            if packet.size > 0:
+                packet_counts[packet.stream.index] += 1
+        packet_count = packet_counts[stream.index]
         if packet_count != artifact.frame_count:
             raise ValueError(
                 "rendered WebM packet count changed during remux: "
                 f"expected {artifact.frame_count}, found {packet_count}"
             )
+        if expect_audio and packet_counts[container.streams.audio[0].index] == 0:
+            raise ValueError("rendered WebM audio stream is empty")

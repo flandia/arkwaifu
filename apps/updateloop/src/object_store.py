@@ -11,13 +11,12 @@ from botocore.config import Config
 from botocore.exceptions import ClientError
 
 from .asyncio_tools import await_owned
-from .domain import FileVideoArtifact, PngImage
+from .domain import FileAudioArtifact, FileVideoArtifact, PngImage
 
 DATABASE_OBJECT_KEY = "arkwaifu.sqlite3"
 _DATABASE_CONTENT_TYPE = "application/vnd.sqlite3"
 _PNG_CONTENT_TYPE = "image/png"
 _PNG_CACHE_CONTROL = "public, max-age=31536000, immutable"
-_VIDEO_CONTENT_TYPE = "video/webm"
 _THUMBNAIL_CONTENT_TYPE = "image/webp"
 _MAX_POOL_CONNECTIONS = 16
 
@@ -55,7 +54,11 @@ class ObjectStore(Protocol):
         ...
 
     async def put_video(self, key: str, artifact: FileVideoArtifact) -> None:
-        """Create one immutable Score WebM object."""
+        """Create one immutable video object."""
+        ...
+
+    async def put_audio(self, key: str, artifact: FileAudioArtifact) -> None:
+        """Create one immutable story audio object."""
         ...
 
 
@@ -147,7 +150,7 @@ class S3ObjectStore:
                 self._client.put_object(Body=content, **request)
 
     async def put_video(self, key: str, artifact: FileVideoArtifact) -> None:
-        """Create one WebM, accepting an already matching immutable object."""
+        """Create one video, accepting an already matching immutable object."""
 
         await await_owned(asyncio.to_thread(self._put_video, key, artifact))
 
@@ -167,7 +170,32 @@ class S3ObjectStore:
                 Key=key,
                 Body=content,
                 ContentLength=artifact.byte_size,
-                ContentType=_VIDEO_CONTENT_TYPE,
+                ContentType=artifact.content_type,
+                CacheControl=_PNG_CACHE_CONTROL,
+            )
+
+    async def put_audio(self, key: str, artifact: FileAudioArtifact) -> None:
+        """Create one audio object, accepting an already matching immutable object."""
+
+        await await_owned(asyncio.to_thread(self._put_audio, key, artifact))
+
+    def _put_audio(self, key: str, artifact: FileAudioArtifact) -> None:
+        try:
+            existing = self._client.head_object(Bucket=self._bucket, Key=key)
+        except ClientError as error:
+            if not _is_missing(error):
+                raise
+        else:
+            self._validate_audio(key, artifact, existing)
+            return
+
+        with artifact.path.open("rb") as content:
+            self._client.put_object(
+                Bucket=self._bucket,
+                Key=key,
+                Body=content,
+                ContentLength=artifact.byte_size,
+                ContentType=artifact.content_type,
                 CacheControl=_PNG_CACHE_CONTROL,
             )
 
@@ -212,11 +240,11 @@ class S3ObjectStore:
         artifact: FileVideoArtifact,
         metadata: dict[str, object],
     ) -> None:
-        """Require an existing object to match the immutable WebM contract."""
+        """Require an existing object to match the immutable video contract."""
 
         expected = {
             "ContentLength": artifact.byte_size,
-            "ContentType": _VIDEO_CONTENT_TYPE,
+            "ContentType": artifact.content_type,
             "CacheControl": _PNG_CACHE_CONTROL,
         }
         mismatches = {
@@ -229,7 +257,32 @@ class S3ObjectStore:
                 f"{name}={actual!r} (expected {wanted!r})"
                 for name, (actual, wanted) in mismatches.items()
             )
-            raise ValueError(f"immutable WebM object conflicts with {key}: {detail}")
+            raise ValueError(f"immutable video object conflicts with {key}: {detail}")
+
+    @staticmethod
+    def _validate_audio(
+        key: str,
+        artifact: FileAudioArtifact,
+        metadata: dict[str, object],
+    ) -> None:
+        """Require an existing object to match the immutable audio contract."""
+
+        expected = {
+            "ContentLength": artifact.byte_size,
+            "ContentType": artifact.content_type,
+            "CacheControl": _PNG_CACHE_CONTROL,
+        }
+        mismatches = {
+            name: (metadata.get(name), value)
+            for name, value in expected.items()
+            if metadata.get(name) != value
+        }
+        if mismatches:
+            detail = ", ".join(
+                f"{name}={actual!r} (expected {wanted!r})"
+                for name, (actual, wanted) in mismatches.items()
+            )
+            raise ValueError(f"immutable audio object conflicts with {key}: {detail}")
 
 
 class MemoryObjectStore:
@@ -267,9 +320,17 @@ class MemoryObjectStore:
         self.objects[key] = content
 
     async def put_video(self, key: str, artifact: FileVideoArtifact) -> None:
-        """Create one immutable WebM or accept an identical existing value."""
+        """Create one immutable video or accept an identical existing value."""
 
         content = artifact.content
         existing = self.objects.setdefault(key, content)
         if existing != content:
-            raise ValueError(f"immutable WebM object conflicts with {key}")
+            raise ValueError(f"immutable video object conflicts with {key}")
+
+    async def put_audio(self, key: str, artifact: FileAudioArtifact) -> None:
+        """Create one immutable audio object or accept an identical value."""
+
+        content = artifact.content
+        existing = self.objects.setdefault(key, content)
+        if existing != content:
+            raise ValueError(f"immutable audio object conflicts with {key}")

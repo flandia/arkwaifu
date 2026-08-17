@@ -15,6 +15,7 @@ from typing import cast
 
 from dotenv import load_dotenv
 
+from .asset_bundle_archive import S3AssetBundleArchiveStore
 from .config import Settings
 from .domain import ArtManifest, LocaleManifest, LocaleUnit
 from .object_store import S3ObjectStore
@@ -87,6 +88,11 @@ def _parser() -> argparse.ArgumentParser:
         help="rebuild art additively across every recorded Windows resVersion",
     )
     run.add_argument(
+        "--archive",
+        action="store_true",
+        help="archive missing CN/Windows asset-bundle wrappers across recorded history",
+    )
+    run.add_argument(
         "--no-cache",
         action="store_true",
         help="use temporary storage without reading or writing ./.cache",
@@ -109,6 +115,8 @@ def _validate_arguments(parser: argparse.ArgumentParser, args: argparse.Namespac
             parser.error("--complete requires exactly one update unit: art")
     if args.command == "run" and args.force and (not args.units or "art" in args.units):
         parser.error("--force is available only for locale-only updates")
+    if args.command == "run" and args.archive and args.units and "art" not in args.units:
+        parser.error("--archive requires an update request containing art")
 
 
 def _updater(settings: Settings) -> Updater:
@@ -124,11 +132,28 @@ def _updater(settings: Settings) -> Updater:
     )
 
 
+def _asset_bundle_archive(settings: Settings) -> S3AssetBundleArchiveStore:
+    """Build the CN/Windows archive adapter with the existing S3 credentials."""
+
+    return S3AssetBundleArchiveStore(
+        bucket=settings.archive_s3_bucket,
+        region=settings.archive_s3_region,
+        access_key_id=settings.s3_access_key_id,
+        secret_access_key=settings.s3_secret_access_key,
+        endpoint_url=settings.archive_s3_endpoint_url,
+        path_style=settings.archive_s3_path_style,
+        game_region="CN",
+        architecture="Windows",
+        max_pool_connections=settings.download_workers,
+    )
+
+
 async def _prepare_art(
     settings: Settings,
     cache: UpstreamCache,
     *,
     complete: bool = False,
+    archive: bool = False,
 ) -> UpdateRequest:
     builder = UpstreamArtBuilder(
         version_url=settings.art_version_url,
@@ -142,7 +167,8 @@ async def _prepare_art(
     )
     res_version = await builder.detect_version()
 
-    if complete:
+    versions: tuple[str, ...] | None = None
+    if complete or archive:
         history = WindowsVersionHistory(
             github_api_url=settings.github_api_url,
             github_raw_url="https://raw.githubusercontent.com",
@@ -150,6 +176,15 @@ async def _prepare_art(
             cache=cache,
         )
         versions = await history.versions(res_version)
+
+    if archive:
+        if versions is None:
+            raise AssertionError("archive history was not loaded")
+        await builder.archive_history(versions, _asset_bundle_archive(settings))
+
+    if complete:
+        if versions is None:
+            raise AssertionError("complete art history was not loaded")
 
         async def build_complete(_active: str | None, _force: bool) -> ArtManifest:
             return await builder.build_history(versions)
@@ -190,6 +225,7 @@ async def _run(
     *,
     force: bool,
     complete: bool = False,
+    archive: bool = False,
     use_cache: bool = True,
 ) -> int:
     settings = Settings.from_environment()
@@ -201,6 +237,7 @@ async def _run(
             units,
             force=force,
             complete=complete,
+            archive=archive,
             cache=cache,
         )
     with tempfile.TemporaryDirectory(prefix="arkwaifu-run-") as temporary:
@@ -211,6 +248,7 @@ async def _run(
             units,
             force=force,
             complete=complete,
+            archive=archive,
             cache=cache,
         )
 
@@ -221,6 +259,7 @@ async def _run_with_cache(
     *,
     force: bool,
     complete: bool,
+    archive: bool,
     cache: UpstreamCache,
 ) -> int:
     """Prepare requested datasets concurrently and publish them as one database."""
@@ -235,8 +274,8 @@ async def _run_with_cache(
         for unit in requested_units:
             if unit == "art":
                 preparation = (
-                    _prepare_art(settings, cache, complete=True)
-                    if complete
+                    _prepare_art(settings, cache, complete=complete, archive=archive)
+                    if complete or archive
                     else _prepare_art(settings, cache)
                 )
             else:
@@ -302,6 +341,7 @@ def main(argv: list[str] | None = None) -> None:
                         args.units,
                         force=args.force,
                         complete=args.complete,
+                        archive=args.archive,
                         use_cache=not args.no_cache,
                     )
                 )
@@ -311,6 +351,7 @@ def main(argv: list[str] | None = None) -> None:
                     args.units,
                     force=args.force,
                     complete=args.complete,
+                    archive=args.archive,
                     use_cache=not args.no_cache,
                 )
             )

@@ -227,6 +227,82 @@ async def test_prepare_complete_art_uses_history_builder_once(monkeypatch, tmp_p
 
 
 @pytest.mark.asyncio
+async def test_prepare_complete_art_archives_the_same_history_before_build(
+    monkeypatch,
+    tmp_path: Path,
+):
+    resource = ArtManifest("art-v2", (), ())
+    cache = UpstreamCache(tmp_path / ".cache")
+    calls = []
+    archive_store = object()
+
+    class Builder:
+        def __init__(self, **_kwargs) -> None:
+            pass
+
+        async def detect_version(self):
+            return "art-v2"
+
+        async def archive_history(self, versions, archive):
+            assert archive is archive_store
+            calls.append(("archive", versions))
+
+        async def build_history(self, versions):
+            calls.append(("build", versions))
+            return resource
+
+    class History:
+        def __init__(self, **_kwargs) -> None:
+            pass
+
+        async def versions(self, current):
+            assert current == "art-v2"
+            calls.append(("history", current))
+            return ("art-v1", "art-v2")
+
+    monkeypatch.setattr(cli, "UpstreamArtBuilder", Builder)
+    monkeypatch.setattr(cli, "WindowsVersionHistory", History)
+    monkeypatch.setattr(cli, "_asset_bundle_archive", lambda _settings: archive_store)
+    settings = SimpleNamespace(
+        art_version_url="https://version.example",
+        art_asset_base_url="https://assets.example",
+        github_api_url="https://api.github.example",
+        github_token=None,
+        download_workers=2,
+        extraction_workers=1,
+    )
+
+    update = await cli._prepare_art(settings, cache, complete=True, archive=True)
+    manifest = await update.build(None, False)
+
+    assert manifest is resource
+    assert calls == [
+        ("history", "art-v2"),
+        ("archive", ("art-v1", "art-v2")),
+        ("build", ("art-v1", "art-v2")),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_archive_preparation_failure_prevents_database_publication(monkeypatch, caplog):
+    updater = _patch_runtime(monkeypatch)
+
+    async def fail(_settings, _cache, *, complete=False, archive=False):
+        assert complete is False
+        assert archive is True
+        raise RuntimeError("asset-bundle archive failed")
+
+    monkeypatch.setattr(cli, "_prepare_art", fail)
+
+    with caplog.at_level("ERROR"):
+        result = await cli._run(["art"], force=False, archive=True, use_cache=False)
+
+    assert result == 1
+    assert updater.calls == []
+    assert "unit=art status=failed" in caplog.text
+
+
+@pytest.mark.asyncio
 async def test_no_cache_workspace_outlives_batch_build_and_is_removed_after_run(monkeypatch):
     updater = _patch_runtime(monkeypatch)
     observed_root: Path | None = None

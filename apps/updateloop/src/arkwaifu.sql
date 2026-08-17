@@ -101,6 +101,41 @@ CREATE TABLE score_videos (
     frame_count INTEGER NOT NULL CHECK (frame_count > 0)
 ) STRICT;
 
+CREATE TABLE media_assets (
+    media_kind TEXT NOT NULL CHECK (media_kind IN ('audio', 'video')),
+    media_id TEXT NOT NULL
+        CHECK (length(media_id) > 0 AND media_id = lower(media_id)),
+    object_key TEXT NOT NULL UNIQUE CHECK (length(object_key) > 0),
+    content_type TEXT NOT NULL CHECK (length(content_type) > 0),
+    byte_size INTEGER NOT NULL CHECK (byte_size > 0),
+    duration REAL CHECK (duration IS NULL OR duration > 0),
+    width INTEGER CHECK (width IS NULL OR width > 0),
+    height INTEGER CHECK (height IS NULL OR height > 0),
+    frame_rate_numerator INTEGER CHECK (
+        frame_rate_numerator IS NULL OR frame_rate_numerator > 0
+    ),
+    frame_rate_denominator INTEGER CHECK (
+        frame_rate_denominator IS NULL OR frame_rate_denominator > 0
+    ),
+    frame_count INTEGER CHECK (frame_count IS NULL OR frame_count > 0),
+    PRIMARY KEY (media_kind, media_id),
+    CHECK (
+        (media_kind = 'audio'
+            AND width IS NULL AND height IS NULL
+            AND frame_rate_numerator IS NULL
+            AND frame_rate_denominator IS NULL
+            AND frame_count IS NULL)
+        OR
+        (media_kind = 'video'
+            AND width IS NOT NULL AND height IS NOT NULL
+            AND frame_rate_numerator IS NOT NULL
+            AND frame_rate_denominator IS NOT NULL
+            AND frame_count IS NOT NULL)
+    )
+) STRICT;
+
+CREATE INDEX media_assets_by_id ON media_assets (media_id, media_kind);
+
 -- Locale tables reference unit_versions with ON DELETE CASCADE. Replacing one
 -- locale removes the old Score, Archive, story, and gallery trees.
 CREATE TABLE story_collections (
@@ -240,6 +275,7 @@ CREATE TABLE stories (
     code TEXT NOT NULL,
     name TEXT NOT NULL,
     info TEXT NOT NULL,
+    text TEXT NOT NULL,
     position INTEGER NOT NULL CHECK (position >= 0),
     PRIMARY KEY (locale, story_id),
     UNIQUE (locale, collection_id, position),
@@ -268,6 +304,24 @@ CREATE TABLE story_art_references (
 
 CREATE INDEX story_art_references_by_art
     ON story_art_references (locale, art_id);
+
+-- Story media references deliberately have no foreign key to media_assets.
+-- Locale snapshots can lead the Windows art version; unresolved identifiers are
+-- retained and reported as incomplete upstream data.
+CREATE TABLE story_media_references (
+    locale TEXT NOT NULL,
+    story_id TEXT NOT NULL,
+    position INTEGER NOT NULL CHECK (position >= 0),
+    media_id TEXT NOT NULL
+        CHECK (length(media_id) > 0 AND media_id = lower(media_id)),
+    kind TEXT NOT NULL CHECK (kind IN ('sound', 'music', 'video')),
+    PRIMARY KEY (locale, story_id, position),
+    FOREIGN KEY (locale, story_id)
+        REFERENCES stories (locale, story_id) ON DELETE CASCADE
+) STRICT;
+
+CREATE INDEX story_media_references_by_media
+    ON story_media_references (locale, media_id, kind);
 
 -- Asset references deliberately have no foreign key to their global tables.
 -- A locale snapshot may lead the Windows art version; declared identifiers

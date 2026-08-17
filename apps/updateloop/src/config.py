@@ -48,6 +48,10 @@ class Settings:
     s3_access_key_id: str
     s3_secret_access_key: str
     s3_path_style: bool
+    archive_s3_endpoint_url: str
+    archive_s3_region: str
+    archive_s3_bucket: str
+    archive_s3_path_style: bool
     art_version_url: str
     art_asset_base_url: str
     github_api_url: str
@@ -66,6 +70,19 @@ class Settings:
             s3_access_key_id=_required("ARKWAIFU_S3_ACCESS_KEY_ID"),
             s3_secret_access_key=_required("ARKWAIFU_S3_SECRET_ACCESS_KEY"),
             s3_path_style=_boolean("ARKWAIFU_S3_PATH_STYLE", default=False),
+            archive_s3_endpoint_url=os.environ.get(
+                "ARKWAIFU_ARCHIVE_S3_ENDPOINT_URL",
+                "https://sgp1.digitaloceanspaces.com",
+            ).rstrip("/"),
+            archive_s3_region=os.environ.get("ARKWAIFU_ARCHIVE_S3_REGION", "sgp1"),
+            archive_s3_bucket=os.environ.get(
+                "ARKWAIFU_ARCHIVE_S3_BUCKET",
+                "arkwaifu-ab",
+            ),
+            archive_s3_path_style=_boolean(
+                "ARKWAIFU_ARCHIVE_S3_PATH_STYLE",
+                default=False,
+            ),
             art_version_url=os.environ.get(
                 "ARKWAIFU_ART_VERSION_URL",
                 "https://ak-conf.hypergryph.com/config/prod/official/Windows/version",

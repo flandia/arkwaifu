@@ -32,6 +32,21 @@ def _tiny_ivf(path: Path) -> bytes:
     return path.read_bytes()
 
 
+def _tiny_adx(path: Path) -> bytes:
+    with av.open(str(path), mode="w", format="adx") as container:
+        stream = container.add_stream("adpcm_adx", rate=48_000)
+        stream.layout = "stereo"
+        frame = av.AudioFrame(format="s16", layout="stereo", samples=4_800)
+        frame.sample_rate = 48_000
+        for plane in frame.planes:
+            plane.update(bytes(plane.buffer_size))
+        for packet in stream.encode(frame):
+            container.mux(packet)
+        for packet in stream.encode():
+            container.mux(packet)
+    return path.read_bytes()
+
+
 def _media_chunk(chunk_type: bytes, payload: bytes) -> bytes:
     header = bytearray(24)
     header[1] = 24
@@ -61,13 +76,27 @@ def test_score_usm_demux_and_lossless_webm_remux_are_deterministic(tmp_path: Pat
     assert first.byte_size > 0
 
 
-def test_score_usm_rejects_audio_instead_of_silently_dropping_it(tmp_path: Path):
+def test_usm_preserves_embedded_audio_stream(tmp_path: Path):
     ivf = _tiny_ivf(tmp_path / "source.ivf")
+    adx = _tiny_adx(tmp_path / "source.adx")
     source = tmp_path / "score.usm"
-    source.write_bytes(_usm(ivf) + _media_chunk(b"@SFA", b"audio"))
+    video_destination = tmp_path / "output.ivf"
+    audio_destination = tmp_path / "output.adx"
+    source.write_bytes(_usm(ivf) + _media_chunk(b"@SFA", adx))
 
-    with pytest.raises(ValueError, match="unsupported USM media stream @SFA"):
-        demux_usm_to_ivf(source, tmp_path / "output.ivf")
+    metadata = demux_usm_to_ivf(source, video_destination, audio_destination)
+    artifact = remux_ivf_to_webm(
+        video_destination,
+        tmp_path / "output.webm",
+        metadata,
+        audio_destination,
+    )
+
+    assert video_destination.read_bytes() == ivf
+    assert audio_destination.read_bytes() == adx
+    assert metadata.frame_count == 1
+    with av.open(str(artifact.path), format="webm") as container:
+        assert container.streams.audio[0].codec_context.name == "opus"
 
 
 def test_score_webm_validation_rejects_a_lost_packet(tmp_path: Path):

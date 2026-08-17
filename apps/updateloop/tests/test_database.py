@@ -8,20 +8,27 @@ from PIL import Image
 from arkwaifu_updateloop.database import (
     apply_changes,
     find_missing_art_references,
+    find_missing_media_references,
     initialize_or_validate,
     read_versions,
 )
 from arkwaifu_updateloop.domain import (
+    ArchiveGroup,
     ArtManifest,
     ArtRecord,
     CompositePanel,
+    FileAudioArtifact,
     GalleryArtwork,
     GalleryDisplay,
     GalleryGroup,
     LocaleManifest,
+    MediaRecord,
     MovementSection,
     PngArtifact,
     SourceArtReference,
+    StoryArtReference,
+    StoryMediaReference,
+    StoryRecord,
 )
 
 
@@ -132,6 +139,94 @@ def test_database_writer_keeps_foreign_key_enforcement(tmp_path):
         )
 
     assert read_versions(path) == {}
+
+
+def test_story_text_and_media_are_published_and_searchable(tmp_path):
+    path = tmp_path / "arkwaifu.sqlite3"
+    initialize_or_validate(path)
+    audio_path = tmp_path / "flashback.wav"
+    audio_path.write_bytes(b"RIFF" + b"audio")
+    audio = FileAudioArtifact.from_path(audio_path, content_type="audio/wav", duration=1.5)
+    media = MediaRecord("flashback", "audio", audio)
+    story = StoryRecord(
+        id="story",
+        collection_id="archive_group:group",
+        tag="before",
+        tag_text="",
+        code="1-1",
+        name="Opening",
+        info="summary",
+        art_references=(StoryArtReference("context-art", "picture", "image"),),
+        text="A searchable context sentence.",
+        media_references=(StoryMediaReference("flashback", "sound"),),
+    )
+    locale = LocaleManifest(
+        unit="CN",
+        upstream_version="locale-v1",
+        movements=(),
+        movement_sections=(),
+        archive_groups=(
+            ArchiveGroup(
+                id="group",
+                collection_id="archive_group:group",
+                position=0,
+                name="Group",
+                archive_kind="others",
+                story_type=None,
+                stories=(story,),
+            ),
+        ),
+        galleries=(),
+    )
+
+    apply_changes(
+        path,
+        (
+            ArtManifest(
+                "art-v1",
+                (
+                    ArtRecord(
+                        "context-art",
+                        "image",
+                        PngArtifact.from_image(Image.new("RGBA", (1, 1))),
+                    ),
+                ),
+                (),
+                media=(media,),
+            ),
+            locale,
+        ),
+        art_keys={("image", "context-art"): "ART/art-v1/composition/image/context-art.png"},
+        source_keys={},
+        score_asset_keys={},
+        score_video_keys={},
+        media_keys={("audio", "flashback"): "MEDIA/art-v1/audio/flashback.wav"},
+    )
+
+    with sqlite3.connect(path) as connection:
+        assert connection.execute("SELECT text FROM stories").fetchone() == (
+            "A searchable context sentence.",
+        )
+        assert connection.execute(
+            "SELECT kind, media_id FROM story_media_references"
+        ).fetchone() == ("sound", "flashback")
+        assert connection.execute("SELECT object_key, duration FROM media_assets").fetchone() == (
+            "MEDIA/art-v1/audio/flashback.wav",
+            1.5,
+        )
+        search_text = connection.execute(
+            "SELECT search_text FROM search_entries WHERE kind = 'story'"
+        ).fetchone()[0]
+        assert "summary" in search_text
+        assert "searchable context" not in search_text
+        assert (
+            "context-art"
+            in connection.execute(
+                "SELECT search_text FROM search_entries "
+                "WHERE kind = 'art' AND entry_id = 'context-art'"
+            ).fetchone()[0]
+        )
+    assert find_missing_media_references(path) == ()
 
 
 def test_archive_and_section_categories_are_explicit(tmp_path):
@@ -303,8 +398,7 @@ def test_gallery_writer_constraints_cascade_and_composite_missing_art(tmp_path):
 
     with sqlite3.connect(path) as connection:
         assert connection.execute(
-            "SELECT title, thumbnail_object_key FROM search_entries "
-            "WHERE kind = 'art'"
+            "SELECT title, thumbnail_object_key FROM search_entries WHERE kind = 'art'"
         ).fetchone() == (
             "top/bottom",
             "ART/art-v1/composition/background/top/bottom.png",

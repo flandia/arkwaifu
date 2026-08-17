@@ -11,6 +11,8 @@ The following commands cover each supported update mode:
 ```console
 uv run updateloop run art
 uv run updateloop run art --complete
+uv run updateloop run art --archive
+uv run updateloop run art --complete --archive
 uv run updateloop run CN EN
 uv run updateloop run
 uv run updateloop run CN --force
@@ -22,6 +24,8 @@ Choose a mode based on the data you need to publish:
 
 - `run art` updates art that changed since the published art version
 - `run art --complete` rebuilds the recorded Windows art history and retains the newest record for each logical identity
+- `run art --archive` archives every missing historical CN/Windows asset-bundle wrapper
+- `run art --complete --archive` archives history, then rebuilds the database from the same version sequence
 - `run CN EN` updates only the selected locales
 - `run` updates art and all five locales
 - `--force` rebuilds selected locales at their current versions
@@ -32,6 +36,8 @@ The command removes duplicate units while preserving their first occurrence. It 
 
 `--complete` requires `art` as the only unit. You cannot combine it with `--force`. The command may backfill a database that already records the current art version.
 
+`--archive` requires a request containing `art`; a bare `run --archive` is valid because the default request includes art. The first archive starts with a full snapshot of the oldest recorded Windows version, then stores only new or changed wrappers for each later version. Later runs resume after the newest archived `hot_update_list.json`. Archive preparation must finish before database publication begins.
+
 `--force` supports locale-only updates. The updater rejects forced art updates because one art version prefix must keep one meaning.
 
 ## Understand the publication boundary
@@ -41,7 +47,8 @@ The updater applies every changed unit in one local SQLite transaction, uploads 
 These rules protect the visible database:
 
 - A build or SQLite failure prevents all requested database changes from becoming visible
-- Immutable Portable Network Graphics (PNG) and WebM objects upload only after the SQLite transaction commits
+- An asset-bundle archive failure prevents a new database generation from being published
+- Immutable Portable Network Graphics (PNG), audio, and video objects upload only after the SQLite transaction commits
 - Derived WebP thumbnails upload before the database overwrite
 - A database upload failure leaves the previous database object current
 - S3 bucket versioning retains overwritten database generations
@@ -61,13 +68,17 @@ Set these required variables:
 - `ARKWAIFU_S3_ACCESS_KEY_ID`
 - `ARKWAIFU_S3_SECRET_ACCESS_KEY`
 
-Enable versioning on the bucket before the first publication. The updater does not configure bucket policy, versioning, or lifecycle rules.
+Enable versioning on production buckets before the first publication. The updater does not configure bucket policy, versioning, or lifecycle rules. The repository's local development MinIO bucket is the deliberate exception: it suspends versioning and is the sole development archive ground truth.
 
 Use these optional variables when their defaults do not fit the deployment:
 
 - `ARKWAIFU_S3_ENDPOINT_URL`: use a custom endpoint such as MinIO
 - `ARKWAIFU_S3_REGION`: defaults to `us-east-1`
 - `ARKWAIFU_S3_PATH_STYLE`: defaults to `false`; enable it for local MinIO
+- `ARKWAIFU_ARCHIVE_S3_ENDPOINT_URL`: defaults to `https://sgp1.digitaloceanspaces.com`
+- `ARKWAIFU_ARCHIVE_S3_REGION`: defaults to `sgp1`
+- `ARKWAIFU_ARCHIVE_S3_BUCKET`: defaults to `arkwaifu-ab`
+- `ARKWAIFU_ARCHIVE_S3_PATH_STYLE`: defaults to `false`
 - `ARKWAIFU_ART_VERSION_URL`: overrides the official Windows version endpoint
 - `ARKWAIFU_ART_ASSET_BASE_URL`: overrides the official Windows asset root
 - `ARKWAIFU_DOWNLOAD_WORKERS`: limits concurrent art bundle downloads and defaults to `16`
@@ -77,10 +88,20 @@ Use these optional variables when their defaults do not fit the deployment:
 
 Size `ARKWAIFU_EXTRACTION_WORKERS` for both CPU capacity and peak memory.
 
-The application directory includes local MinIO settings in `.env.example`. Pass that file directly instead of copying it:
+The asset-bundle archive reuses `ARKWAIFU_S3_ACCESS_KEY_ID` and `ARKWAIFU_S3_SECRET_ACCESS_KEY`; it does not require a second credential pair. Archive objects use `CN/Windows/<resVersion>/<CDN-filename>.dat`, with `hot_update_list.json` uploaded last for each completed version.
+
+Set the `ARKWAIFU_ARCHIVE_S3_*` variables in the environment that should receive the archive, then use `--archive` for an archive run.
+
+Create the ignored development environment from the committed local MinIO template. The CLI reads `.env` automatically:
+
+```powershell
+Copy-Item .env.example .env
+```
+
+Keep production credentials in the ignored `.env.prod` and opt into them explicitly:
 
 ```console
-uv run --env-file .env.example updateloop run
+uv run --env-file .env.prod updateloop run
 ```
 
 Set `ARKWAIFU_ART_VERSION_URL` and `ARKWAIFU_ART_ASSET_BASE_URL` together when you use a compatible Windows mirror. The automatic pipeline does not extract Android assets.
@@ -99,7 +120,7 @@ uv run updateloop run
 
 Use `--no-cache` for an isolated run. The temporary cache remains available until the SQLite transaction, image uploads, and database upload finish.
 
-A first complete art update can require substantial local storage. Historical runs used 10 to 12 GiB, so reserve at least 15 GiB for the project cache.
+A first complete art update can require substantial local storage. Historical art runs used 10 to 12 GiB, so reserve at least 15 GiB for the project cache. A first asset-bundle archive downloads every bundle changed across the recorded history and can require considerably more network transfer and object storage.
 
 ## Recover unavailable art manually
 
@@ -120,10 +141,10 @@ uv run pytest
 
 Ordinary tests run offline and produce deterministic results. Live content-delivery network (CDN) and game-data smoke updates remain deployment checks.
 
-Start MinIO from `infra/` before you run the integration test:
+Start MinIO from `dev/` before you run the integration test:
 
 ```powershell
-Push-Location ../../infra
+Push-Location ../../dev
 docker compose up -d minio minio-init
 Pop-Location
 $env:ARKWAIFU_INTEGRATION = "1"
