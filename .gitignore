@@ -1,3 +1,5 @@
 .cache/
 /.env
-infra/dev.env
+dev/dev.env
+dev/*.log
+.vscode/tasks.json

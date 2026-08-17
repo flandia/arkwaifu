@@ -29,7 +29,7 @@ services:
       - >-
         mc alias set local http://minio:9000 arkwaifu arkwaifu-dev-secret &&
         mc mb --ignore-existing local/arkwaifu &&
-        mc version enable local/arkwaifu &&
+        mc version suspend local/arkwaifu &&
         mc anonymous set download local/arkwaifu
 
 volumes:

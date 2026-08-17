@@ -13,26 +13,17 @@ bun run dev
 
 Vite listens on `http://127.0.0.1:5173`.
 
-For the complete local archive preview, keep MinIO in Docker and run the
-remaining processes on the host. The generated archive is stored outside the
-repository at `E:\arkwaifu\dev-runtime`:
+For the complete local archive preview, keep MinIO in Docker and run the remaining processes on the host. The public `arkwaifu` bucket is the sole development archive ground truth:
 
 ```console
-Push-Location infra
+Push-Location dev
 docker compose up -d minio minio-init
 Pop-Location
 ```
 
-In a second terminal, serve the runtime data:
-
-```console
-Push-Location apps/web
-python -m http.server 5175 --directory E:\arkwaifu\dev-runtime
-```
-
-In a third terminal, run the service from `apps/service/` on port `5174` with
-`ARKWAIFU_DATABASE_URL=http://127.0.0.1:5175/arkwaifu.sqlite3` and
-`ARKWAIFU_OBJECT_BASE_URL=http://127.0.0.1:5175`. In a fourth terminal, run
+Run the service from `apps/service/` on port `5174` with
+`ARKWAIFU_DATABASE_URL=http://127.0.0.1:59000/arkwaifu/arkwaifu.sqlite3` and
+`ARKWAIFU_OBJECT_BASE_URL=http://127.0.0.1:59000/arkwaifu`. In another terminal, run
 Vite from `apps/web/` with `VITE_API_BASE_URL=http://127.0.0.1:5174`:
 
 ```console
@@ -41,7 +32,7 @@ $env:VITE_API_BASE_URL = "http://127.0.0.1:5174"
 bun run dev
 ```
 
-Do not bind generated preview data into the repository.
+Do not create or serve a second filesystem copy of the development archive.
 
 ### Configure the archive service
 
