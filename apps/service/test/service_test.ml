@@ -163,7 +163,7 @@ let fixture_rows =
   {|
     BEGIN;
     INSERT INTO unit_versions VALUES
-      ('narrative_image_asset', 'artwork-v1'), ('CN', 'cn-v1'), ('EN', 'en-v1');
+      ('artwork', 'artwork-v1'), ('CN', 'cn-v1'), ('EN', 'en-v1');
     INSERT INTO narrative_image_assets VALUES
       ('artwork-first', 'illustration', 'ART/artwork-v1/composition/illustration/artwork-first.png', 101, 100, 60),
       ('artwork-first/texture-a', 'illustration', 'ART/artwork-v1/composition/illustration/artwork-first%2Ftexture-a.png', 101, 100, 60),
