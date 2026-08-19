@@ -13,14 +13,14 @@ from ..domain import (
     Movement,
     MovementLocation,
     MovementLocationType,
-    MovementSection,
-    MovementSectionType,
     MovementType,
+    Section,
+    SectionType,
 )
 
 _DATA_ROOT = Path("assets/torappu/dynamicassets/gamedata")
 _INCOMPLETE_UPSTREAM_LOGGER = logging.getLogger("arkwaifu_updateloop.incomplete_upstream")
-_SECTION_TYPES: dict[str, MovementSectionType] = {
+_SECTION_TYPES: dict[str, SectionType] = {
     "MAINLINE": "main_theme",
     "SS": "side_story",
     "COLLECT": "vignette",
@@ -28,7 +28,7 @@ _SECTION_TYPES: dict[str, MovementSectionType] = {
 _LOCATION_TYPES: dict[str, MovementLocationType] = {
     "BEFORE": "before",
     "AFTER": "after",
-    "MAINLINE_SPLIT": "mainline_split",
+    "MAINLINE_SPLIT": "divider",
     "STORY_SET": "story_set",
 }
 _MOVEMENT_TYPES = frozenset({"continue", "discrete"})
@@ -38,7 +38,7 @@ _MAINLINE_SPLIT = re.compile(r"^mainline_(\d+)_split$", re.IGNORECASE)
 def parse_score(
     root: Path,
     review_names: Mapping[str, str],
-) -> tuple[tuple[Movement, ...], tuple[MovementSection, ...]]:
+) -> tuple[tuple[Movement, ...], tuple[Section, ...]]:
     """Return every Movement, location, and Story Set in one locale snapshot."""
 
     stage = _mapping(_read_json(root / _DATA_ROOT / "excel/stage_table.json"))
@@ -51,7 +51,7 @@ def parse_score(
 
 def _validate_placement_graph(
     movements: tuple[Movement, ...],
-    sections: tuple[MovementSection, ...],
+    sections: tuple[Section, ...],
 ) -> None:
     """Require every Section to have one canonical, internally valid placement."""
 
@@ -62,13 +62,13 @@ def _validate_placement_graph(
             if location.section_id is None:
                 if location.location_type in {"story_set", "before", "after"}:
                     raise ValueError(
-                        "Movement placement has no Movement Section: "
+                        "Movement placement has no Section: "
                         f"movement_id={movement.id} location_id={location.id}"
                     )
                 continue
             if location.section_id not in section_ids:
                 raise ValueError(
-                    "Movement placement references an unknown Movement Section: "
+                    "Movement placement references an unknown Section: "
                     f"movement_id={movement.id} location_id={location.id} "
                     f"section_id={location.section_id}"
                 )
@@ -79,7 +79,7 @@ def _validate_placement_graph(
     duplicates = sorted(section_id for section_id, count in canonical_counts.items() if count > 1)
     if missing or duplicates:
         raise ValueError(
-            "Movement Sections must have exactly one canonical STORY_SET placement: "
+            "Sections must have exactly one canonical STORY_SET placement: "
             f"missing={missing} duplicates={duplicates}"
         )
 
@@ -116,9 +116,9 @@ def _parse_movements(stage: Mapping[str, Any]) -> tuple[Movement, ...]:
                 position=position,
                 movement_type=cast(MovementType, movement_type),
                 name=_text(raw.get("storylineName")),
-                icon_asset_id=_identifier(raw.get("storylineIconId")),
-                logo_asset_id=_identifier(raw.get("storylineLogoId")),
-                background_asset_id=_identifier(raw.get("backgroundId")),
+                icon_asset_id=_asset_identifier(raw.get("storylineIconId")),
+                logo_asset_id=_asset_identifier(raw.get("storylineLogoId")),
+                background_asset_id=_asset_identifier(raw.get("backgroundId")),
                 has_video=has_video,
                 start_time=_integer(raw.get("startTs")),
                 locations=locations,
@@ -145,13 +145,13 @@ def _location(
         location_type = _LOCATION_TYPES[raw_type]
     except KeyError as error:
         raise ValueError(f"unknown Movement location type: {raw_type!r}") from error
-    split = _mapping(raw.get("mainlineSplitData"))
-    split_match = _MAINLINE_SPLIT.fullmatch(location_id)
+    divider_data = _mapping(raw.get("mainlineSplitData"))
+    divider_match = _MAINLINE_SPLIT.fullmatch(location_id)
     video_id = None
-    if movement_has_video and split_match is not None:
-        video_id = f"bg_mainline_{int(split_match.group(1))}"
+    if movement_has_video and divider_match is not None:
+        video_id = f"bg_mainline_{int(divider_match.group(1))}"
     section_id = _identifier(raw.get("relevantStorySetId"))
-    if location_type == "mainline_split":
+    if location_type == "divider":
         section_id = None
     return MovementLocation(
         id=location_id,
@@ -162,8 +162,10 @@ def _location(
         present_stage_id=_optional_text(raw.get("presentStageId")),
         unlock_stage_id=_optional_text(raw.get("unlockStageId")),
         section_id=section_id,
-        split_icon_asset_id=_identifier(split.get("iconId")),
-        split_sub_name=_text(split.get("subName")) if location_type == "mainline_split" else None,
+        divider_icon_asset_id=_asset_identifier(divider_data.get("iconId")),
+        divider_sub_name=(
+            _text(divider_data.get("subName")) if location_type == "divider" else None
+        ),
         video_id=video_id,
     )
 
@@ -172,7 +174,7 @@ def _parse_sections(
     stage: Mapping[str, Any],
     activity: Mapping[str, Any],
     review_names: Mapping[str, str],
-) -> tuple[MovementSection, ...]:
+) -> tuple[Section, ...]:
     raw_sections = _mapping(stage.get("storylineStorySets"))
     normalized_review_names = {key.lower(): value for key, value in review_names.items()}
     zone_to_activity = {
@@ -188,13 +190,13 @@ def _parse_sections(
         section_id = _mapping_identifier(
             raw_id,
             raw.get("storySetId"),
-            context="Movement Section",
+            context="Section",
         )
         raw_type = _text(raw.get("storySetType"))
         try:
             section_type = _SECTION_TYPES[raw_type]
         except KeyError as error:
-            raise ValueError(f"unknown Movement Section type: {raw_type!r}") from error
+            raise ValueError(f"unknown Section type: {raw_type!r}") from error
 
         mainline = _mapping(raw.get("mainlineData"))
         side_story = _mapping(raw.get("ssData"))
@@ -210,24 +212,24 @@ def _parse_sections(
         name = normalized_review_names.get(review_group_id or "", "")
         if review_group_id is None:
             _INCOMPLETE_UPSTREAM_LOGGER.warning(
-                "Movement Section has no matching review group; continuing with an empty collection "
+                "Section has no matching review group; continuing with an empty collection "
                 "section_id=%s",
                 section_id,
             )
         sections.append(
-            MovementSection(
+            Section(
                 id=section_id,
-                collection_id=f"movement_section:{section_id}",
+                collection_id=f"section:{section_id}",
                 section_type=section_type,
                 name=name,
                 review_group_id=review_group_id,
                 sort_by_year=_integer(raw.get("sortByYear")),
                 sort_within_year=_integer(raw.get("sortWithinYear")),
-                key_visual_asset_id=_identifier(raw.get("kvImageId")),
-                title_asset_id=_identifier(raw.get("titleImageId")),
-                background_asset_id=_identifier(raw.get("backgroundId")),
-                decoration_asset_id=_identifier(mainline.get("decoImageId")),
-                retro_background_asset_id=_identifier(detail.get("backgroundId")),
+                key_visual_asset_id=_asset_identifier(raw.get("kvImageId")),
+                title_asset_id=_asset_identifier(raw.get("titleImageId")),
+                background_asset_id=_asset_identifier(raw.get("backgroundId")),
+                decoration_asset_id=_asset_identifier(mainline.get("decoImageId")),
+                retro_background_asset_id=_asset_identifier(detail.get("backgroundId")),
                 description=_text(detail.get("desc")),
                 has_video=_boolean(raw.get("haveVideoToPlay")),
                 stories=(),
@@ -273,7 +275,7 @@ def _review_group_id(
     if len(mainline_groups) > 1:
         section_id = _identifier(section.get("storySetId")) or "<unknown>"
         raise ValueError(
-            "Movement Section activity maps to multiple main-story review groups: "
+            "Section activity maps to multiple main-story review groups: "
             f"section_id={section_id} activity_id={relevant_activity_id} "
             f"groups={sorted(mainline_groups)}"
         )
@@ -308,6 +310,11 @@ def _optional_text(value: Any) -> str | None:
 def _identifier(value: Any) -> str | None:
     text = _optional_text(value)
     return text.lower() if text is not None else None
+
+
+def _asset_identifier(value: Any) -> str | None:
+    text = _optional_text(value)
+    return text if text is not None else None
 
 
 def _mapping_identifier(raw_id: str, declared: Any, *, context: str) -> str:

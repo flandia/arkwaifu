@@ -9,8 +9,8 @@ def _set_required_environment(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("ARKWAIFU_S3_SECRET_ACCESS_KEY", "secret-key")
     monkeypatch.delenv("ARKWAIFU_DOWNLOAD_WORKERS", raising=False)
     monkeypatch.delenv("ARKWAIFU_EXTRACTION_WORKERS", raising=False)
-    monkeypatch.delenv("ARKWAIFU_ART_VERSION_URL", raising=False)
-    monkeypatch.delenv("ARKWAIFU_ART_ASSET_BASE_URL", raising=False)
+    monkeypatch.delenv("ARKWAIFU_ARTWORK_VERSION_URL", raising=False)
+    monkeypatch.delenv("ARKWAIFU_ARTWORK_ASSET_BASE_URL", raising=False)
     monkeypatch.delenv("ARKWAIFU_DATABASE_URL", raising=False)
 
 
@@ -22,15 +22,15 @@ def test_database_url_is_not_required(monkeypatch):
     assert not hasattr(settings, "database_url")
 
 
-def test_art_defaults_use_the_official_windows_asset_roots(monkeypatch):
+def test_artwork_defaults_use_the_official_windows_asset_roots(monkeypatch):
     _set_required_environment(monkeypatch)
 
     settings = Settings.from_environment()
 
-    assert settings.art_version_url == (
+    assert settings.artwork_version_url == (
         "https://ak-conf.hypergryph.com/config/prod/official/Windows/version"
     )
-    assert settings.art_asset_base_url == (
+    assert settings.artwork_asset_base_url == (
         "https://ak.hycdn.cn/assetbundle/official/Windows/assets"
     )
 

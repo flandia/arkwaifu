@@ -17,14 +17,14 @@ from arkwaifu_updateloop import (
 )
 from arkwaifu_updateloop.domain import (
     ArchiveGroup,
-    ArtManifest,
-    ArtRecord,
+    ArtworkManifest,
+    ArtworkRecord,
+    Gallery,
     GalleryArtwork,
-    GalleryDisplay,
     GalleryGroup,
     LocaleManifest,
     PngArtifact,
-    StoryArtReference,
+    StoryArtworkReference,
     StoryRecord,
 )
 
@@ -68,13 +68,13 @@ def isolated_bucket():
         client.delete_bucket(Bucket=bucket)
 
 
-def _art(version: str) -> ArtManifest:
-    return ArtManifest(
+def _artwork(version: str) -> ArtworkManifest:
+    return ArtworkManifest(
         version,
         (
-            ArtRecord(
+            ArtworkRecord(
                 "fixture",
-                "image",
+                "illustration",
                 PngArtifact.from_image(Image.new("RGBA", (3, 5), (10, 20, 30, 255))),
             ),
         ),
@@ -87,14 +87,14 @@ def _locale(version: str) -> LocaleManifest:
         unit="EN",
         upstream_version=version,
         movements=(),
-        movement_sections=(),
+        sections=(),
         archive_groups=(
             ArchiveGroup(
                 id="group",
                 collection_id="archive_group:group",
                 position=0,
                 name="Group",
-                archive_kind="events",
+                archive_category="events",
                 story_type="side_story",
                 stories=(
                     StoryRecord(
@@ -105,21 +105,23 @@ def _locale(version: str) -> LocaleManifest:
                         code="1",
                         name="Story",
                         info="Info",
-                        art_references=(StoryArtReference("fixture", "picture", "image"),),
+                        artwork_references=(
+                            StoryArtworkReference("fixture", "picture", "illustration"),
+                        ),
                     ),
                 ),
             ),
         ),
         galleries=(
-            GalleryGroup(
+            Gallery(
                 id="gallery",
                 collection_id="archive_group:group",
                 position=0,
                 name="Gallery",
                 description="",
                 location_id=None,
-                displays=(
-                    GalleryDisplay(
+                groups=(
+                    GalleryGroup(
                         id="entry",
                         position=0,
                         name="",
@@ -130,9 +132,9 @@ def _locale(version: str) -> LocaleManifest:
                             GalleryArtwork(
                                 position=0,
                                 cg_id="fixture",
-                                art_id="fixture",
-                                category="image",
-                                composite_type="none",
+                                asset_id="fixture",
+                                category="illustration",
+                                layout="none",
                                 panels=(),
                             ),
                         ),
@@ -153,18 +155,18 @@ async def test_monolithic_database_and_pngs_publish_to_minio(isolated_bucket, tm
         endpoint_url=_ENDPOINT,
         path_style=True,
     )
-    art = _art(f"art-{uuid4().hex}")
+    artwork = _artwork(f"artwork-{uuid4().hex}")
     locale = _locale(f"en-{uuid4().hex}")
 
-    async def build_art(_active, _force):
-        return art
+    async def build_artwork(_active, _force):
+        return artwork
 
     async def build_locale(_active, _force):
         return locale
 
     result = await Updater(remote).run(
         [
-            UpdateRequest("art", art.upstream_version, build_art),
+            UpdateRequest("artwork", artwork.upstream_version, build_artwork),
             UpdateRequest("EN", locale.upstream_version, build_locale),
         ]
     )
@@ -175,16 +177,16 @@ async def test_monolithic_database_and_pngs_publish_to_minio(isolated_bucket, tm
     with sqlite3.connect(database_path) as connection:
         assert list(
             connection.execute("SELECT unit, res_version FROM unit_versions ORDER BY unit")
-        ) == [("EN", locale.upstream_version), ("art", art.upstream_version)]
+        ) == [("EN", locale.upstream_version), ("artwork", artwork.upstream_version)]
         object_key = connection.execute(
-            "SELECT object_key FROM arts WHERE art_id = 'fixture'"
+            "SELECT object_key FROM narrative_image_assets WHERE asset_id = 'fixture'"
         ).fetchone()[0]
     head = client.head_object(Bucket=bucket, Key=object_key)
     assert head["ContentType"] == "image/png"
     assert head["CacheControl"] == "public, max-age=31536000, immutable"
     assert head["Metadata"] == {}
-    assert object_key == (f"ART/{art.upstream_version}/composition/image/fixture.png")
-    thumbnail_key = f"ART/{art.upstream_version}/thumbnail/image/fixture.webp"
+    assert object_key == (f"ART/{artwork.upstream_version}/composition/image/fixture.png")
+    thumbnail_key = f"ART/{artwork.upstream_version}/thumbnail/illustration/fixture.webp"
     thumbnail_head = client.head_object(Bucket=bucket, Key=thumbnail_key)
     assert thumbnail_head["ContentType"] == "image/webp"
     assert thumbnail_head.get("CacheControl") is None

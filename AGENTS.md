@@ -6,7 +6,7 @@ Arkwaifu v2 contains three applications that publish and read one SQLite archive
 
 Each application owns one part of the system:
 
-- `apps/updateloop/`: Python 3.14 archive writer with art and locale pipelines
+- `apps/updateloop/`: Python 3.14 archive writer with artwork and locale pipelines
 - `apps/service/`: OCaml 5.5 Dream read service
 - `apps/web/`: React 19 and React Router read-only frontend
 
@@ -65,7 +65,7 @@ Two repository paths define shared infrastructure:
 
 ## Preserve the publication boundary
 
-The updater publishes the fixed S3-compatible object `arkwaifu.sqlite3`. The system has no PostgreSQL service, release table, staging state, or activation pointer. `updateloop run` accepts `art`, `CN`, `EN`, `JP`, `KR`, and `TW`; it requests all six units when none are supplied.
+The updater publishes the fixed S3-compatible object `arkwaifu.sqlite3`. The system has no PostgreSQL service, release table, staging state, or activation pointer. `updateloop run` accepts `artwork`, `CN`, `EN`, `JP`, `KR`, and `TW`; it requests all six units when none are supplied.
 
 Locale story/index units (`CN`, `EN`, `JP`, `KR`, and `TW`) may be rebuilt in full during ordinary updates. An art update is different: when an art change contains a breaking change, update it manually and process only the changed resource diff. Do not run a full art rebuild for a breaking change unless the user explicitly requests one.
 
@@ -104,7 +104,7 @@ Run one logical writer per bucket. The publisher has no lock or compare-and-swap
 
 Empty locale sections, missing story text, and missing art references are expected upstream conditions. Warn and continue when the database can represent the result. `--suppress-incomplete-upstream-warnings` suppresses only those warnings.
 
-`--force` rebuilds locales at their current version. Do not allow it for a request containing art because a full art rebuild would copy unchanged records into a new version prefix. `run art --complete` is the explicit exception: it processes recorded Windows versions from oldest to current and can backfill a database that already records the current `resVersion`. Do not combine it with `--force` or another unit.
+`--force` rebuilds locales at their current version. Do not allow it for a request containing artwork because a full artwork rebuild would copy unchanged records into a new version prefix. `run artwork --complete` is the explicit exception: it processes recorded Windows versions from oldest to current and can backfill a database that already records the current `resVersion`. Do not combine it with `--force` or another unit.
 
 ## Preserve upstream and cache semantics
 

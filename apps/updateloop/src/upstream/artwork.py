@@ -1,6 +1,6 @@
-"""Pull and process art from the Arknights asset API.
+"""Pull and process artwork from the Arknights asset API.
 
-An art resource passes through four cacheable stages:
+An artwork resource passes through four cacheable stages:
 
 ``fetched``
     Download the CDN wrapper and verify its embedded bundle against the MD5
@@ -36,24 +36,24 @@ from urllib.parse import quote
 
 import httpx
 
-from ..art import (
+from ..artwork import (
     IvfMetadata,
-    add_gallery_composites,
-    build_art_manifest,
+    add_gallery_artworks,
+    build_artwork_manifest,
     demux_usm_to_ivf,
-    merge_art_manifests,
-    read_art_manifest,
+    merge_artwork_manifests,
+    read_artwork_manifest,
     remux_ivf_to_webm,
     validate_ivf,
-    write_art_manifest,
+    write_artwork_manifest,
 )
 from ..asset_bundle_archive import AssetBundleArchiveStore
 from ..asyncio_tools import await_owned
 from ..domain import (
-    ArtCategory,
-    ArtManifest,
-    CompositePanel,
-    CompositeType,
+    ArtworkCategory,
+    ArtworkLayout,
+    ArtworkManifest,
+    ArtworkPanel,
     GalleryArtwork,
     MediaRecord,
     ScoreVideoRecord,
@@ -61,7 +61,7 @@ from ..domain import (
 from ..extraction import extract_assets
 from .cache import UpstreamCache
 
-_ART_PATTERNS = (
+_ARTWORK_PATTERNS = (
     "avg/imgs/**",
     "avg/images/**",
     "avg/bg/**",
@@ -88,10 +88,10 @@ _ART_PATTERNS = (
 )
 # A resource may hold one lock for each cache stage while it is materialized.
 # Bound the complete pipeline so a cold all-resource run cannot exhaust file handles.
-_ART_RESOURCE_WORKERS = 32
+_ARTWORK_RESOURCE_WORKERS = 32
 # Bump a stage when its persisted layout or recipe changes. Each fingerprint
 # includes earlier formats, so changing one stage also invalidates its dependents.
-_ART_STAGE_FORMATS = {
+_ARTWORK_STAGE_FORMATS = {
     "fetched": "1",
     "unwrapped": "1",
     "extracted": "5",
@@ -141,7 +141,18 @@ class _ProcessingStageError(RuntimeError):
 def _normalized_mapping(value: Any) -> dict[str, Any]:
     if not isinstance(value, dict):
         return {}
-    return {key.lower(): item for key, item in value.items() if isinstance(key, str)}
+    return {key: item for key, item in value.items() if isinstance(key, str)}
+
+
+def _mapping_entry(values: dict[str, Any], identifier: str) -> Any:
+    """Find one metadata entry without changing the resource identifier."""
+
+    if identifier in values:
+        return values[identifier]
+    matches = [value for key, value in values.items() if key.casefold() == identifier.casefold()]
+    if len(matches) != 1:
+        raise KeyError(identifier)
+    return matches[0]
 
 
 def _declared_gallery_identifier(
@@ -153,11 +164,10 @@ def _declared_gallery_identifier(
     declared = value.get(field)
     if not isinstance(declared, str) or not declared:
         raise ValueError(f"{context} has an invalid {field}: {declared!r}")
-    identifier = declared.lower()
-    if identifier != mapping_key.lower():
+    identifier = declared
+    if identifier.casefold() != mapping_key.casefold():
         raise ValueError(
-            f"{context} mapping key does not match {field}: "
-            f"key={mapping_key.lower()} declared={identifier}"
+            f"{context} mapping key does not match {field}: key={mapping_key} declared={identifier}"
         )
     return identifier
 
@@ -170,7 +180,7 @@ def _string_values(value: Any) -> tuple[str, ...]:
     return ()
 
 
-def _log_art_action(
+def _log_artwork_action(
     action: str,
     *,
     version: str,
@@ -180,7 +190,7 @@ def _log_art_action(
     total: int | None = None,
     elapsed_seconds: float | None = None,
 ) -> None:
-    """Emit one structured, resource-stable art pipeline event."""
+    """Emit one structured, resource-stable artwork pipeline event."""
 
     extra: dict[str, object] = {
         "action": action,
@@ -195,7 +205,7 @@ def _log_art_action(
         extra["total"] = total
     if elapsed_seconds is not None:
         extra["elapsed_ms"] = round(elapsed_seconds * 1000, 3)
-    _LOGGER.info("art action", extra=extra)
+    _LOGGER.info("artwork action", extra=extra)
 
 
 def _bundle_md5(wrapper: bytes, resource_name: str) -> str:
@@ -259,7 +269,7 @@ def _unzip_resource(
                     target.write(chunk)
 
 
-def _render_art_resource(
+def _render_artwork_resource(
     extracted: Path,
     rendered: Path,
     upstream_version: str,
@@ -267,14 +277,14 @@ def _render_art_resource(
 ) -> None:
     """Process one extracted resource and write its file-backed manifest."""
 
-    manifest = add_gallery_composites(
-        build_art_manifest(extracted, upstream_version),
+    manifest = add_gallery_artworks(
+        build_artwork_manifest(extracted, upstream_version),
         recipes,
     )
-    write_art_manifest(manifest, rendered)
+    write_artwork_manifest(manifest, rendered)
 
 
-def _extract_and_render_art_resource(
+def _extract_and_render_artwork_resource(
     bundle: Path,
     extracted: Path,
     rendered: Path,
@@ -293,7 +303,7 @@ def _extract_and_render_art_resource(
         ) from error
     extracted_at = time.perf_counter()
     try:
-        _render_art_resource(extracted, rendered, upstream_version, recipes)
+        _render_artwork_resource(extracted, rendered, upstream_version, recipes)
     except Exception as error:
         raise _ProcessingStageError(
             "compose",
@@ -372,20 +382,20 @@ def _render_usm_video(
         extracted / "audio.adx" if (extracted / "audio.adx").is_file() else None,
     )
     if score:
-        manifest = ArtManifest(
+        manifest = ArtworkManifest(
             upstream_version,
             (),
             (),
             score_videos=(ScoreVideoRecord(video_id, artifact),),
         )
     else:
-        manifest = ArtManifest(
+        manifest = ArtworkManifest(
             upstream_version,
             (),
             (),
             media=(MediaRecord(video_id, "video", artifact),),
         )
-    write_art_manifest(manifest, rendered)
+    write_artwork_manifest(manifest, rendered)
 
 
 def _is_score_video(resource_name: str) -> bool:
@@ -396,7 +406,7 @@ def _story_video_id(resource_name: str) -> str:
     relative = _resource_member_path(resource_name)
     if relative.parts[:2] != ("raw", "video"):
         raise ValueError(f"not a story video resource: {resource_name!r}")
-    return PurePosixPath("video", *relative.parts[2:]).with_suffix(".mp4").as_posix().lower()
+    return PurePosixPath("video", *relative.parts[2:]).with_suffix(".mp4").as_posix()
 
 
 def _resource_member_path(resource_name: str) -> PurePosixPath:
@@ -416,7 +426,7 @@ def _resource_cache_path(resource: _Resource) -> PurePosixPath:
     _resource_member_path(resource.name)
     content_identity = quote(resource.md5, safe="") or "unknown-md5"
     return PurePosixPath(
-        "art",
+        "artwork",
         "resources",
         quote(resource.name, safe=""),
         content_identity,
@@ -442,9 +452,9 @@ def _stage_fingerprint(
     while leaving independent resources and earlier compatible work reusable.
     """
 
-    stage_order = tuple(_ART_STAGE_FORMATS)
+    stage_order = tuple(_ARTWORK_STAGE_FORMATS)
     dependency_formats = {
-        name: _ART_STAGE_FORMATS[name] for name in stage_order[: stage_order.index(stage) + 1]
+        name: _ARTWORK_STAGE_FORMATS[name] for name in stage_order[: stage_order.index(stage) + 1]
     }
     payload = {
         "formats": dependency_formats,
@@ -460,10 +470,10 @@ def _stage_fingerprint(
     )
 
 
-class UpstreamArtBuilder:
-    """Fetch and build an art delta for one detected upstream version.
+class UpstreamArtworkBuilder:
+    """Fetch and build an artwork delta for one detected upstream version.
 
-    Unless forced, the builder processes only bundles whose name or published MD5 changed. The published database retains unchanged art.
+    Unless forced, the builder processes only bundles whose name or published MD5 changed. The published database retains unchanged artwork.
     """
 
     def __init__(
@@ -476,7 +486,7 @@ class UpstreamArtBuilder:
         download_workers: int = 16,
         extraction_workers: int | None = None,
     ) -> None:
-        """Configure Windows art downloads, caching, and processing limits."""
+        """Configure Windows artwork downloads, caching, and processing limits."""
         if download_workers <= 0:
             raise ValueError("download_workers must be positive")
         if extraction_workers is not None and extraction_workers <= 0:
@@ -509,7 +519,7 @@ class UpstreamArtBuilder:
         upstream_version: str,
         active_version: str | None,
         force: bool,
-    ) -> ArtManifest:
+    ) -> ArtworkManifest:
         """Fetch, extract, and render the resources that need updating."""
 
         async with httpx.AsyncClient(timeout=120, follow_redirects=True) as client:
@@ -538,25 +548,25 @@ class UpstreamArtBuilder:
                 if selected
                 else []
             )
-        return merge_art_manifests(manifests, upstream_version)
+        return merge_artwork_manifests(manifests, upstream_version)
 
-    async def build_history(self, versions: tuple[str, ...]) -> ArtManifest:
+    async def build_history(self, versions: tuple[str, ...]) -> ArtworkManifest:
         """Build every recorded version as one additive, latest-wins manifest.
 
         The earliest version is a full build. Each later version compares only
         with its immediate predecessor, so bundles temporarily published and
-        later removed remain in the cumulative result. Repeated art identities
+        later removed remain in the cumulative result. Repeated artwork identities
         are replaced by the newest version that contains them.
         """
 
         if not versions:
-            raise ValueError("art version history cannot be empty")
+            raise ValueError("artwork version history cannot be empty")
         if any(not isinstance(version, str) or not version for version in versions):
-            raise ValueError("art version history contains an invalid resVersion")
+            raise ValueError("artwork version history contains an invalid resVersion")
         if len(set(versions)) != len(versions):
-            raise ValueError("art version history contains a duplicate resVersion")
+            raise ValueError("artwork version history contains a duplicate resVersion")
 
-        arts = {}
+        artworks = {}
         sources = {}
         score_assets = {}
         score_videos = {}
@@ -568,7 +578,7 @@ class UpstreamArtBuilder:
             try:
                 manifest = await self.build(version, previous, False)
             except Exception:
-                _log_art_action(
+                _log_artwork_action(
                     "version",
                     version=version,
                     status="failed",
@@ -577,13 +587,13 @@ class UpstreamArtBuilder:
                     elapsed_seconds=time.perf_counter() - started,
                 )
                 raise
-            arts.update(
+            artworks.update(
                 {
-                    (art.category, art.id): replace(
-                        art,
-                        res_version=art.res_version or manifest.upstream_version,
+                    (artwork.category, artwork.id): replace(
+                        artwork,
+                        res_version=artwork.res_version or manifest.upstream_version,
                     )
-                    for art in manifest.arts
+                    for artwork in manifest.artworks
                 }
             )
             sources.update(
@@ -592,7 +602,7 @@ class UpstreamArtBuilder:
                         source,
                         res_version=source.res_version or manifest.upstream_version,
                     )
-                    for source in manifest.source_arts
+                    for source in manifest.source_layers
                 }
             )
             score_assets.update(
@@ -622,7 +632,7 @@ class UpstreamArtBuilder:
                     for record in manifest.media
                 }
             )
-            _log_art_action(
+            _log_artwork_action(
                 "version",
                 version=version,
                 status="done",
@@ -631,10 +641,12 @@ class UpstreamArtBuilder:
                 elapsed_seconds=time.perf_counter() - started,
             )
             previous = version
-        return ArtManifest(
+        return ArtworkManifest(
             upstream_version=versions[-1],
-            arts=tuple(sorted(arts.values(), key=lambda art: (art.category, art.id))),
-            source_arts=tuple(
+            artworks=tuple(
+                sorted(artworks.values(), key=lambda artwork: (artwork.category, artwork.id))
+            ),
+            source_layers=tuple(
                 sorted(sources.values(), key=lambda source: (source.category, source.id))
             ),
             score_assets=tuple(
@@ -696,7 +708,7 @@ class UpstreamArtBuilder:
                 try:
                     uploaded = await archive.put_manifest(version, manifest_path)
                 except Exception:
-                    _log_art_action(
+                    _log_artwork_action(
                         "archive",
                         version=version,
                         resource="hot_update_list.json",
@@ -706,7 +718,7 @@ class UpstreamArtBuilder:
                         elapsed_seconds=time.perf_counter() - started,
                     )
                     raise
-                _log_art_action(
+                _log_artwork_action(
                     "archive",
                     version=version,
                     resource="hot_update_list.json",
@@ -729,7 +741,7 @@ class UpstreamArtBuilder:
                 response.raise_for_status()
                 destination.write_bytes(response.content)
             except Exception:
-                _log_art_action(
+                _log_artwork_action(
                     "list",
                     version=version,
                     resource="hot_update_list.json",
@@ -739,7 +751,7 @@ class UpstreamArtBuilder:
                     elapsed_seconds=time.perf_counter() - started,
                 )
                 raise
-            _log_art_action(
+            _log_artwork_action(
                 "list",
                 version=version,
                 resource="hot_update_list.json",
@@ -751,10 +763,10 @@ class UpstreamArtBuilder:
 
         return await self._cache.file(
             version,
-            PurePosixPath("art", "hot_update_list.json"),
+            PurePosixPath("artwork", "hot_update_list.json"),
             fetch,
             self._validate_resource_list,
-            on_hit=lambda: _log_art_action(
+            on_hit=lambda: _log_artwork_action(
                 "list",
                 version=version,
                 resource="hot_update_list.json",
@@ -765,7 +777,7 @@ class UpstreamArtBuilder:
         )
 
     async def _resources(self, client: httpx.AsyncClient, version: str) -> list[_Resource]:
-        """Select processable art resources from one cached hot-update list."""
+        """Select processable artwork resources from one cached hot-update list."""
 
         path = await self._resource_list_path(client, version)
         payload = json.loads(path.read_text(encoding="utf-8"))
@@ -793,7 +805,7 @@ class UpstreamArtBuilder:
         self,
         client: httpx.AsyncClient,
     ) -> _GalleryRecipes:
-        """Fetch one branch-consistent CN recipe catalog once per art build."""
+        """Fetch one branch-consistent CN recipe catalog once per artwork build."""
 
         if self._gallery_metadata_base_url is None:
             return _GalleryRecipes("disabled", "none", ())
@@ -816,7 +828,7 @@ class UpstreamArtBuilder:
         after = await version()
         if before != after:
             raise RuntimeError(
-                f"CN gallery metadata changed during art preparation: {before} to {after}"
+                f"CN gallery metadata changed during artwork preparation: {before} to {after}"
             )
         digest = hashlib.sha256(content).hexdigest()
 
@@ -832,7 +844,7 @@ class UpstreamArtBuilder:
 
         cached = await self._cache.file(
             before,
-            PurePosixPath("art", "gallery-recipes", f"{digest}.json"),
+            PurePosixPath("artwork", "gallery-recipes", f"{digest}.json"),
             materialize,
             validate,
         )
@@ -841,33 +853,42 @@ class UpstreamArtBuilder:
 
     @staticmethod
     def _parse_gallery_recipes(payload: object) -> tuple[GalleryArtwork, ...]:
-        """Normalize category-qualified composite recipes from stage metadata."""
+        """Normalize category-qualified Gallery Artwork layouts from stage metadata."""
 
         if not isinstance(payload, dict):
             raise TypeError("CN stage_table.json is not an object")
-        displays = _normalized_mapping(payload.get("cgGalleryDisplays"))
+        groups = _normalized_mapping(payload.get("cgGalleryDisplays"))
         cgs = _normalized_mapping(payload.get("cgGalleryCgs"))
-        categories: dict[str, ArtCategory] = {}
-        for display_key, raw_display in displays.items():
-            if not isinstance(raw_display, dict):
-                raise TypeError(f"gallery display is not an object: {display_key}")
-            display_id = _declared_gallery_identifier(
-                raw_display,
+        categories: dict[str, ArtworkCategory] = {}
+        for group_key, raw_group in groups.items():
+            if not isinstance(raw_group, dict):
+                raise TypeError(f"Gallery Group is not an object: {group_key}")
+            group_id = _declared_gallery_identifier(
+                raw_group,
                 "displayId",
-                display_key,
-                "gallery display",
+                group_key,
+                "Gallery Group",
             )
-            source = raw_display.get("cgSource")
+            source = raw_group.get("cgSource")
             if not isinstance(source, str) or source.upper() not in {
                 "IMAGE",
                 "BACKGROUND",
             }:
-                raise ValueError(f"gallery display has unknown cgSource: {display_id}={source!r}")
-            category: ArtCategory = "background" if source.upper() == "BACKGROUND" else "image"
-            for raw_id in _string_values(raw_display.get("cgList")):
-                cg_id = raw_id.lower()
-                if cg_id not in cgs:
-                    raise ValueError(f"gallery artwork is not declared: {cg_id}")
+                raise ValueError(f"Gallery Group has unknown cgSource: {group_id}={source!r}")
+            category: ArtworkCategory = (
+                "background" if source.upper() == "BACKGROUND" else "illustration"
+            )
+            for raw_id in _string_values(raw_group.get("cgList")):
+                try:
+                    raw_cg = _mapping_entry(cgs, raw_id)
+                except KeyError:
+                    raise ValueError(f"gallery artwork is not declared: {raw_id}")
+                cg_id = _declared_gallery_identifier(
+                    raw_cg,
+                    "cgId",
+                    raw_id,
+                    "gallery artwork",
+                )
                 previous = categories.get(cg_id)
                 if previous is not None and previous != category:
                     raise ValueError(f"gallery CG has conflicting source categories: {cg_id}")
@@ -884,33 +905,29 @@ class UpstreamArtBuilder:
                 raw_id,
                 "gallery artwork",
             )
-            raw_composite_type = raw.get("compositeType")
-            if not isinstance(raw_composite_type, str):
-                raise TypeError(f"gallery artwork has no compositeType: {cg_id}")
-            composite_type = raw_composite_type.lower()
-            if composite_type == "none":
+            raw_layout = raw.get("compositeType")
+            if not isinstance(raw_layout, str):
+                raise TypeError(f"gallery artwork has no layout: {cg_id}")
+            layout = raw_layout.lower()
+            if layout == "none":
                 continue
-            if composite_type not in {"vertical", "horizontal"}:
-                raise ValueError(f"unknown gallery composite type: {composite_type!r}")
+            if layout not in {"vertical", "horizontal"}:
+                raise ValueError(f"unknown Gallery Artwork layout: {layout!r}")
             category = categories.get(cg_id)
             if category is None:
-                raise ValueError(f"gallery composite is not referenced by a display: {cg_id}")
+                raise ValueError(f"Gallery Artwork is not referenced by a Gallery Group: {cg_id}")
             raw_panels = raw.get("compositeList")
             if not isinstance(raw_panels, list) or not raw_panels:
-                raise ValueError(f"gallery composite has no panels: {cg_id}")
+                raise ValueError(f"Gallery Artwork has no panels: {cg_id}")
             panels = []
             for position, raw_panel in enumerate(raw_panels):
                 if not isinstance(raw_panel, dict):
-                    raise TypeError(f"gallery composite panel is not an object: {cg_id}")
+                    raise TypeError(f"Gallery Artwork panel is not an object: {cg_id}")
                 panel_id = raw_panel.get("cgId")
                 width = raw_panel.get("width")
                 height = raw_panel.get("height")
                 if not isinstance(panel_id, str) or not panel_id:
-                    raise ValueError(f"gallery composite has an invalid panel ID: {cg_id}")
-                if "/" in panel_id:
-                    raise ValueError(
-                        f"gallery composite panel ID contains reserved '/': {panel_id!r}"
-                    )
+                    raise ValueError(f"Gallery Artwork has an invalid panel ID: {cg_id}")
                 if (
                     not isinstance(width, int)
                     or isinstance(width, bool)
@@ -919,35 +936,44 @@ class UpstreamArtBuilder:
                     or isinstance(height, bool)
                     or height <= 0
                 ):
-                    raise ValueError(f"gallery composite has invalid dimensions: {cg_id}")
-                panels.append(CompositePanel(panel_id.lower(), position, width, height))
+                    raise ValueError(f"Gallery Artwork has invalid dimensions: {cg_id}")
+                panels.append(ArtworkPanel(panel_id, position, width, height))
             recipes.append(
                 GalleryArtwork(
                     position=int(raw.get("sortId", 0)),
                     cg_id=cg_id,
-                    art_id="/".join(panel.id for panel in panels),
+                    asset_id="/".join(panel.id for panel in panels),
                     category=category,
-                    composite_type=cast(CompositeType, composite_type),
+                    layout=cast(ArtworkLayout, layout),
                     panels=tuple(panels),
                 )
             )
-        return tuple(sorted(recipes, key=lambda recipe: (recipe.category, recipe.art_id)))
+        return tuple(sorted(recipes, key=lambda recipe: (recipe.category, recipe.asset_id)))
 
     @staticmethod
     def _parse_resources(payload: object, version: str) -> list[_Resource]:
-        """Select art bundles from a HyperGryph hot-update list."""
+        """Select artwork bundles from a HyperGryph hot-update list."""
 
         raw = payload.get("abInfos") if isinstance(payload, dict) else None
         if not isinstance(raw, list):
             raise TypeError(f"resource list for {version} does not contain abInfos")
         resources = [
-            _Resource(name=str(item["name"]), md5=str(item["md5"]).lower())
+            _Resource(
+                name=item["name"],
+                md5=UpstreamArtworkBuilder._parse_md5(item.get("md5"), version, item["name"]),
+            )
             for item in raw
             if isinstance(item, dict)
             and isinstance(item.get("name"), str)
-            and any(fnmatch.fnmatchcase(item["name"], pattern) for pattern in _ART_PATTERNS)
+            and any(fnmatch.fnmatchcase(item["name"], pattern) for pattern in _ARTWORK_PATTERNS)
         ]
         return sorted(resources, key=lambda resource: resource.name)
+
+    @staticmethod
+    def _parse_md5(value: object, version: str, name: str) -> str:
+        if not isinstance(value, str) or not re.fullmatch(r"[0-9A-Fa-f]{32}", value):
+            raise ValueError(f"resource list entry has an invalid MD5: {version}:{name}")
+        return value.lower()
 
     @staticmethod
     def _parse_all_resources(payload: object, version: str) -> list[_Resource]:
@@ -966,11 +992,7 @@ class UpstreamArtBuilder:
             md5 = item.get("md5")
             if not isinstance(name, str) or not name:
                 raise ValueError(f"resource list entry has no name: {version}[{position}]")
-            if not isinstance(md5, str) or not re.fullmatch(
-                r"(?:[0-9A-Fa-f]{4}|[0-9A-Fa-f]{32})",
-                md5,
-            ):
-                raise ValueError(f"resource list entry has an invalid MD5: {version}:{name}")
+            md5 = UpstreamArtworkBuilder._parse_md5(md5, version, name)
             _resource_member_path(name)
             if name in names:
                 raise ValueError(f"resource list contains a duplicate name: {version}:{name}")
@@ -982,7 +1004,7 @@ class UpstreamArtBuilder:
                     f"{version}:{previous!r} and {name!r}"
                 )
             names.add(name)
-            resources.append(_Resource(name, md5.lower()))
+            resources.append(_Resource(name, md5))
         return sorted(resources, key=lambda resource: resource.name)
 
     @classmethod
@@ -1013,7 +1035,7 @@ class UpstreamArtBuilder:
             resource_root = _resource_cache_path(resource)
 
             def log_fetch(status: str, elapsed_seconds: float | None = None) -> None:
-                _log_art_action(
+                _log_artwork_action(
                     "fetch",
                     version=version,
                     resource=resource.name,
@@ -1055,7 +1077,7 @@ class UpstreamArtBuilder:
                     bundle_md5=resource.md5,
                 )
             except Exception:
-                _log_art_action(
+                _log_artwork_action(
                     "archive",
                     version=version,
                     resource=filename,
@@ -1065,7 +1087,7 @@ class UpstreamArtBuilder:
                     elapsed_seconds=time.perf_counter() - started,
                 )
                 raise
-            _log_art_action(
+            _log_artwork_action(
                 "archive",
                 version=version,
                 resource=filename,
@@ -1097,12 +1119,12 @@ class UpstreamArtBuilder:
         version: str,
         resources: list[_Resource],
         gallery_recipes: _GalleryRecipes | None = None,
-    ) -> list[ArtManifest]:
+    ) -> list[ArtworkManifest]:
         """Run selected resources concurrently without unbounded cache locks."""
 
         gallery_recipes = gallery_recipes or _GalleryRecipes("disabled", "none", ())
 
-        resource_semaphore = asyncio.Semaphore(_ART_RESOURCE_WORKERS)
+        resource_semaphore = asyncio.Semaphore(_ARTWORK_RESOURCE_WORKERS)
         download_semaphore = asyncio.Semaphore(self._download_workers)
         loop = asyncio.get_running_loop()
         executor = ProcessPoolExecutor(
@@ -1112,7 +1134,7 @@ class UpstreamArtBuilder:
 
         total = len(resources)
 
-        async def process_one(resource: _Resource, current: int) -> ArtManifest:
+        async def process_one(resource: _Resource, current: int) -> ArtworkManifest:
             resource_root = _resource_cache_path(resource)
 
             def log(
@@ -1120,7 +1142,7 @@ class UpstreamArtBuilder:
                 status: str,
                 elapsed_seconds: float | None = None,
             ) -> None:
-                _log_art_action(
+                _log_artwork_action(
                     action,
                     version=version,
                     resource=resource.name,
@@ -1130,11 +1152,11 @@ class UpstreamArtBuilder:
                     elapsed_seconds=elapsed_seconds,
                 )
 
-            def validate_rendered(destination: Path) -> ArtManifest:
-                manifest = read_art_manifest(destination)
+            def validate_rendered(destination: Path) -> ArtworkManifest:
+                manifest = read_artwork_manifest(destination)
                 if manifest.upstream_version != version:
                     raise ValueError(
-                        "rendered art resource has the wrong upstream version: "
+                        "rendered artwork resource has the wrong upstream version: "
                         f"{manifest.upstream_version!r}, expected {version!r}"
                     )
                 return manifest
@@ -1142,7 +1164,7 @@ class UpstreamArtBuilder:
             if resource.name.endswith(".usm"):
                 score_video = _is_score_video(resource.name)
                 video_id = (
-                    PurePosixPath(resource.name).stem.lower()
+                    PurePosixPath(resource.name).stem
                     if score_video
                     else _story_video_id(resource.name)
                 )
@@ -1233,7 +1255,7 @@ class UpstreamArtBuilder:
                     validate_rendered,
                     on_hit=lambda: log("compose", "cached"),
                 )
-                if not isinstance(rendered_video.value, ArtManifest):
+                if not isinstance(rendered_video.value, ArtworkManifest):
                     raise TypeError(f"rendered USM video has no manifest: {rendered_video.path}")
                 return rendered_video.value
 
@@ -1298,7 +1320,7 @@ class UpstreamArtBuilder:
                         timings = await await_owned(
                             loop.run_in_executor(
                                 executor,
-                                _extract_and_render_art_resource,
+                                _extract_and_render_artwork_resource,
                                 bundle,
                                 extracted,
                                 rendered,
@@ -1332,7 +1354,7 @@ class UpstreamArtBuilder:
                         await await_owned(
                             loop.run_in_executor(
                                 executor,
-                                _render_art_resource,
+                                _render_artwork_resource,
                                 extracted.path,
                                 rendered,
                                 version,
@@ -1352,11 +1374,11 @@ class UpstreamArtBuilder:
                 validate_rendered,
                 on_hit=lambda: log("compose", "cached"),
             )
-            if not isinstance(rendered.value, ArtManifest):
-                raise TypeError(f"rendered art resource has no manifest: {rendered.path}")
+            if not isinstance(rendered.value, ArtworkManifest):
+                raise TypeError(f"rendered artwork resource has no manifest: {rendered.path}")
             return rendered.value
 
-        async def process(resource: _Resource, current: int) -> ArtManifest:
+        async def process(resource: _Resource, current: int) -> ArtworkManifest:
             async with resource_semaphore:
                 return await process_one(resource, current)
 
@@ -1375,9 +1397,9 @@ class UpstreamArtBuilder:
             await await_owned(asyncio.to_thread(executor.shutdown, wait=True, cancel_futures=True))
 
         _LOGGER.info(
-            "art pipeline completed resources=%s resource_workers=%s download_workers=%s extraction_workers=%s",
+            "artwork pipeline completed resources=%s resource_workers=%s download_workers=%s extraction_workers=%s",
             len(resources),
-            _ART_RESOURCE_WORKERS,
+            _ARTWORK_RESOURCE_WORKERS,
             self._download_workers,
             self._extraction_workers or "default",
         )
@@ -1433,7 +1455,7 @@ class UpstreamArtBuilder:
 
         with zipfile.ZipFile(path) as archive:
             digest = _archive_member_md5(archive, resource.name)
-        if len(resource.md5) == 32 and digest != resource.md5:
+        if digest != resource.md5:
             raise ValueError(
                 f"MD5 mismatch for {resource.name}: expected {resource.md5}, got {digest}"
             )
@@ -1443,7 +1465,7 @@ class UpstreamArtBuilder:
         """Validate a completed ``fetched`` cache stage."""
 
         wrapper = path / "wrapper.dat"
-        UpstreamArtBuilder._validate_bundle(wrapper, resource)
+        UpstreamArtworkBuilder._validate_bundle(wrapper, resource)
         return wrapper
 
     @staticmethod
@@ -1453,16 +1475,15 @@ class UpstreamArtBuilder:
         bundle = path.joinpath(*_resource_member_path(resource.name).parts)
         if not bundle.is_file():
             raise ValueError(f"unwrapped bundle is missing: {bundle}")
-        if resource.md5:
-            digest = hashlib.md5(usedforsecurity=False)
-            with bundle.open("rb") as source:
-                while chunk := source.read(1024 * 1024):
-                    digest.update(chunk)
-            actual = digest.hexdigest()
-            if actual != resource.md5:
-                raise ValueError(
-                    f"MD5 mismatch for {resource.name}: expected {resource.md5}, got {actual}"
-                )
+        digest = hashlib.md5(usedforsecurity=False)
+        with bundle.open("rb") as source:
+            while chunk := source.read(1024 * 1024):
+                digest.update(chunk)
+        actual = digest.hexdigest()
+        if actual != resource.md5:
+            raise ValueError(
+                f"MD5 mismatch for {resource.name}: expected {resource.md5}, got {actual}"
+            )
         return bundle
 
     @staticmethod
@@ -1470,8 +1491,8 @@ class UpstreamArtBuilder:
         """Reject incomplete or unsafe extracted trees before cache reuse."""
 
         if not path.is_dir():
-            raise ValueError(f"extracted art tree is missing: {path}")
+            raise ValueError(f"extracted artwork tree is missing: {path}")
         for candidate in path.rglob("*"):
             if candidate.is_symlink():
-                raise ValueError(f"extracted art tree contains a symlink: {candidate}")
+                raise ValueError(f"extracted artwork tree contains a symlink: {candidate}")
         return path

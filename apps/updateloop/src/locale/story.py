@@ -13,8 +13,8 @@ from typing import Any, Literal
 from ..domain import (
     ArchiveGroup,
     Movement,
-    MovementSection,
-    StoryArtReference,
+    Section,
+    StoryArtworkReference,
     StoryMediaKind,
     StoryMediaReference,
     StoryRecord,
@@ -61,7 +61,7 @@ class Directive:
     source_name: str = ""
 
 
-DirectiveAction = Literal["art", "characters", "media", "discard", "speaker"]
+DirectiveAction = Literal["artwork", "characters", "media", "discard", "speaker"]
 
 
 @dataclass(frozen=True, slots=True)
@@ -86,21 +86,21 @@ def _shape(*parameters: str) -> frozenset[str]:
 
 _HANDLED_DIRECTIVE_ACTIONS: dict[str, DirectiveAction] = {
     "name": "speaker",
-    "image": "art",
-    "background": "art",
-    "backgroundtween": "art",
-    "bgeffect": "art",
-    "largebgtween": "art",
-    "largebg": "art",
-    "gridbg": "art",
-    "verticalbg": "art",
-    "cgitem": "art",
-    "hidecgitem": "art",
-    "showitem": "art",
-    "imgeffect": "art",
-    "imagerotate": "art",
-    "imagetween": "art",
-    "avgdisplay": "art",
+    "image": "artwork",
+    "background": "artwork",
+    "backgroundtween": "artwork",
+    "bgeffect": "artwork",
+    "largebgtween": "artwork",
+    "largebg": "artwork",
+    "gridbg": "artwork",
+    "verticalbg": "artwork",
+    "cgitem": "artwork",
+    "hidecgitem": "artwork",
+    "showitem": "artwork",
+    "imgeffect": "artwork",
+    "imagerotate": "artwork",
+    "imagetween": "artwork",
+    "avgdisplay": "artwork",
     "character": "characters",
     "charslot": "characters",
     "dialog": "characters",
@@ -899,7 +899,7 @@ def _directive_spec(name: str, parameters: frozenset[str]) -> DirectiveSpec:
         name=name,
         action=action,
         parameters=parameters,
-        resource_indexed=action in {"art", "characters", "media"},
+        resource_indexed=action in {"artwork", "characters", "media"},
     )
 
 
@@ -990,7 +990,7 @@ class _ParsedGroup:
 
 def parse_story_data(
     root: Path,
-) -> tuple[tuple[Movement, ...], tuple[MovementSection, ...], tuple[ArchiveGroup, ...]]:
+) -> tuple[tuple[Movement, ...], tuple[Section, ...], tuple[ArchiveGroup, ...]]:
     """Parse the complete Score hierarchy and the remaining Archive groups."""
 
     table = _read_json(root / _DATA_ROOT / "excel/story_review_table.json")
@@ -1060,7 +1060,7 @@ def parse_story_data(
             populated_sections.append(section)
             continue
         if group.id in claimed_groups:
-            raise ValueError(f"review group is claimed by multiple Movement Sections: {group.id}")
+            raise ValueError(f"review group is claimed by multiple Sections: {group.id}")
         claimed_groups.add(group.id)
         populated_sections.append(
             replace(
@@ -1077,17 +1077,15 @@ def parse_story_data(
         if group.id in claimed_groups:
             continue
         if group.group_type == "main_story":
-            raise ValueError(
-                f"main-story review group is not owned by a Movement Section: {group.id}"
-            )
-        archive_kind, story_type = _archive_type(group.group_type)
+            raise ValueError(f"main-story review group is not owned by a Section: {group.id}")
+        archive_category, story_type = _archive_type(group.group_type)
         archives.append(
             ArchiveGroup(
                 id=group.id,
                 collection_id=f"archive_group:{group.id}",
                 position=len(archives),
                 name=group.name,
-                archive_kind=archive_kind,
+                archive_category=archive_category,
                 story_type=story_type,
                 stories=tuple(
                     replace(story, collection_id=f"archive_group:{group.id}")
@@ -1300,7 +1298,7 @@ def _reclamation_groups(
                 metadata=metadata,
                 variables=variables,
             )
-            if story.art_references:
+            if story.artwork_references:
                 stories.append(story)
         if stories:
             groups.append(
@@ -1401,7 +1399,7 @@ def _story_record(
         directives = parse_directives(text)
     else:
         _INCOMPLETE_UPSTREAM_LOGGER.warning(
-            "story text is missing; continuing without art references story_id=%s path=%s",
+            "story text is missing; continuing without artwork references story_id=%s path=%s",
             id,
             f"gamedata/story/{story_path}.txt",
         )
@@ -1415,7 +1413,7 @@ def _story_record(
         code=code,
         name=name,
         info=info,
-        art_references=(*_pictures(directives, metadata), *_characters(directives, variables)),
+        artwork_references=(*_pictures(directives, metadata), *_characters(directives, variables)),
         text=text,
         media_references=_media_references(directives, variables),
     )
@@ -1560,12 +1558,9 @@ def _parse_directive_body(body: str) -> Directive | None:
 
 
 def normalize_character_id(identifier: str) -> str:
-    """Return a lower-case ``base#face$body`` identifier with default variants."""
+    """Return the upstream ``base#face$body`` identifier with default variants."""
 
-    # Normalize harmless upstream spelling differences so every reference to
-    # one sprite has the same database key. GameData occasionally pads numeric
-    # variants or inserts whitespace beside their separators; neither selects
-    # a different face or body.
+    # Normalize separators and numeric defaults without changing the ID's case.
     identifier = "".join(identifier.split())
     # A leading ``$name`` is a story-variable reference, whereas only a
     # trailing ``$<digits>`` selects a body. Variable references must first be
@@ -1578,23 +1573,23 @@ def normalize_character_id(identifier: str) -> str:
     base, face, body = match.groups()
     face = str(int(face)) if face is not None else "1"
     body = str(int(body)) if body is not None else "1"
-    return f"{base}#{face}${body}".lower()
+    return f"{base}#{face}${body}"
 
 
 def _pictures(
     directives: tuple[Directive, ...],
     metadata: dict[str, tuple[str, str]],
-) -> tuple[StoryArtReference, ...]:
+) -> tuple[StoryArtworkReference, ...]:
     pictures = []
 
     def add(identifier: str, category: str) -> None:
-        art_id = identifier.lower()
-        if not art_id:
+        asset_id = identifier
+        if not asset_id:
             return
-        title, subtitle = metadata.get(art_id, ("", ""))
+        title, subtitle = metadata.get(asset_id.casefold(), ("", ""))
         pictures.append(
-            StoryArtReference(
-                art_id=art_id,
+            StoryArtworkReference(
+                asset_id=asset_id,
                 kind="picture",
                 category=category,
                 title=title,
@@ -1605,7 +1600,7 @@ def _pictures(
     for directive in directives:
         name = _directive_name(directive)
         if name == "image":
-            add(directive.params.get("image", ""), "image")
+            add(directive.params.get("image", ""), "illustration")
         elif name == "background":
             add(directive.params.get("image", ""), "background")
         elif name in {"backgroundtween", "bgeffect", "largebgtween"}:
@@ -1619,7 +1614,7 @@ def _pictures(
         elif name in {"cgitem", "hidecgitem", "showitem"}:
             add(directive.params.get("image", ""), "item")
         elif name in {"imgeffect", "imagerotate", "imagetween"}:
-            add(directive.params.get("image", ""), "image")
+            add(directive.params.get("image", ""), "illustration")
         elif name == "avgdisplay" and directive.params.get("style", "").lower() in {
             "animekv",
             "bg",
@@ -1640,10 +1635,10 @@ def _media_references(
     variables = variables or {}
 
     def add(identifier: str, kind: StoryMediaKind) -> None:
-        identifier = _normalize_media_id(identifier, kind, variables)
+        identifier = _normalize_asset_id(identifier, kind, variables)
         if not identifier:
             return
-        reference = StoryMediaReference(media_id=identifier, kind=kind)
+        reference = StoryMediaReference(asset_id=identifier, kind=kind)
         if reference not in references:
             references.append(reference)
 
@@ -1662,18 +1657,18 @@ def _media_references(
     return tuple(references)
 
 
-def _normalize_media_id(
+def _normalize_asset_id(
     identifier: str,
     kind: StoryMediaKind,
     variables: Mapping[str, str],
 ) -> str:
-    value = identifier.strip().strip('"').strip("'").lower()
+    value = identifier.strip('"').strip("'")
     if kind in {"sound", "music"}:
         value = value.removeprefix("$")
-        resolved = variables.get(value)
+        resolved = variables.get(value.casefold())
         if resolved:
             value = PurePosixPath(resolved.replace("\\", "/")).name
-            value = PurePosixPath(value).stem.lower()
+            value = PurePosixPath(value).stem
         return value
     if kind == "video":
         try:
@@ -1689,7 +1684,7 @@ def _normalize_media_id(
 def _characters(
     directives: tuple[Directive, ...],
     variables: Mapping[str, str],
-) -> tuple[StoryArtReference, ...]:
+) -> tuple[StoryArtworkReference, ...]:
     """Reconstruct character appearances from slot, focus, and dialog state.
 
     References preserve first appearance order. Spoken names attach to the
@@ -1730,7 +1725,7 @@ def _characters(
             clears_slot = raw_identifier.strip().lower() == "char_empty"
             if not slot:
                 # Bare charslot directives clear the scene. A nonempty unknown
-                # name such as ``left`` is a position-control token, not art.
+                # name such as ``left`` is a position-control token, not artwork.
                 if not raw_identifier or clears_slot:
                     spotlight = ""
                     characters.clear()
@@ -1754,8 +1749,8 @@ def _characters(
             characters.clear()
 
     return tuple(
-        StoryArtReference(
-            art_id=identifier,
+        StoryArtworkReference(
+            asset_id=identifier,
             kind="character",
             category="character",
             names=tuple(dict.fromkeys(name for name in names.get(identifier, []) if name)),
@@ -1767,7 +1762,7 @@ def _characters(
 def _resolve_character_id(identifier: str, variables: Mapping[str, str]) -> str:
     """Resolve a story variable, if present, and return its concrete sprite ID."""
 
-    candidate = identifier.strip()
+    candidate = identifier
     if candidate.startswith("$"):
         candidate = variables.get(candidate[1:].lower(), "")
     return normalize_character_id(candidate)
@@ -1791,9 +1786,9 @@ def _picture_metadata(root: Path) -> dict[str, tuple[str, str]]:
     data = _read_json(path)
     result = {}
     for raw in _values(_at(data, "actArchiveResData", "pics")):
-        identifier = _text(_at(raw, "assetPath")).lower()
+        identifier = _text(_at(raw, "assetPath"))
         if identifier:
-            result[identifier] = (
+            result[identifier.casefold()] = (
                 _text(_at(raw, "desc")),
                 _text(_at(raw, "picDescription")),
             )

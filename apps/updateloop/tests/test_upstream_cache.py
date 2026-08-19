@@ -31,14 +31,16 @@ async def test_file_cache_validates_hits_and_replaces_corruption(tmp_path: Path)
         if path.read_text(encoding="utf-8") != "valid":
             raise ValueError("corrupt")
 
-    first = await cache.file("version-1", PurePosixPath("art", "bundle.dat"), produce, validate)
-    second = await cache.file("version-1", PurePosixPath("art", "bundle.dat"), produce, validate)
+    first = await cache.file("version-1", PurePosixPath("artwork", "bundle.dat"), produce, validate)
+    second = await cache.file(
+        "version-1", PurePosixPath("artwork", "bundle.dat"), produce, validate
+    )
 
     assert first == second
     assert produced == 1
 
     first.write_text("broken", encoding="utf-8")
-    await cache.file("version-1", PurePosixPath("art", "bundle.dat"), produce, validate)
+    await cache.file("version-1", PurePosixPath("artwork", "bundle.dat"), produce, validate)
 
     assert produced == 2
     assert first.read_text(encoding="utf-8") == "valid"
@@ -71,13 +73,13 @@ async def test_directory_cache_exposes_only_completed_fingerprint(
         (destination / "value.txt").write_text(str(produced), encoding="utf-8")
 
     first = await cache.directory(
-        "version-1", PurePosixPath("art", "extracted"), "fingerprint-1", produce
+        "version-1", PurePosixPath("artwork", "extracted"), "fingerprint-1", produce
     )
     second = await cache.directory(
-        "version-1", PurePosixPath("art", "extracted"), "fingerprint-1", produce
+        "version-1", PurePosixPath("artwork", "extracted"), "fingerprint-1", produce
     )
     replaced = await cache.directory(
-        "version-1", PurePosixPath("art", "extracted"), "fingerprint-2", produce
+        "version-1", PurePosixPath("artwork", "extracted"), "fingerprint-2", produce
     )
 
     assert first.path == second.path == replaced.path
@@ -106,7 +108,7 @@ async def test_directory_cache_rebuilds_when_completed_content_is_corrupt(tmp_pa
 
     directory = await cache.directory(
         "version-1",
-        PurePosixPath("art", "processed"),
+        PurePosixPath("artwork", "processed"),
         "fingerprint",
         produce,
         validate,
@@ -115,7 +117,7 @@ async def test_directory_cache_rebuilds_when_completed_content_is_corrupt(tmp_pa
 
     rebuilt = await cache.directory(
         "version-1",
-        PurePosixPath("art", "processed"),
+        PurePosixPath("artwork", "processed"),
         "fingerprint",
         produce,
         validate,
@@ -131,7 +133,7 @@ async def test_directory_cache_rebuilds_when_completed_content_is_corrupt(tmp_pa
 @pytest.mark.asyncio
 async def test_directory_cache_replaces_a_file_at_the_cache_path(tmp_path: Path):
     cache = UpstreamCache(tmp_path / ".cache")
-    destination = cache.root / "version-1/art/processed"
+    destination = cache.root / "version-1/artwork/processed"
     destination.parent.mkdir(parents=True)
     destination.write_text("corrupt", encoding="utf-8")
 
@@ -140,7 +142,7 @@ async def test_directory_cache_replaces_a_file_at_the_cache_path(tmp_path: Path)
 
     rebuilt = await cache.directory(
         "version-1",
-        PurePosixPath("art", "processed"),
+        PurePosixPath("artwork", "processed"),
         "fingerprint",
         produce,
     )
@@ -161,7 +163,7 @@ async def test_directory_validator_observes_the_promoted_stable_path(tmp_path: P
 
     cached = await cache.directory(
         "version-1",
-        PurePosixPath("art", "rendered"),
+        PurePosixPath("artwork", "rendered"),
         "fingerprint",
         produce,
         validate,
@@ -182,7 +184,7 @@ async def test_failed_directory_validation_restores_the_previous_entry(tmp_path:
 
     previous = await cache.directory(
         "version-1",
-        PurePosixPath("art", "rendered"),
+        PurePosixPath("artwork", "rendered"),
         "old-fingerprint",
         produce_valid,
         validate_valid,
@@ -197,7 +199,7 @@ async def test_failed_directory_validation_restores_the_previous_entry(tmp_path:
     with pytest.raises(ValueError, match="candidate is invalid"):
         await cache.directory(
             "version-1",
-            PurePosixPath("art", "rendered"),
+            PurePosixPath("artwork", "rendered"),
             "new-fingerprint",
             produce_invalid,
             reject,
@@ -226,7 +228,7 @@ async def test_same_directory_key_runs_only_one_concurrent_producer(tmp_path: Pa
     first = asyncio.create_task(
         cache.directory(
             "version-1",
-            PurePosixPath("art", "extracted"),
+            PurePosixPath("artwork", "extracted"),
             "fingerprint",
             produce,
             validate,
@@ -236,7 +238,7 @@ async def test_same_directory_key_runs_only_one_concurrent_producer(tmp_path: Pa
     second = asyncio.create_task(
         cache.directory(
             "version-1",
-            PurePosixPath("art", "extracted"),
+            PurePosixPath("artwork", "extracted"),
             "fingerprint",
             produce,
             validate,
@@ -278,7 +280,7 @@ async def test_cancelling_file_materialization_drains_the_producer_before_cleanu
     materialization = asyncio.create_task(
         cache.file(
             "version-1",
-            PurePosixPath("art", "bundle.dat"),
+            PurePosixPath("artwork", "bundle.dat"),
             gated_producer,
             validate,
         )
@@ -312,7 +314,7 @@ async def test_cancelling_file_materialization_drains_the_producer_before_cleanu
     result = await asyncio.wait_for(
         cache.file(
             "version-1",
-            PurePosixPath("art", "bundle.dat"),
+            PurePosixPath("artwork", "bundle.dat"),
             retry_producer,
             validate,
         ),
@@ -328,7 +330,7 @@ async def test_cancelling_cross_process_lock_wait_does_not_leak_the_lock(tmp_pat
     first_cache = UpstreamCache(root)
     waiting_cache = UpstreamCache(root)
     final_cache = UpstreamCache(root)
-    destination = first_cache._path("version-1", PurePosixPath("art", "bundle.dat"))
+    destination = first_cache._path("version-1", PurePosixPath("artwork", "bundle.dat"))
 
     async def produce(path: Path) -> None:
         path.write_bytes(b"valid")
@@ -340,7 +342,7 @@ async def test_cancelling_cross_process_lock_wait_does_not_leak_the_lock(tmp_pat
         waiting = asyncio.create_task(
             waiting_cache.file(
                 "version-1",
-                PurePosixPath("art", "bundle.dat"),
+                PurePosixPath("artwork", "bundle.dat"),
                 produce,
                 validate,
             )
@@ -353,7 +355,7 @@ async def test_cancelling_cross_process_lock_wait_does_not_leak_the_lock(tmp_pat
     result = await asyncio.wait_for(
         final_cache.file(
             "version-1",
-            PurePosixPath("art", "bundle.dat"),
+            PurePosixPath("artwork", "bundle.dat"),
             produce,
             validate,
         ),

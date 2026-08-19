@@ -22,14 +22,14 @@ from urllib.parse import quote
 from .asyncio_tools import await_owned
 from .database import (
     apply_changes,
-    find_missing_art_references,
+    find_missing_artwork_references,
     find_missing_media_references,
     find_missing_score_references,
     initialize_or_validate,
     read_versions,
 )
 from .domain import (
-    ArtManifest,
+    ArtworkManifest,
     FileAudioArtifact,
     FileVideoArtifact,
     LocaleManifest,
@@ -38,12 +38,12 @@ from .domain import (
 from .object_store import ObjectStore
 from .thumbnail import make_thumbnail, thumbnail_object_key
 
-UpdateUnit = Literal["art", "CN", "EN", "JP", "KR", "TW"]
-Manifest = ArtManifest | LocaleManifest
+UpdateUnit = Literal["artwork", "CN", "EN", "JP", "KR", "TW"]
+Manifest = ArtworkManifest | LocaleManifest
 BuildManifest = Callable[[str | None, bool], Awaitable[Manifest]]
 UpdateStatus = Literal["updated", "unchanged"]
 
-_UNITS = frozenset({"art", "CN", "EN", "JP", "KR", "TW"})
+_UNITS = frozenset({"artwork", "CN", "EN", "JP", "KR", "TW"})
 _INCOMPLETE_UPSTREAM_LOGGER = logging.getLogger("arkwaifu_updateloop.incomplete_upstream")
 _LOGGER = logging.getLogger(__name__)
 _THUMBNAIL_WORKERS = os.cpu_count() or 1
@@ -52,11 +52,11 @@ _SCORE_ASSET_KINDS = frozenset(
         "icon",
         "logo",
         "background",
-        "key_visual",
+        "key-visual",
         "title",
         "decoration",
-        "retro_background",
-        "split",
+        "retro-background",
+        "divider",
     }
 )
 
@@ -65,7 +65,7 @@ _SCORE_ASSET_KINDS = frozenset(
 class UpdateRequest:
     """Describe one requested dataset and the callback that prepares it.
 
-    Set ``complete`` for an art-only historical backfill, including when the published database already records the requested version.
+    Set ``complete`` for an artwork-only historical backfill, including when the published database already records the requested version.
     """
 
     unit: UpdateUnit
@@ -83,7 +83,7 @@ class UpdateResult:
     status: UpdateStatus
 
 
-def _log_art_action(
+def _log_artwork_action(
     action: str,
     *,
     version: str,
@@ -93,7 +93,7 @@ def _log_art_action(
     total: int | None = None,
     elapsed_seconds: float | None = None,
 ) -> None:
-    """Emit one structured publication event for the art unit."""
+    """Emit one structured publication event for the artwork unit."""
 
     extra: dict[str, object] = {
         "action": action,
@@ -108,10 +108,10 @@ def _log_art_action(
         extra["total"] = total
     if elapsed_seconds is not None:
         extra["elapsed_ms"] = round(elapsed_seconds * 1000, 3)
-    _LOGGER.info("art action", extra=extra)
+    _LOGGER.info("artwork action", extra=extra)
 
 
-def _prepare_art_publication(
+def _prepare_artwork_publication(
     manifests: Sequence[Manifest],
 ) -> tuple[
     dict[tuple[str, str], str],
@@ -123,31 +123,31 @@ def _prepare_art_publication(
     tuple[tuple[str, FileVideoArtifact], ...],
     tuple[tuple[str, FileAudioArtifact], ...],
 ]:
-    """Derive object keys and candidate uploads from the requested art manifest."""
+    """Derive object keys and candidate uploads from the requested artwork manifest."""
 
     manifest = next(
-        (manifest for manifest in manifests if isinstance(manifest, ArtManifest)),
+        (manifest for manifest in manifests if isinstance(manifest, ArtworkManifest)),
         None,
     )
     if manifest is None:
         return {}, {}, {}, {}, {}, (), (), ()
-    art_keys = {
-        (art.category, art.id): art_object_key(
-            res_version=art.res_version or manifest.upstream_version,
+    artwork_keys = {
+        (artwork.category, artwork.id): image_object_key(
+            res_version=artwork.res_version or manifest.upstream_version,
             variant="composition",
-            category=art.category,
-            identifier=art.id,
+            category=artwork.category,
+            identifier=artwork.id,
         )
-        for art in manifest.arts
+        for artwork in manifest.artworks
     }
-    source_keys = {
-        (source.category, source.id): art_object_key(
+    source_layer_keys = {
+        (source.category, source.id): image_object_key(
             res_version=source.res_version or manifest.upstream_version,
             variant="source",
             category=source.category,
             identifier=source.id,
         )
-        for source in manifest.source_arts
+        for source in manifest.source_layers
     }
     score_asset_keys = {
         (asset.kind, asset.id): score_asset_object_key(
@@ -174,10 +174,13 @@ def _prepare_art_publication(
         for media in manifest.media
     }
     png_uploads = tuple(
-        [(art_keys[(art.category, art.id)], art.image) for art in manifest.arts]
+        [
+            (artwork_keys[(artwork.category, artwork.id)], artwork.image)
+            for artwork in manifest.artworks
+        ]
         + [
-            (source_keys[(source.category, source.id)], source.image)
-            for source in manifest.source_arts
+            (source_layer_keys[(source.category, source.id)], source.image)
+            for source in manifest.source_layers
         ]
         + [
             (score_asset_keys[(asset.kind, asset.id)], asset.image)
@@ -198,8 +201,8 @@ def _prepare_art_publication(
         if isinstance(media.artifact, FileAudioArtifact)
     )
     return (
-        art_keys,
-        source_keys,
+        artwork_keys,
+        source_layer_keys,
         score_asset_keys,
         score_video_keys,
         media_keys,
@@ -209,21 +212,21 @@ def _prepare_art_publication(
     )
 
 
-def art_object_key(
+def image_object_key(
     *,
     res_version: str,
     variant: Literal["composition", "source"],
     category: str,
     identifier: str,
 ) -> str:
-    """Return the escaped object key for one art composition or source image."""
+    """Return the escaped object key for one final image or material."""
 
     if not isinstance(res_version, str) or not res_version:
-        raise ValueError("art resVersion cannot be empty")
+        raise ValueError("artwork resVersion cannot be empty")
     if variant not in {"composition", "source"}:
-        raise ValueError(f"unknown art object variant: {variant}")
-    if category not in {"image", "background", "item", "character"}:
-        raise ValueError(f"unknown art object category: {category}")
+        raise ValueError(f"unknown image object variant: {variant}")
+    if category not in {"illustration", "background", "item", "character"}:
+        raise ValueError(f"unknown artwork object category: {category}")
     segments = ("ART", res_version, variant, category, f"{identifier}.png")
     return "/".join(quote(segment, safe="") for segment in segments)
 
@@ -232,7 +235,7 @@ def score_asset_object_key(*, res_version: str, kind: str, identifier: str) -> s
     """Return the immutable object key for one Score PNG."""
 
     if not isinstance(res_version, str) or not res_version:
-        raise ValueError("art resVersion cannot be empty")
+        raise ValueError("artwork resVersion cannot be empty")
     if not isinstance(kind, str) or kind not in _SCORE_ASSET_KINDS:
         raise ValueError(f"unknown Score asset kind: {kind}")
     if not isinstance(identifier, str) or not identifier:
@@ -245,7 +248,7 @@ def score_video_object_key(*, res_version: str, identifier: str) -> str:
     """Return the immutable object key for one Score WebM."""
 
     if not isinstance(res_version, str) or not res_version:
-        raise ValueError("art resVersion cannot be empty")
+        raise ValueError("artwork resVersion cannot be empty")
     if not isinstance(identifier, str) or not identifier:
         raise ValueError("Score video identifier cannot be empty")
     segments = ("SCORE", res_version, "video", f"{identifier}.webm")
@@ -256,11 +259,11 @@ def media_object_key(*, res_version: str, kind: str, identifier: str, content_ty
     """Return the immutable object key for one story audio or video asset."""
 
     if not isinstance(res_version, str) or not res_version:
-        raise ValueError("art resVersion cannot be empty")
+        raise ValueError("artwork resVersion cannot be empty")
     if kind not in {"audio", "video"}:
         raise ValueError(f"unknown media kind: {kind}")
-    if not isinstance(identifier, str) or not identifier or identifier != identifier.lower():
-        raise ValueError("media identifier must be a nonempty lower-case string")
+    if not isinstance(identifier, str) or not identifier:
+        raise ValueError("media identifier must be a nonempty string")
     suffixes = {
         "audio/flac": "flac",
         "audio/wav": "wav",
@@ -281,7 +284,7 @@ def media_object_key(*, res_version: str, kind: str, identifier: str, content_ty
 
 
 class Updater:
-    """Keep the remote Arkwaifu database and its art objects up-to-date."""
+    """Keep the remote Arkwaifu database and its artwork objects up-to-date."""
 
     def __init__(self, object_store: ObjectStore, *, upload_workers: int = 16) -> None:
         """Configure publication through one object store."""
@@ -310,9 +313,9 @@ class Updater:
         if not requests:
             return ()
         if force and any(request.complete for request in requests):
-            raise ValueError("complete art builds cannot be combined with force")
-        if force and any(request.unit == "art" for request in requests):
-            raise ValueError("force is not supported for art updates")
+            raise ValueError("complete artwork builds cannot be combined with force")
+        if force and any(request.unit == "artwork" for request in requests):
+            raise ValueError("force is not supported for artwork updates")
 
         with tempfile.TemporaryDirectory(prefix="arkwaifu-database-") as temporary:
             database_path = Path(temporary) / "arkwaifu.sqlite3"
@@ -341,20 +344,20 @@ class Updater:
                 active_versions,
                 force,
             )
-            art_manifest = next(
-                (manifest for manifest in manifests if isinstance(manifest, ArtManifest)),
+            artwork_manifest = next(
+                (manifest for manifest in manifests if isinstance(manifest, ArtworkManifest)),
                 None,
             )
             (
-                art_keys,
-                source_keys,
+                artwork_keys,
+                source_layer_keys,
                 score_asset_keys,
                 score_video_keys,
                 media_keys,
                 candidate_uploads,
                 candidate_video_uploads,
                 candidate_audio_uploads,
-            ) = _prepare_art_publication(manifests)
+            ) = _prepare_artwork_publication(manifests)
             apply_started = time.perf_counter()
             try:
                 committed_object_keys = await await_owned(
@@ -362,27 +365,27 @@ class Updater:
                         apply_changes,
                         database_path,
                         manifests,
-                        art_keys=art_keys,
-                        source_keys=source_keys,
+                        artwork_keys=artwork_keys,
+                        source_layer_keys=source_layer_keys,
                         score_asset_keys=score_asset_keys,
                         score_video_keys=score_video_keys,
                         media_keys=media_keys,
                     )
                 )
             except Exception:
-                if art_manifest is not None:
-                    _log_art_action(
+                if artwork_manifest is not None:
+                    _log_artwork_action(
                         "apply",
-                        version=art_manifest.upstream_version,
+                        version=artwork_manifest.upstream_version,
                         resource="arkwaifu.sqlite3",
                         status="failed",
                         elapsed_seconds=time.perf_counter() - apply_started,
                     )
                 raise
-            if art_manifest is not None:
-                _log_art_action(
+            if artwork_manifest is not None:
+                _log_artwork_action(
                     "apply",
-                    version=art_manifest.upstream_version,
+                    version=artwork_manifest.upstream_version,
                     resource="arkwaifu.sqlite3",
                     status="done",
                     elapsed_seconds=time.perf_counter() - apply_started,
@@ -397,26 +400,26 @@ class Updater:
                 for key, artifact in candidate_video_uploads
                 if key in committed_object_keys
             )
-            if art_manifest is None:
+            if artwork_manifest is None:
                 thumbnail_candidates = ()
             else:
                 thumbnail_candidates = tuple(
                     (
                         thumbnail_object_key(
-                            res_version=art.res_version or art_manifest.upstream_version,
-                            category=art.category,
-                            identifier=art.id,
+                            res_version=artwork.res_version or artwork_manifest.upstream_version,
+                            category=artwork.category,
+                            identifier=artwork.id,
                         ),
-                        art.image,
+                        artwork.image,
                     )
-                    for art in art_manifest.arts
+                    for artwork in artwork_manifest.artworks
                 )
             missing = await await_owned(
-                asyncio.to_thread(find_missing_art_references, database_path)
+                asyncio.to_thread(find_missing_artwork_references, database_path)
             )
             if missing:
                 _INCOMPLETE_UPSTREAM_LOGGER.warning(
-                    "database references unavailable art; continuing count=%d sample=%s",
+                    "database references unavailable narrative image assets; continuing count=%d sample=%s",
                     len(missing),
                     list(missing[:10]),
                 )
@@ -425,7 +428,7 @@ class Updater:
             )
             if missing_score:
                 _INCOMPLETE_UPSTREAM_LOGGER.warning(
-                    "database references unavailable Score assets; continuing count=%d sample=%s",
+                    "database references unavailable presentation assets; continuing count=%d sample=%s",
                     len(missing_score),
                     list(missing_score[:10]),
                 )
@@ -434,17 +437,17 @@ class Updater:
             )
             if missing_media:
                 _INCOMPLETE_UPSTREAM_LOGGER.warning(
-                    "database references unavailable story media; continuing count=%d sample=%s",
+                    "database references unavailable narrative media assets; continuing count=%d sample=%s",
                     len(missing_media),
                     list(missing_media[:10]),
                 )
             await self._upload_artifacts(
                 referenced_uploads,
-                version=art_manifest.upstream_version if art_manifest is not None else None,
+                version=artwork_manifest.upstream_version if artwork_manifest is not None else None,
             )
             await self._upload_videos(
                 referenced_video_uploads,
-                version=art_manifest.upstream_version if art_manifest is not None else None,
+                version=artwork_manifest.upstream_version if artwork_manifest is not None else None,
             )
             referenced_audio_uploads = tuple(
                 (key, artifact)
@@ -453,29 +456,29 @@ class Updater:
             )
             await self._upload_audio(
                 referenced_audio_uploads,
-                version=art_manifest.upstream_version if art_manifest is not None else None,
+                version=artwork_manifest.upstream_version if artwork_manifest is not None else None,
             )
             await self._publish_thumbnails(
                 thumbnail_candidates,
-                version=art_manifest.upstream_version if art_manifest is not None else None,
+                version=artwork_manifest.upstream_version if artwork_manifest is not None else None,
             )
             publish_started = time.perf_counter()
             try:
                 await await_owned(self._object_store.push_database(database_path))
             except Exception:
-                if art_manifest is not None:
-                    _log_art_action(
+                if artwork_manifest is not None:
+                    _log_artwork_action(
                         "publish",
-                        version=art_manifest.upstream_version,
+                        version=artwork_manifest.upstream_version,
                         resource="arkwaifu.sqlite3",
                         status="failed",
                         elapsed_seconds=time.perf_counter() - publish_started,
                     )
                 raise
-            if art_manifest is not None:
-                _log_art_action(
+            if artwork_manifest is not None:
+                _log_artwork_action(
                     "publish",
-                    version=art_manifest.upstream_version,
+                    version=artwork_manifest.upstream_version,
                     resource="arkwaifu.sqlite3",
                     status="done",
                     elapsed_seconds=time.perf_counter() - publish_started,
@@ -494,17 +497,17 @@ class Updater:
     @staticmethod
     def _validate_requests(requests: Sequence[UpdateRequest]) -> None:
         if any(request.complete for request in requests) and (
-            len(requests) != 1 or requests[0].unit != "art"
+            len(requests) != 1 or requests[0].unit != "artwork"
         ):
-            raise ValueError("complete art must be the sole requested update unit")
+            raise ValueError("complete artwork must be the sole requested update unit")
         seen: set[str] = set()
         for request in requests:
             if request.unit not in _UNITS:
                 raise ValueError(f"unknown database unit: {request.unit}")
             if not request.res_version:
                 raise ValueError(f"{request.unit} resVersion cannot be empty")
-            if request.complete and request.unit != "art":
-                raise ValueError("complete update policy is available only for art")
+            if request.complete and request.unit != "artwork":
+                raise ValueError("complete update policy is available only for artwork")
             if request.unit in seen:
                 raise ValueError(f"database unit requested more than once: {request.unit}")
             seen.add(request.unit)
@@ -517,9 +520,9 @@ class Updater:
     ) -> tuple[Manifest, ...]:
         async def build(request: UpdateRequest) -> Manifest:
             manifest = await request.build(active_versions.get(request.unit), force)
-            if request.unit == "art":
-                if not isinstance(manifest, ArtManifest):
-                    raise TypeError("art builder returned a locale manifest")
+            if request.unit == "artwork":
+                if not isinstance(manifest, ArtworkManifest):
+                    raise TypeError("artwork builder returned a locale manifest")
             elif not isinstance(manifest, LocaleManifest) or manifest.unit != request.unit:
                 raise TypeError(f"{request.unit} builder returned a different locale manifest")
             if manifest.upstream_version != request.res_version:
@@ -532,7 +535,7 @@ class Updater:
                     name
                     for name, records in (
                         ("movements", manifest.movements),
-                        ("movement_sections", manifest.movement_sections),
+                        ("sections", manifest.sections),
                         ("archive_groups", manifest.archive_groups),
                         ("galleries", manifest.galleries),
                     )
@@ -588,7 +591,7 @@ class Updater:
                     await self._object_store.put_png(key, artifact)
                 except Exception as error:  # noqa: BLE001 - adapter errors are opaque
                     if version is not None:
-                        _log_art_action(
+                        _log_artwork_action(
                             "upload",
                             version=version,
                             resource=key,
@@ -602,7 +605,7 @@ class Updater:
                     stop.set()
                     return
                 if version is not None:
-                    _log_art_action(
+                    _log_artwork_action(
                         "upload",
                         version=version,
                         resource=key,
@@ -613,7 +616,7 @@ class Updater:
                     )
 
         tasks = [
-            asyncio.create_task(worker(), name=f"batch-art-upload-{index}")
+            asyncio.create_task(worker(), name=f"batch-artwork-upload-{index}")
             for index in range(min(self._upload_workers, len(uploads)))
         ]
         batch = asyncio.gather(*tasks)
@@ -653,7 +656,7 @@ class Updater:
                     thumbnail = await asyncio.to_thread(make_thumbnail, source)
                 except Exception as error:  # noqa: BLE001 - image decoder errors are opaque
                     if version is not None:
-                        _log_art_action(
+                        _log_artwork_action(
                             "thumbnail",
                             version=version,
                             resource=key,
@@ -667,7 +670,7 @@ class Updater:
                     stop.set()
                     return
                 if version is not None:
-                    _log_art_action(
+                    _log_artwork_action(
                         "thumbnail",
                         version=version,
                         resource=key,
@@ -681,7 +684,7 @@ class Updater:
                     await self._object_store.put_thumbnail(key, thumbnail)
                 except Exception as error:  # noqa: BLE001 - adapter errors are opaque
                     if version is not None:
-                        _log_art_action(
+                        _log_artwork_action(
                             "upload",
                             version=version,
                             resource=key,
@@ -695,7 +698,7 @@ class Updater:
                     stop.set()
                     return
                 if version is not None:
-                    _log_art_action(
+                    _log_artwork_action(
                         "upload",
                         version=version,
                         resource=key,
@@ -746,7 +749,7 @@ class Updater:
                     await self._object_store.put_video(key, artifact)
                 except Exception as error:  # noqa: BLE001 - adapter errors are opaque
                     if version is not None:
-                        _log_art_action(
+                        _log_artwork_action(
                             "upload",
                             version=version,
                             resource=key,
@@ -760,7 +763,7 @@ class Updater:
                     stop.set()
                     return
                 if version is not None:
-                    _log_art_action(
+                    _log_artwork_action(
                         "upload",
                         version=version,
                         resource=key,
@@ -811,7 +814,7 @@ class Updater:
                     await self._object_store.put_audio(key, artifact)
                 except Exception as error:  # noqa: BLE001 - adapter errors are opaque
                     if version is not None:
-                        _log_art_action(
+                        _log_artwork_action(
                             "upload",
                             version=version,
                             resource=key,
@@ -825,7 +828,7 @@ class Updater:
                     stop.set()
                     return
                 if version is not None:
-                    _log_art_action(
+                    _log_artwork_action(
                         "upload",
                         version=version,
                         resource=key,

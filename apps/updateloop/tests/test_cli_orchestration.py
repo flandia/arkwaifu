@@ -6,7 +6,12 @@ import pytest
 from PIL import Image
 
 from arkwaifu_updateloop import UpdateRequest, UpdateResult, cli
-from arkwaifu_updateloop.domain import ArtManifest, ArtRecord, FilePngArtifact, LocaleManifest
+from arkwaifu_updateloop.domain import (
+    ArtworkManifest,
+    ArtworkRecord,
+    FilePngArtifact,
+    LocaleManifest,
+)
 from arkwaifu_updateloop.upstream import UpstreamCache
 
 
@@ -44,8 +49,8 @@ async def _wait_for(event: asyncio.Event) -> None:
 
 def _request(unit: str) -> UpdateRequest:
     async def build(_active: str | None, _force: bool):
-        if unit == "art":
-            return ArtManifest(f"{unit}-v1", (), ())
+        if unit == "artwork":
+            return ArtworkManifest(f"{unit}-v1", (), ())
         return LocaleManifest(unit, f"{unit}-v1", (), ())
 
     return UpdateRequest(unit, f"{unit}-v1", build)
@@ -58,7 +63,7 @@ async def test_run_starts_all_version_preparations_concurrently(monkeypatch):
     all_preparations_started = asyncio.Event()
     started: set[str] = set()
     locale_builders: set[int] = set()
-    requested = {"art", "EN", "JP"}
+    requested = {"artwork", "EN", "JP"}
 
     async def prepare(unit: str):
         started.add(unit)
@@ -71,10 +76,10 @@ async def test_run_starts_all_version_preparations_concurrently(monkeypatch):
         locale_builders.add(id(builder))
         return prepare(unit)
 
-    monkeypatch.setattr(cli, "_prepare_art", lambda settings, cache: prepare("art"))
+    monkeypatch.setattr(cli, "_prepare_artwork", lambda settings, cache: prepare("artwork"))
     monkeypatch.setattr(cli, "_prepare_locale", prepare_locale)
 
-    run = asyncio.create_task(cli._run(["art", "EN", "JP"], force=False, use_cache=False))
+    run = asyncio.create_task(cli._run(["artwork", "EN", "JP"], force=False, use_cache=False))
     await _wait_for(all_preparations_started)
 
     assert started == requested
@@ -82,7 +87,7 @@ async def test_run_starts_all_version_preparations_concurrently(monkeypatch):
     assert not run.done()
     preparation_gate.set()
     assert await run == 0
-    assert [request.unit for request in updater.calls[0][0]] == ["art", "EN", "JP"]
+    assert [request.unit for request in updater.calls[0][0]] == ["artwork", "EN", "JP"]
 
 
 @pytest.mark.asyncio
@@ -111,9 +116,9 @@ async def test_any_preparation_failure_prevents_database_publication(monkeypatch
     updater = _patch_runtime(monkeypatch)
 
     async def fail(settings, cache):
-        raise RuntimeError("art version failed")
+        raise RuntimeError("artwork version failed")
 
-    monkeypatch.setattr(cli, "_prepare_art", fail)
+    monkeypatch.setattr(cli, "_prepare_artwork", fail)
     monkeypatch.setattr(
         cli,
         "_prepare_locale",
@@ -121,11 +126,11 @@ async def test_any_preparation_failure_prevents_database_publication(monkeypatch
     )
 
     with caplog.at_level("ERROR"):
-        result = await cli._run(["art", "EN", "JP"], force=False, use_cache=False)
+        result = await cli._run(["artwork", "EN", "JP"], force=False, use_cache=False)
 
     assert result == 1
     assert updater.calls == []
-    assert "unit=art status=failed" in caplog.text
+    assert "unit=artwork status=failed" in caplog.text
 
 
 @pytest.mark.asyncio
@@ -137,10 +142,12 @@ async def test_database_failure_returns_nonzero_without_a_second_attempt(monkeyp
         raise RuntimeError("database upload failed")
 
     updater.run = fail
-    monkeypatch.setattr(cli, "_prepare_art", lambda settings, cache: _ready(_request("art")))
+    monkeypatch.setattr(
+        cli, "_prepare_artwork", lambda settings, cache: _ready(_request("artwork"))
+    )
 
     with caplog.at_level("ERROR"):
-        result = await cli._run(["art"], force=False, use_cache=False)
+        result = await cli._run(["artwork"], force=False, use_cache=False)
 
     assert result == 1
     assert len(updater.calls) == 1
@@ -148,8 +155,8 @@ async def test_database_failure_returns_nonzero_without_a_second_attempt(monkeyp
 
 
 @pytest.mark.asyncio
-async def test_prepare_art_exposes_one_batch_build(monkeypatch, tmp_path: Path):
-    resource = ArtManifest("art-v1", (), ())
+async def test_prepare_artwork_exposes_one_batch_build(monkeypatch, tmp_path: Path):
+    resource = ArtworkManifest("artwork-v1", (), ())
     cache = UpstreamCache(tmp_path / ".cache")
 
     class Builder:
@@ -160,28 +167,28 @@ async def test_prepare_art_exposes_one_batch_build(monkeypatch, tmp_path: Path):
             )
 
         async def detect_version(self):
-            return "art-v1"
+            return "artwork-v1"
 
         async def build(self, upstream_version, active_version, force):
-            assert (upstream_version, active_version, force) == ("art-v1", None, False)
+            assert (upstream_version, active_version, force) == ("artwork-v1", None, False)
             return resource
 
-    monkeypatch.setattr(cli, "UpstreamArtBuilder", Builder)
+    monkeypatch.setattr(cli, "UpstreamArtworkBuilder", Builder)
     settings = SimpleNamespace(
-        art_version_url="https://version.example",
-        art_asset_base_url="https://assets.example",
+        artwork_version_url="https://version.example",
+        artwork_asset_base_url="https://assets.example",
         download_workers=2,
         extraction_workers=1,
     )
-    update = await cli._prepare_art(settings, cache)
+    update = await cli._prepare_artwork(settings, cache)
     manifest = await update.build(None, False)
 
     assert manifest is resource
 
 
 @pytest.mark.asyncio
-async def test_prepare_complete_art_uses_history_builder_once(monkeypatch, tmp_path: Path):
-    resource = ArtManifest("art-v3", (), ())
+async def test_prepare_complete_artwork_uses_history_builder_once(monkeypatch, tmp_path: Path):
+    resource = ArtworkManifest("artwork-v3", (), ())
     cache = UpstreamCache(tmp_path / ".cache")
     calls = []
 
@@ -193,7 +200,7 @@ async def test_prepare_complete_art_uses_history_builder_once(monkeypatch, tmp_p
             )
 
         async def detect_version(self):
-            return "art-v3"
+            return "artwork-v3"
 
         async def build_history(self, versions):
             calls.append(versions)
@@ -204,34 +211,34 @@ async def test_prepare_complete_art_uses_history_builder_once(monkeypatch, tmp_p
             assert kwargs["cache"] is cache
 
         async def versions(self, current):
-            assert current == "art-v3"
-            return ("art-v1", "art-v2", "art-v3")
+            assert current == "artwork-v3"
+            return ("artwork-v1", "artwork-v2", "artwork-v3")
 
-    monkeypatch.setattr(cli, "UpstreamArtBuilder", Builder)
+    monkeypatch.setattr(cli, "UpstreamArtworkBuilder", Builder)
     monkeypatch.setattr(cli, "WindowsVersionHistory", History)
     settings = SimpleNamespace(
-        art_version_url="https://version.example",
-        art_asset_base_url="https://assets.example",
+        artwork_version_url="https://version.example",
+        artwork_asset_base_url="https://assets.example",
         github_api_url="https://api.github.example",
         github_token=None,
         download_workers=2,
         extraction_workers=1,
     )
 
-    update = await cli._prepare_art(settings, cache, complete=True)
-    manifest = await update.build("art-v3", False)
+    update = await cli._prepare_artwork(settings, cache, complete=True)
+    manifest = await update.build("artwork-v3", False)
 
     assert update.complete is True
     assert manifest is resource
-    assert calls == [("art-v1", "art-v2", "art-v3")]
+    assert calls == [("artwork-v1", "artwork-v2", "artwork-v3")]
 
 
 @pytest.mark.asyncio
-async def test_prepare_complete_art_archives_the_same_history_before_build(
+async def test_prepare_complete_artwork_archives_the_same_history_before_build(
     monkeypatch,
     tmp_path: Path,
 ):
-    resource = ArtManifest("art-v2", (), ())
+    resource = ArtworkManifest("artwork-v2", (), ())
     cache = UpstreamCache(tmp_path / ".cache")
     calls = []
     archive_store = object()
@@ -241,7 +248,7 @@ async def test_prepare_complete_art_archives_the_same_history_before_build(
             pass
 
         async def detect_version(self):
-            return "art-v2"
+            return "artwork-v2"
 
         async def archive_history(self, versions, archive):
             assert archive is archive_store
@@ -256,30 +263,30 @@ async def test_prepare_complete_art_archives_the_same_history_before_build(
             pass
 
         async def versions(self, current):
-            assert current == "art-v2"
+            assert current == "artwork-v2"
             calls.append(("history", current))
-            return ("art-v1", "art-v2")
+            return ("artwork-v1", "artwork-v2")
 
-    monkeypatch.setattr(cli, "UpstreamArtBuilder", Builder)
+    monkeypatch.setattr(cli, "UpstreamArtworkBuilder", Builder)
     monkeypatch.setattr(cli, "WindowsVersionHistory", History)
     monkeypatch.setattr(cli, "_asset_bundle_archive", lambda _settings: archive_store)
     settings = SimpleNamespace(
-        art_version_url="https://version.example",
-        art_asset_base_url="https://assets.example",
+        artwork_version_url="https://version.example",
+        artwork_asset_base_url="https://assets.example",
         github_api_url="https://api.github.example",
         github_token=None,
         download_workers=2,
         extraction_workers=1,
     )
 
-    update = await cli._prepare_art(settings, cache, complete=True, archive=True)
+    update = await cli._prepare_artwork(settings, cache, complete=True, archive=True)
     manifest = await update.build(None, False)
 
     assert manifest is resource
     assert calls == [
-        ("history", "art-v2"),
-        ("archive", ("art-v1", "art-v2")),
-        ("build", ("art-v1", "art-v2")),
+        ("history", "artwork-v2"),
+        ("archive", ("artwork-v1", "artwork-v2")),
+        ("build", ("artwork-v1", "artwork-v2")),
     ]
 
 
@@ -292,14 +299,14 @@ async def test_archive_preparation_failure_prevents_database_publication(monkeyp
         assert archive is True
         raise RuntimeError("asset-bundle archive failed")
 
-    monkeypatch.setattr(cli, "_prepare_art", fail)
+    monkeypatch.setattr(cli, "_prepare_artwork", fail)
 
     with caplog.at_level("ERROR"):
-        result = await cli._run(["art"], force=False, archive=True, use_cache=False)
+        result = await cli._run(["artwork"], force=False, archive=True, use_cache=False)
 
     assert result == 1
     assert updater.calls == []
-    assert "unit=art status=failed" in caplog.text
+    assert "unit=artwork status=failed" in caplog.text
 
 
 @pytest.mark.asyncio
@@ -313,29 +320,29 @@ async def test_no_cache_workspace_outlives_batch_build_and_is_removed_after_run(
         image_path = cache.root / "fixture.png"
         image_path.parent.mkdir(parents=True, exist_ok=True)
         Image.new("RGBA", (2, 3), (1, 2, 3, 255)).save(image_path, format="PNG")
-        manifest = ArtManifest(
-            "art-v1",
-            (ArtRecord("fixture", "image", FilePngArtifact.from_path(image_path)),),
+        manifest = ArtworkManifest(
+            "artwork-v1",
+            (ArtworkRecord("fixture", "illustration", FilePngArtifact.from_path(image_path)),),
             (),
         )
 
         async def build(_active, _force):
             return manifest
 
-        return UpdateRequest("art", "art-v1", build)
+        return UpdateRequest("artwork", "artwork-v1", build)
 
     async def run(requests, *, force=False):
         values = tuple(requests)
         updater.calls.append((values, force))
         manifest = await values[0].build(None, force)
-        path = manifest.arts[0].image.path
+        path = manifest.artworks[0].image.path
         assert path is not None and path.is_file()
-        return (UpdateResult("art", "art-v1", "updated"),)
+        return (UpdateResult("artwork", "artwork-v1", "updated"),)
 
     updater.run = run
-    monkeypatch.setattr(cli, "_prepare_art", prepare)
+    monkeypatch.setattr(cli, "_prepare_artwork", prepare)
 
-    assert await cli._run(["art"], force=False, use_cache=False) == 0
+    assert await cli._run(["artwork"], force=False, use_cache=False) == 0
 
     assert observed_root is not None
     assert not observed_root.exists()

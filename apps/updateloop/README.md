@@ -1,44 +1,44 @@
 # Run the Arkwaifu updater
 
-The Python 3.14 updater publishes upstream Arknights art and locale data as one SQLite database plus versioned image and Score-video objects in S3-compatible storage. Use this guide to run, configure, and test the updater.
+The Python 3.14 updater publishes upstream Arknights artwork and locale data as one SQLite database plus versioned image and Score-video objects in S3-compatible storage. Use this guide to run, configure, and test the updater.
 
 ## Choose an update command
 
-Run the updater from `apps/updateloop`. The `run` subcommand accepts `art` and the locale units `CN`, `EN`, `JP`, `KR`, and `TW`.
+Run the updater from `apps/updateloop`. The `run` subcommand accepts `artwork` and the locale units `CN`, `EN`, `JP`, `KR`, and `TW`.
 
 The following commands cover each supported update mode:
 
 ```console
-uv run updateloop run art
-uv run updateloop run art --complete
-uv run updateloop run art --archive
-uv run updateloop run art --complete --archive
+uv run updateloop run artwork
+uv run updateloop run artwork --complete
+uv run updateloop run artwork --archive
+uv run updateloop run artwork --complete --archive
 uv run updateloop run CN EN
 uv run updateloop run
 uv run updateloop run CN --force
-uv run updateloop run art --no-cache
+uv run updateloop run artwork --no-cache
 uv run updateloop run --suppress-incomplete-upstream-warnings
 ```
 
 Choose a mode based on the data you need to publish:
 
-- `run art` updates art that changed since the published art version
-- `run art --complete` rebuilds the recorded Windows art history and retains the newest record for each logical identity
-- `run art --archive` archives every missing historical CN/Windows asset-bundle wrapper
-- `run art --complete --archive` archives history, then rebuilds the database from the same version sequence
+- `run artwork` updates artwork that changed since the published artwork version
+- `run artwork --complete` rebuilds the recorded Windows artwork history and retains the newest record for each logical identity
+- `run artwork --archive` archives every missing historical CN/Windows asset-bundle wrapper
+- `run artwork --complete --archive` archives history, then rebuilds the database from the same version sequence
 - `run CN EN` updates only the selected locales
-- `run` updates art and all five locales
+- `run` updates artwork and all five locales
 - `--force` rebuilds selected locales at their current versions
 - `--no-cache` uses temporary storage without reading or writing `.cache`
-- `--suppress-incomplete-upstream-warnings` hides expected warnings for missing upstream story text, art, or empty locale sections
+- `--suppress-incomplete-upstream-warnings` hides expected warnings for missing upstream story text, artwork, or empty locale sections
 
 The command removes duplicate units while preserving their first occurrence. It detects every requested unit concurrently and publishes nothing if detection or preparation fails.
 
-`--complete` requires `art` as the only unit. You cannot combine it with `--force`. The command may backfill a database that already records the current art version.
+`--complete` requires `artwork` as the only unit. You cannot combine it with `--force`. The command may backfill a database that already records the current artwork version.
 
-`--archive` requires a request containing `art`; a bare `run --archive` is valid because the default request includes art. The first archive starts with a full snapshot of the oldest recorded Windows version, then stores only new or changed wrappers for each later version. Later runs resume after the newest archived `hot_update_list.json`. Archive preparation must finish before database publication begins.
+`--archive` requires a request containing `artwork`; a bare `run --archive` is valid because the default request includes artwork. The first archive starts with a full snapshot of the oldest recorded Windows version, then stores only new or changed wrappers for each later version. Later runs resume after the newest archived `hot_update_list.json`. Archive preparation must finish before database publication begins.
 
-`--force` supports locale-only updates. The updater rejects forced art updates because one art version prefix must keep one meaning.
+`--force` supports locale-only updates. The updater rejects forced artwork updates because one artwork version prefix must keep one meaning.
 
 ## Understand the publication boundary
 
@@ -54,7 +54,7 @@ These rules protect the visible database:
 - S3 bucket versioning retains overwritten database generations
 - One logical writer must own each bucket because publication has no lock or compare-and-swap token
 
-Missing upstream data remains publishable when the database can represent it. Missing story text removes directive-derived art references, unresolved art references remain in locale metadata, and empty story or gallery sections emit warnings.
+Missing upstream data remains publishable when the database can represent it. Missing story text removes directive-derived artwork references, unresolved artwork references remain in locale metadata, and empty story or gallery sections emit warnings.
 
 Read [Publication and storage](docs/publication.md) for the transaction, object-key, cache, execution, and failure contracts.
 
@@ -79,12 +79,12 @@ Use these optional variables when their defaults do not fit the deployment:
 - `ARKWAIFU_ARCHIVE_S3_REGION`: defaults to `sgp1`
 - `ARKWAIFU_ARCHIVE_S3_BUCKET`: defaults to `arkwaifu-ab`
 - `ARKWAIFU_ARCHIVE_S3_PATH_STYLE`: defaults to `false`
-- `ARKWAIFU_ART_VERSION_URL`: overrides the official Windows version endpoint
-- `ARKWAIFU_ART_ASSET_BASE_URL`: overrides the official Windows asset root
-- `ARKWAIFU_DOWNLOAD_WORKERS`: limits concurrent art bundle downloads and defaults to `16`
-- `ARKWAIFU_EXTRACTION_WORKERS`: limits concurrent extraction and composition processes; Python selects the process-pool size when this variable is unset
+- `ARKWAIFU_ARTWORK_VERSION_URL`: overrides the official Windows version endpoint
+- `ARKWAIFU_ARTWORK_ASSET_BASE_URL`: overrides the official Windows asset root
+- `ARKWAIFU_DOWNLOAD_WORKERS`: limits concurrent artwork bundle downloads and defaults to `16`
+- `ARKWAIFU_EXTRACTION_WORKERS`: limits concurrent extraction and Artwork rendering processes; Python selects the process-pool size when this variable is unset
 - `ARKWAIFU_GITHUB_API_URL`: defaults to `https://api.github.com`
-- `ARKWAIFU_GITHUB_TOKEN`: raises the GitHub REST API rate limit for requests such as art-version history; public story-history clones do not use it
+- `ARKWAIFU_GITHUB_TOKEN`: raises the GitHub REST API rate limit for requests such as artwork-version history; public story-history clones do not use it
 
 Size `ARKWAIFU_EXTRACTION_WORKERS` for both CPU capacity and peak memory.
 
@@ -104,7 +104,9 @@ Keep production credentials in the ignored `.env.prod` and opt into them explici
 uv run --env-file .env.prod updateloop run
 ```
 
-Set `ARKWAIFU_ART_VERSION_URL` and `ARKWAIFU_ART_ASSET_BASE_URL` together when you use a compatible Windows mirror. The automatic pipeline does not extract Android assets.
+Set `ARKWAIFU_ARTWORK_VERSION_URL` and `ARKWAIFU_ARTWORK_ASSET_BASE_URL` together when you use a compatible Windows mirror. The automatic pipeline does not extract Android assets.
+
+The updater reads the `ARKWAIFU_ARTWORK_*` mirror variables above. The older `ARKWAIFU_ART_*` names are no longer supported and are ignored.
 
 Read [Upstream data and locale classification](docs/upstream-data.md) for source provenance, version checks, story classification, and historical text recovery.
 
@@ -120,13 +122,13 @@ uv run updateloop run
 
 Use `--no-cache` for an isolated run. The temporary cache remains available until the SQLite transaction, image uploads, and database upload finish.
 
-A first complete art update can require substantial local storage. Historical art runs used 10 to 12 GiB, so reserve at least 15 GiB for the project cache. A first asset-bundle archive downloads every bundle changed across the recorded history and can require considerably more network transfer and object storage.
+A first complete artwork update can require substantial local storage. Historical artwork runs used 10 to 12 GiB, so reserve at least 15 GiB for the project cache. A first asset-bundle archive downloads every bundle changed across the recorded history and can require considerably more network transfer and object storage.
 
-## Recover unavailable art manually
+## Recover unavailable artwork manually
 
-The service reads selected object keys from SQLite, so uploading an image without updating the database does not expose it. Use the manual procedure only when official Windows history cannot provide an art identity.
+The service reads selected object keys from SQLite, so uploading an image without updating the database does not expose it. Use the manual procedure only when official Windows history cannot provide an artwork identity.
 
-Follow [Add fallback art manually](docs/manual-fallback-art.md) to upload the image, update the relevant SQLite rows, and publish the database last.
+Follow [Add fallback artwork manually](docs/manual-fallback-artwork.md) to upload the image, update the relevant SQLite rows, and publish the database last.
 
 ## Run development checks
 

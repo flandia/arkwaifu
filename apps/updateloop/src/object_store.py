@@ -1,4 +1,4 @@
-"""Store the Arkwaifu database and art objects in S3-compatible storage."""
+"""Store the Arkwaifu database and archive assets in S3-compatible storage."""
 
 from __future__ import annotations
 
@@ -16,7 +16,7 @@ from .domain import FileAudioArtifact, FileVideoArtifact, PngImage
 DATABASE_OBJECT_KEY = "arkwaifu.sqlite3"
 _DATABASE_CONTENT_TYPE = "application/vnd.sqlite3"
 _PNG_CONTENT_TYPE = "image/png"
-_PNG_CACHE_CONTROL = "public, max-age=31536000, immutable"
+_IMMUTABLE_CACHE_CONTROL = "public, max-age=31536000, immutable"
 _THUMBNAIL_CONTENT_TYPE = "image/webp"
 _MAX_POOL_CONNECTIONS = 16
 
@@ -35,7 +35,7 @@ def _is_missing(error: ClientError) -> bool:
 
 
 class ObjectStore(Protocol):
-    """Pull and push the database and its art objects."""
+    """Pull and push the database and its archive assets."""
 
     async def pull_database(self, destination: Path) -> bool:
         """Download the current database, returning false when it does not exist."""
@@ -46,7 +46,7 @@ class ObjectStore(Protocol):
         ...
 
     async def put_png(self, key: str, artifact: PngImage) -> None:
-        """Create one immutable composition or source PNG object."""
+        """Create one immutable archive-asset PNG object."""
         ...
 
     async def put_thumbnail(self, key: str, content: bytes) -> None:
@@ -63,7 +63,7 @@ class ObjectStore(Protocol):
 
 
 class S3ObjectStore:
-    """Store the database and art objects in one versioned S3-compatible bucket.
+    """Store the database and archive assets in one versioned S3-compatible bucket.
 
     The updater leaves bucket policy and lifecycle management to the operator.
     """
@@ -141,7 +141,7 @@ class S3ObjectStore:
             "Key": key,
             "ContentLength": artifact.byte_size,
             "ContentType": _PNG_CONTENT_TYPE,
-            "CacheControl": _PNG_CACHE_CONTROL,
+            "CacheControl": _IMMUTABLE_CACHE_CONTROL,
         }
         if artifact.path is None:
             self._client.put_object(Body=artifact.content, **request)
@@ -171,7 +171,7 @@ class S3ObjectStore:
                 Body=content,
                 ContentLength=artifact.byte_size,
                 ContentType=artifact.content_type,
-                CacheControl=_PNG_CACHE_CONTROL,
+                CacheControl=_IMMUTABLE_CACHE_CONTROL,
             )
 
     async def put_audio(self, key: str, artifact: FileAudioArtifact) -> None:
@@ -196,7 +196,7 @@ class S3ObjectStore:
                 Body=content,
                 ContentLength=artifact.byte_size,
                 ContentType=artifact.content_type,
-                CacheControl=_PNG_CACHE_CONTROL,
+                CacheControl=_IMMUTABLE_CACHE_CONTROL,
             )
 
     async def put_thumbnail(self, key: str, content: bytes) -> None:
@@ -220,7 +220,7 @@ class S3ObjectStore:
         expected = {
             "ContentLength": artifact.byte_size,
             "ContentType": _PNG_CONTENT_TYPE,
-            "CacheControl": _PNG_CACHE_CONTROL,
+            "CacheControl": _IMMUTABLE_CACHE_CONTROL,
         }
         mismatches = {
             name: (metadata.get(name), value)
@@ -245,7 +245,7 @@ class S3ObjectStore:
         expected = {
             "ContentLength": artifact.byte_size,
             "ContentType": artifact.content_type,
-            "CacheControl": _PNG_CACHE_CONTROL,
+            "CacheControl": _IMMUTABLE_CACHE_CONTROL,
         }
         mismatches = {
             name: (metadata.get(name), value)
@@ -270,7 +270,7 @@ class S3ObjectStore:
         expected = {
             "ContentLength": artifact.byte_size,
             "ContentType": artifact.content_type,
-            "CacheControl": _PNG_CACHE_CONTROL,
+            "CacheControl": _IMMUTABLE_CACHE_CONTROL,
         }
         mismatches = {
             name: (metadata.get(name), value)
@@ -286,7 +286,7 @@ class S3ObjectStore:
 
 
 class MemoryObjectStore:
-    """Store database and art bytes in memory for deterministic updater tests."""
+    """Store database and archive-asset bytes in memory for deterministic tests."""
 
     def __init__(self) -> None:
         """Create an empty in-memory object store."""

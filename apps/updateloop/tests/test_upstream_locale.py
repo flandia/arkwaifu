@@ -168,7 +168,7 @@ def _missing_story_files() -> dict[str, object | str]:
                     "pics": {
                         "opening": {
                             "id": "opening",
-                            "assetPath": "opening_art",
+                            "assetPath": "opening_artwork",
                             "desc": "Opening",
                         }
                     }
@@ -338,8 +338,8 @@ async def test_locale_builder_uses_master_version_id_and_reuses_cached_archive(
     assert version_requests == 1
     assert manifest.unit == "EN"
     assert manifest.upstream_version == "data-version"
-    assert manifest.archive_groups[0].stories[0].art_references[0].title == "Event"
-    assert manifest.archive_groups[0].archive_kind == "events"
+    assert manifest.archive_groups[0].stories[0].artwork_references[0].title == "Event"
+    assert manifest.archive_groups[0].archive_category == "events"
     assert manifest.archive_groups[0].story_type == "side_story"
     assert cached_manifest == manifest
     assert zip_downloads == 1
@@ -473,10 +473,10 @@ async def test_locale_builder_recovers_latest_existing_story_and_caches_it(
     history_directory = Path(builder._history_directory.name)
 
     assert [
-        reference.art_id
+        reference.asset_id
         for story in manifest.archive_groups[0].stories
-        for reference in story.art_references
-    ] == ["opening_art"]
+        for reference in story.artwork_references
+    ] == ["OPENING_ART"]
     assert history_directory.is_dir()
     await builder.aclose()
     assert not history_directory.exists()
@@ -541,10 +541,10 @@ async def test_locale_builder_uses_the_first_history_source_containing_the_story
     manifest = await builder.build("EN", "data-version", None, False)
 
     assert [
-        reference.art_id
+        reference.asset_id
         for story in manifest.archive_groups[0].stories
-        for reference in story.art_references
-    ] == ["yostar_art"]
+        for reference in story.artwork_references
+    ] == ["YOSTAR_ART"]
     assert len(builder._history_clone_tasks) == 2
     assert (later_url, "master") not in builder._history_clone_tasks
     await builder.aclose()
@@ -600,14 +600,14 @@ async def test_concurrent_locales_share_one_history_clone(tmp_path, monkeypatch)
             builder.build("JP", "jp-version", None, False),
         )
 
-        def art_ids(manifest: LocaleManifest) -> list[str]:
+        def asset_ids(manifest: LocaleManifest) -> list[str]:
             return [
-                reference.art_id
+                reference.asset_id
                 for story in manifest.archive_groups[0].stories
-                for reference in story.art_references
+                for reference in story.artwork_references
             ]
 
-        assert (art_ids(en), art_ids(jp)) == (["en_art"], ["jp_art"])
+        assert (asset_ids(en), asset_ids(jp)) == (["EN_ART"], ["JP_ART"])
         assert clone_calls == 1
         assert len(builder._history_clone_tasks) == 1
     finally:

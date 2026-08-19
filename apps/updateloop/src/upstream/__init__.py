@@ -1,11 +1,11 @@
-"""Pull art and locale data from their upstream sources."""
+"""Pull artwork and locale data from their upstream sources."""
 
-from .art import UpstreamArtBuilder
+from .artwork import UpstreamArtworkBuilder
 from .cache import UpstreamCache
 from .locale import UpstreamLocaleBuilder
 
 __all__ = [  # noqa: RUF022 - preserve the established public API order
-    "UpstreamArtBuilder",
+    "UpstreamArtworkBuilder",
     "UpstreamLocaleBuilder",
     "UpstreamCache",
 ]

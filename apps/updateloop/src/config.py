@@ -52,8 +52,8 @@ class Settings:
     archive_s3_region: str
     archive_s3_bucket: str
     archive_s3_path_style: bool
-    art_version_url: str
-    art_asset_base_url: str
+    artwork_version_url: str
+    artwork_asset_base_url: str
     github_api_url: str
     github_token: str | None
     download_workers: int
@@ -83,12 +83,12 @@ class Settings:
                 "ARKWAIFU_ARCHIVE_S3_PATH_STYLE",
                 default=False,
             ),
-            art_version_url=os.environ.get(
-                "ARKWAIFU_ART_VERSION_URL",
+            artwork_version_url=os.environ.get(
+                "ARKWAIFU_ARTWORK_VERSION_URL",
                 "https://ak-conf.hypergryph.com/config/prod/official/Windows/version",
             ),
-            art_asset_base_url=os.environ.get(
-                "ARKWAIFU_ART_ASSET_BASE_URL",
+            artwork_asset_base_url=os.environ.get(
+                "ARKWAIFU_ARTWORK_ASSET_BASE_URL",
                 "https://ak.hycdn.cn/assetbundle/official/Windows/assets",
             ).rstrip("/"),
             github_api_url=os.environ.get(

@@ -7,7 +7,7 @@ from uuid import uuid4
 import pytest
 
 from arkwaifu_updateloop import MemoryObjectStore, Updater, UpdateRequest
-from arkwaifu_updateloop.art import build_art_manifest
+from arkwaifu_updateloop.artwork import build_artwork_manifest
 from arkwaifu_updateloop.extraction import extract_assets
 
 pytestmark = pytest.mark.skipif(
@@ -21,20 +21,20 @@ async def test_real_bundle_extracts_processes_and_publishes(tmp_path: Path):
     extracted = tmp_path / "extracted"
     extract_assets([bundle], extracted, workers=1)
     version = f"bundle-fixture-{uuid4().hex}"
-    manifest = build_art_manifest(extracted, version)
+    manifest = build_artwork_manifest(extracted, version)
 
-    assert "avg_4193_lemuen_1#1$1" in {art.id for art in manifest.arts}
-    assert len(manifest.arts) == 26
-    assert len(manifest.source_arts) == 26
-    assert {source.role for source in manifest.source_arts} == {"whole_body"}
+    assert "avg_4193_lemuen_1#1$1" in {artwork.id for artwork in manifest.artworks}
+    assert len(manifest.artworks) == 26
+    assert len(manifest.source_layers) == 26
+    assert {source.role for source in manifest.source_layers} == {"whole_body"}
 
     remote = MemoryObjectStore()
 
     async def build(_active, _force):
         return manifest
 
-    result = await Updater(remote).run([UpdateRequest("art", version, build)])
+    result = await Updater(remote).run([UpdateRequest("artwork", version, build)])
     assert result[0].status == "updated"
     assert remote.database is not None
-    assert len(remote.objects) == (2 * len(manifest.arts)) + len(manifest.source_arts)
+    assert len(remote.objects) == (2 * len(manifest.artworks)) + len(manifest.source_layers)
     assert all(key.startswith(f"ART/{version}/") for key in remote.objects)

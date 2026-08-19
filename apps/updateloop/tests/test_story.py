@@ -122,7 +122,7 @@ def test_typo_directive_alias_is_declared_but_not_resource_indexed():
     assert story_module._directive_name(parse_directives("[palysound(name=fx)]")[0]) == "playsound"
 
 
-def test_story_directives_project_new_art_and_media_references():
+def test_story_directives_project_new_artwork_and_media_references():
     directives = parse_directives(
         '[avgdisplay(name="act3mainss_01",style="animekv")]'
         '[avgdisplay(name="bg_black",style="bg")]'
@@ -137,19 +137,19 @@ def test_story_directives_project_new_art_and_media_references():
     pictures = story_module._pictures(directives, {})
     media = story_module._media_references(directives)
 
-    assert [(reference.art_id, reference.category) for reference in pictures] == [
+    assert [(reference.asset_id, reference.category) for reference in pictures] == [
         ("act3mainss_01", "background"),
         ("bg_black", "background"),
         ("bg_a", "background"),
         ("bg_b", "background"),
         ("cgitem_71_i01", "item"),
     ]
-    assert [(reference.kind, reference.media_id) for reference in media] == [
+    assert [(reference.kind, reference.asset_id) for reference in media] == [
         ("music", "m_sys_loop"),
         ("music", "m_sys_intro"),
         ("sound", "flashback"),
         ("sound", "clothmovement"),
-        ("video", "video/act53side/to01.mp4"),
+        ("video", "video/act53side/TO01.mp4"),
     ]
 
 
@@ -167,7 +167,7 @@ def test_story_media_references_resolve_story_variables():
         },
     )
 
-    assert [(reference.kind, reference.media_id) for reference in media] == [
+    assert [(reference.kind, reference.asset_id) for reference in media] == [
         ("music", "g_ui_stagepush"),
         ("music", "m_sys_intro"),
         ("sound", "d_avg_blooddrop"),
@@ -263,7 +263,7 @@ def test_story_parser_preserves_order_metadata_and_character_names(tmp_path: Pat
     (group,) = _archive_groups(tmp_path)
     (story,) = group.stories
 
-    assert (group.id, group.archive_kind, group.story_type) == (
+    assert (group.id, group.archive_category, group.story_type) == (
         "group",
         "events",
         "side_story",
@@ -274,15 +274,15 @@ def test_story_parser_preserves_order_metadata_and_character_names(tmp_path: Pat
         "before",
     )
     assert story.info == "Story info"
-    assert [reference.art_id for reference in story.art_references] == [
-        "bg_room",
-        "event",
-        "item_one",
-        "char_test#2$1",
+    assert [reference.asset_id for reference in story.artwork_references] == [
+        "BG_ROOM",
+        "EVENT",
+        "ITEM_ONE",
+        "CHAR_TEST#2$1",
     ]
-    assert story.art_references[1].title == "Title"
-    assert story.art_references[1].subtitle == "Subtitle"
-    assert story.art_references[3].names == ("Amiya", "Doctor", "Kal'tsit", "Closure")
+    assert story.artwork_references[1].title == "Title"
+    assert story.artwork_references[1].subtitle == "Subtitle"
+    assert story.artwork_references[3].names == ("Amiya", "Doctor", "Kal'tsit", "Closure")
 
 
 @pytest.mark.parametrize(
@@ -396,8 +396,8 @@ def test_story_parser_resolves_character_variables(tmp_path: Path):
 
     (group,) = _archive_groups(tmp_path)
 
-    (reference,) = group.stories[0].art_references
-    assert reference.art_id == "char_002_amiya_1#1$1"
+    (reference,) = group.stories[0].artwork_references
+    assert reference.asset_id == "char_002_amiya_1#1$1"
     assert reference.names == ("Amiya",)
 
 
@@ -457,7 +457,7 @@ def test_missing_story_text_warns_and_keeps_story(tmp_path: Path, caplog):
 
     (story,) = group.stories
     assert story.id == "story"
-    assert story.art_references == ()
+    assert story.artwork_references == ()
     assert "story_id=story" in caplog.text
     assert "gamedata/story/missing/story.txt" in caplog.text
 
@@ -685,8 +685,8 @@ def test_story_parser_classifies_records_endings_reclamation_and_others(tmp_path
 
     groups = _archive_groups(tmp_path)
     by_type = {
-        archive_kind: [group for group in groups if group.archive_kind == archive_kind]
-        for archive_kind in {group.archive_kind for group in groups}
+        archive_category: [group for group in groups if group.archive_category == archive_category]
+        for archive_category in {group.archive_category for group in groups}
     }
 
     (record,) = by_type["operator_record"]

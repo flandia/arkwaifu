@@ -1,7 +1,7 @@
 [project]
 name = "arkwaifu-updateloop"
 version = "0.1.0"
-description = "Update Arkwaifu art and locale data"
+description = "Update Arkwaifu artwork and locale data"
 readme = "README.md"
 requires-python = ">=3.14,<3.15"
 dependencies = [

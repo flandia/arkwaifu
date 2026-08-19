@@ -8,11 +8,11 @@ from collections.abc import Mapping, Sequence
 from importlib.resources import files
 from pathlib import Path
 
-from .domain import ArtManifest, FileAudioArtifact, FileVideoArtifact, LocaleManifest
+from .domain import ArtworkManifest, FileAudioArtifact, FileVideoArtifact, LocaleManifest
 
 SCHEMA_VERSION = 2
-_ART_REFERENCE_INDEX = "story_art_references_by_art"
-_ART_REFERENCE_INDEX_COLUMNS = ("locale", "art_id")
+_NARRATIVE_IMAGE_REFERENCE_INDEX = "story_narrative_image_references_by_asset"
+_NARRATIVE_IMAGE_REFERENCE_INDEX_COLUMNS = ("locale", "category", "asset_id")
 
 
 def _connect(path: Path) -> sqlite3.Connection:
@@ -46,17 +46,19 @@ def _ensure_performance_indexes(path: Path) -> bool:
     connection = _connect(path)
     try:
         columns = tuple(
-            str(row[2]) for row in connection.execute(f"PRAGMA index_info({_ART_REFERENCE_INDEX})")
+            str(row[2])
+            for row in connection.execute(f"PRAGMA index_info({_NARRATIVE_IMAGE_REFERENCE_INDEX})")
         )
-        if columns == _ART_REFERENCE_INDEX_COLUMNS:
+        if columns == _NARRATIVE_IMAGE_REFERENCE_INDEX_COLUMNS:
             return False
         if columns:
             raise ValueError(
-                f"SQLite index {_ART_REFERENCE_INDEX} has columns {columns}, "
-                f"expected {_ART_REFERENCE_INDEX_COLUMNS}"
+                f"SQLite index {_NARRATIVE_IMAGE_REFERENCE_INDEX} has columns {columns}, "
+                f"expected {_NARRATIVE_IMAGE_REFERENCE_INDEX_COLUMNS}"
             )
         connection.execute(
-            f"CREATE INDEX {_ART_REFERENCE_INDEX} ON story_art_references (locale, art_id)"
+            f"CREATE INDEX {_NARRATIVE_IMAGE_REFERENCE_INDEX} "
+            "ON story_narrative_image_references (locale, category, asset_id)"
         )
         return True
     finally:
@@ -94,10 +96,10 @@ def read_versions(path: Path) -> dict[str, str]:
 
 def apply_changes(
     path: Path,
-    manifests: Sequence[ArtManifest | LocaleManifest],
+    manifests: Sequence[ArtworkManifest | LocaleManifest],
     *,
-    art_keys: Mapping[tuple[str, str], str],
-    source_keys: Mapping[tuple[str, str], str],
+    artwork_keys: Mapping[tuple[str, str], str],
+    source_layer_keys: Mapping[tuple[str, str], str],
     score_asset_keys: Mapping[tuple[str, str], str],
     score_video_keys: Mapping[str, str],
     media_keys: Mapping[tuple[str, str], str] | None = None,
@@ -109,12 +111,12 @@ def apply_changes(
         connection.execute("BEGIN IMMEDIATE")
         try:
             for manifest in manifests:
-                if isinstance(manifest, ArtManifest):
-                    _apply_art(
+                if isinstance(manifest, ArtworkManifest):
+                    _apply_artwork(
                         connection,
                         manifest,
-                        art_keys,
-                        source_keys,
+                        artwork_keys,
+                        source_layer_keys,
                         score_asset_keys,
                         score_video_keys,
                         media_keys or {},
@@ -131,11 +133,11 @@ def apply_changes(
             str(row[0])
             for row in connection.execute(
                 """
-                SELECT object_key FROM arts
-                UNION SELECT object_key FROM source_arts
-                UNION SELECT object_key FROM score_assets
-                UNION SELECT object_key FROM score_videos
-                UNION SELECT object_key FROM media_assets
+                SELECT object_key FROM narrative_image_assets
+                UNION SELECT object_key FROM material_assets
+                UNION SELECT object_key FROM presentation_image_assets
+                UNION SELECT object_key FROM presentation_video_assets
+                UNION SELECT object_key FROM narrative_media_assets
                 """
             )
         )
@@ -143,95 +145,99 @@ def apply_changes(
         connection.close()
 
 
-def _apply_art(
+def _apply_artwork(
     connection: sqlite3.Connection,
-    manifest: ArtManifest,
-    art_keys: Mapping[tuple[str, str], str],
-    source_keys: Mapping[tuple[str, str], str],
+    manifest: ArtworkManifest,
+    artwork_keys: Mapping[tuple[str, str], str],
+    source_layer_keys: Mapping[tuple[str, str], str],
     score_asset_keys: Mapping[tuple[str, str], str],
     score_video_keys: Mapping[str, str],
     media_keys: Mapping[tuple[str, str], str],
 ) -> None:
     connection.execute(
         """
-        INSERT INTO unit_versions (unit, res_version) VALUES ('art', ?)
+        INSERT INTO unit_versions (unit, res_version) VALUES ('artwork', ?)
         ON CONFLICT (unit) DO UPDATE SET res_version = excluded.res_version
         """,
         (manifest.upstream_version,),
     )
     candidate_schema = """
-        DROP TABLE IF EXISTS candidate_art_source_refs;
-        DROP TABLE IF EXISTS candidate_arts;
-        DROP TABLE IF EXISTS candidate_source_arts;
-        DROP TABLE IF EXISTS candidate_score_assets;
-        DROP TABLE IF EXISTS candidate_score_videos;
-        DROP TABLE IF EXISTS candidate_media_assets;
+        DROP TABLE IF EXISTS candidate_narrative_asset_material_references;
+        DROP TABLE IF EXISTS candidate_narrative_image_assets;
+        DROP TABLE IF EXISTS candidate_material_assets;
+        DROP TABLE IF EXISTS candidate_presentation_image_assets;
+        DROP TABLE IF EXISTS candidate_presentation_video_assets;
+        DROP TABLE IF EXISTS candidate_narrative_media_assets;
 
-        CREATE TEMP TABLE candidate_source_arts (
+        CREATE TEMP TABLE candidate_material_assets (
             category TEXT NOT NULL,
-            source_art_id TEXT NOT NULL,
-            kind TEXT NOT NULL,
+            asset_id TEXT NOT NULL,
+            material_type TEXT NOT NULL,
             character_id TEXT,
             role TEXT,
             variant TEXT,
             object_key TEXT NOT NULL UNIQUE,
-            byte_size INTEGER NOT NULL CHECK (byte_size > 0),
+            size INTEGER NOT NULL CHECK (size > 0),
             width INTEGER NOT NULL CHECK (width > 0),
             height INTEGER NOT NULL CHECK (height > 0),
-            PRIMARY KEY (category, source_art_id)
+            PRIMARY KEY (category, asset_id)
         ) STRICT;
-        CREATE TEMP TABLE candidate_arts (
+        CREATE TEMP TABLE candidate_narrative_image_assets (
             category TEXT NOT NULL,
-            art_id TEXT NOT NULL,
-            object_key TEXT NOT NULL UNIQUE,
-            byte_size INTEGER NOT NULL CHECK (byte_size > 0),
-            width INTEGER NOT NULL CHECK (width > 0),
-            height INTEGER NOT NULL CHECK (height > 0),
-            PRIMARY KEY (category, art_id)
-        ) STRICT;
-        CREATE TEMP TABLE candidate_art_source_refs (
-            category TEXT NOT NULL,
-            art_id TEXT NOT NULL,
-            position INTEGER NOT NULL CHECK (position >= 0),
-            source_category TEXT NOT NULL,
-            source_art_id TEXT NOT NULL,
-            PRIMARY KEY (category, art_id, position),
-            UNIQUE (category, art_id, source_category, source_art_id),
-            FOREIGN KEY (category, art_id)
-                REFERENCES candidate_arts (category, art_id) ON DELETE CASCADE
-        ) STRICT;
-        CREATE TEMP TABLE candidate_score_assets (
-            asset_kind TEXT NOT NULL,
             asset_id TEXT NOT NULL,
             object_key TEXT NOT NULL UNIQUE,
-            byte_size INTEGER NOT NULL CHECK (byte_size > 0),
+            size INTEGER NOT NULL CHECK (size > 0),
             width INTEGER NOT NULL CHECK (width > 0),
             height INTEGER NOT NULL CHECK (height > 0),
-            PRIMARY KEY (asset_kind, asset_id)
+            PRIMARY KEY (category, asset_id)
         ) STRICT;
-        CREATE TEMP TABLE candidate_score_videos (
-            video_id TEXT PRIMARY KEY,
+        CREATE TEMP TABLE candidate_narrative_asset_material_references (
+            category TEXT NOT NULL,
+            asset_id TEXT NOT NULL,
+            position INTEGER NOT NULL CHECK (position >= 0),
+            material_category TEXT NOT NULL,
+            material_asset_id TEXT NOT NULL,
+            PRIMARY KEY (category, asset_id, position),
+            UNIQUE (category, asset_id, material_category, material_asset_id),
+            FOREIGN KEY (category, asset_id)
+                REFERENCES candidate_narrative_image_assets (category, asset_id) ON DELETE CASCADE
+        ) STRICT;
+        CREATE TEMP TABLE candidate_presentation_image_assets (
+            category TEXT NOT NULL,
+            asset_id TEXT NOT NULL,
             object_key TEXT NOT NULL UNIQUE,
-            byte_size INTEGER NOT NULL CHECK (byte_size > 0),
+            size INTEGER NOT NULL CHECK (size > 0),
+            width INTEGER NOT NULL CHECK (width > 0),
+            height INTEGER NOT NULL CHECK (height > 0),
+            PRIMARY KEY (category, asset_id)
+        ) STRICT;
+        CREATE TEMP TABLE candidate_presentation_video_assets (
+            category TEXT NOT NULL CHECK (category = 'video'),
+            asset_id TEXT NOT NULL,
+            object_key TEXT NOT NULL UNIQUE,
+            mime TEXT NOT NULL,
+            size INTEGER NOT NULL CHECK (size > 0),
             width INTEGER NOT NULL CHECK (width > 0),
             height INTEGER NOT NULL CHECK (height > 0),
             frame_rate_numerator INTEGER NOT NULL CHECK (frame_rate_numerator > 0),
             frame_rate_denominator INTEGER NOT NULL CHECK (frame_rate_denominator > 0),
-            frame_count INTEGER NOT NULL CHECK (frame_count > 0)
+            frame_count INTEGER NOT NULL CHECK (frame_count > 0),
+            PRIMARY KEY (category, asset_id)
         ) STRICT;
-        CREATE TEMP TABLE candidate_media_assets (
-            media_kind TEXT NOT NULL CHECK (media_kind IN ('audio', 'video')),
-            media_id TEXT NOT NULL,
+        CREATE TEMP TABLE candidate_narrative_media_assets (
+            category TEXT NOT NULL CHECK (category IN ('audio', 'video')),
+            asset_id TEXT NOT NULL,
             object_key TEXT NOT NULL UNIQUE,
-            content_type TEXT NOT NULL,
-            byte_size INTEGER NOT NULL CHECK (byte_size > 0),
+            mime TEXT NOT NULL,
+            size INTEGER NOT NULL CHECK (size > 0),
             duration REAL,
+            sample_rate INTEGER,
             width INTEGER,
             height INTEGER,
             frame_rate_numerator INTEGER,
             frame_rate_denominator INTEGER,
             frame_count INTEGER,
-            PRIMARY KEY (media_kind, media_id)
+            PRIMARY KEY (category, asset_id)
         ) STRICT;
         """
     for statement in candidate_schema.split(";"):
@@ -239,9 +245,9 @@ def _apply_art(
             connection.execute(statement)
     connection.executemany(
         """
-        INSERT INTO candidate_source_arts
-            (category, source_art_id, kind, character_id, role, variant,
-             object_key, byte_size, width, height)
+        INSERT INTO candidate_material_assets
+            (category, asset_id, material_type, character_id, role, variant,
+             object_key, size, width, height)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
@@ -252,20 +258,21 @@ def _apply_art(
                 source.character_id,
                 source.role,
                 source.variant,
-                source_keys[(source.category, source.id)],
+                source_layer_keys[(source.category, source.id)],
                 source.image.byte_size,
                 source.image.width,
                 source.image.height,
             )
-            for source in manifest.source_arts
+            for source in manifest.source_layers
         ),
     )
     connection.executemany(
         """
-        INSERT INTO candidate_media_assets
-            (media_kind, media_id, object_key, content_type, byte_size, duration,
-             width, height, frame_rate_numerator, frame_rate_denominator, frame_count)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        INSERT INTO candidate_narrative_media_assets
+            (category, asset_id, object_key, mime, size, duration,
+             sample_rate, width, height, frame_rate_numerator,
+             frame_rate_denominator, frame_count)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             (
@@ -275,6 +282,9 @@ def _apply_art(
                 media.artifact.content_type,
                 media.artifact.byte_size,
                 media.artifact.duration if isinstance(media.artifact, FileAudioArtifact) else None,
+                media.artifact.sample_rate
+                if isinstance(media.artifact, FileAudioArtifact)
+                else None,
                 media.artifact.width if isinstance(media.artifact, FileVideoArtifact) else None,
                 media.artifact.height if isinstance(media.artifact, FileVideoArtifact) else None,
                 media.artifact.frame_rate_numerator
@@ -292,38 +302,38 @@ def _apply_art(
     )
     connection.executemany(
         """
-        INSERT INTO candidate_arts
-            (category, art_id, object_key, byte_size, width, height)
+        INSERT INTO candidate_narrative_image_assets
+            (category, asset_id, object_key, size, width, height)
         VALUES (?, ?, ?, ?, ?, ?)
         """,
         (
             (
-                art.category,
-                art.id,
-                art_keys[(art.category, art.id)],
-                art.image.byte_size,
-                art.image.width,
-                art.image.height,
+                artwork.category,
+                artwork.id,
+                artwork_keys[(artwork.category, artwork.id)],
+                artwork.image.byte_size,
+                artwork.image.width,
+                artwork.image.height,
             )
-            for art in manifest.arts
+            for artwork in manifest.artworks
         ),
     )
     connection.executemany(
         """
-        INSERT INTO candidate_art_source_refs
-            (category, art_id, position, source_category, source_art_id)
+        INSERT INTO candidate_narrative_asset_material_references
+            (category, asset_id, position, material_category, material_asset_id)
         VALUES (?, ?, ?, ?, ?)
         """,
         (
-            (art.category, art.id, position, source.category, source.id)
-            for art in manifest.arts
-            for position, source in enumerate(art.source_art_references)
+            (artwork.category, artwork.id, position, source.category, source.id)
+            for artwork in manifest.artworks
+            for position, source in enumerate(artwork.source_layer_references)
         ),
     )
     connection.executemany(
         """
-        INSERT INTO candidate_score_assets
-            (asset_kind, asset_id, object_key, byte_size, width, height)
+        INSERT INTO candidate_presentation_image_assets
+            (category, asset_id, object_key, size, width, height)
         VALUES (?, ?, ?, ?, ?, ?)
         """,
         (
@@ -340,15 +350,16 @@ def _apply_art(
     )
     connection.executemany(
         """
-        INSERT INTO candidate_score_videos
-            (video_id, object_key, byte_size, width, height,
+        INSERT INTO candidate_presentation_video_assets
+            (category, asset_id, object_key, mime, size, width, height,
              frame_rate_numerator, frame_rate_denominator, frame_count)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES ('video', ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             (
                 video.id,
                 score_video_keys[video.id],
+                video.video.content_type,
                 video.video.byte_size,
                 video.video.width,
                 video.video.height,
@@ -362,59 +373,60 @@ def _apply_art(
 
     connection.execute(
         """
-        INSERT INTO source_arts
-            (category, source_art_id, kind, character_id, role, variant,
-             object_key, byte_size, width, height)
-        SELECT category, source_art_id, kind, character_id, role, variant,
-               object_key, byte_size, width, height
-        FROM candidate_source_arts WHERE true
-        ON CONFLICT (category, source_art_id) DO UPDATE SET
-            kind = excluded.kind,
+        INSERT INTO material_assets
+            (category, asset_id, material_type, character_id, role, variant,
+             object_key, size, width, height)
+        SELECT category, asset_id, material_type, character_id, role, variant,
+               object_key, size, width, height
+        FROM candidate_material_assets WHERE true
+        ON CONFLICT (category, asset_id) DO UPDATE SET
+            material_type = excluded.material_type,
             character_id = excluded.character_id,
             role = excluded.role,
             variant = excluded.variant,
             object_key = excluded.object_key,
-            byte_size = excluded.byte_size,
+            size = excluded.size,
             width = excluded.width,
             height = excluded.height
         """
     )
     connection.execute(
         """
-        INSERT INTO arts (category, art_id, object_key, byte_size, width, height)
-        SELECT category, art_id, object_key, byte_size, width, height
-        FROM candidate_arts WHERE true
-        ON CONFLICT (category, art_id) DO UPDATE SET
+        INSERT INTO narrative_image_assets (category, asset_id, object_key, size, width, height)
+        SELECT category, asset_id, object_key, size, width, height
+        FROM candidate_narrative_image_assets WHERE true
+        ON CONFLICT (category, asset_id) DO UPDATE SET
             object_key = excluded.object_key,
-            byte_size = excluded.byte_size,
+            size = excluded.size,
             width = excluded.width,
             height = excluded.height
         """
     )
     connection.execute(
         """
-        INSERT INTO score_assets
-            (asset_kind, asset_id, object_key, byte_size, width, height)
-        SELECT asset_kind, asset_id, object_key, byte_size, width, height
-        FROM candidate_score_assets WHERE true
-        ON CONFLICT (asset_kind, asset_id) DO UPDATE SET
+        INSERT INTO presentation_image_assets
+            (category, asset_id, object_key, size, width, height)
+        SELECT category, asset_id, object_key, size, width, height
+        FROM candidate_presentation_image_assets WHERE true
+        ON CONFLICT (category, asset_id) DO UPDATE SET
             object_key = excluded.object_key,
-            byte_size = excluded.byte_size,
+            size = excluded.size,
             width = excluded.width,
             height = excluded.height
         """
     )
     connection.execute(
         """
-        INSERT INTO score_videos
-            (video_id, object_key, byte_size, width, height,
+        INSERT INTO presentation_video_assets
+            (category, asset_id, object_key, mime, size, width, height,
              frame_rate_numerator, frame_rate_denominator, frame_count)
-        SELECT video_id, object_key, byte_size, width, height,
+        SELECT category, asset_id, object_key, mime, size, width, height,
                frame_rate_numerator, frame_rate_denominator, frame_count
-        FROM candidate_score_videos WHERE true
-        ON CONFLICT (video_id) DO UPDATE SET
+        FROM candidate_presentation_video_assets WHERE true
+        ON CONFLICT (category, asset_id) DO UPDATE SET
             object_key = excluded.object_key,
-            byte_size = excluded.byte_size,
+            mime = excluded.mime,
+            size = excluded.size,
             width = excluded.width,
             height = excluded.height,
             frame_rate_numerator = excluded.frame_rate_numerator,
@@ -424,23 +436,26 @@ def _apply_art(
     )
     connection.execute(
         """
-        DELETE FROM art_source_refs
-        WHERE (category, art_id) IN (SELECT category, art_id FROM candidate_arts)
+        DELETE FROM narrative_asset_material_references
+        WHERE (category, asset_id) IN (SELECT category, asset_id FROM candidate_narrative_image_assets)
         """
     )
     connection.execute(
         """
-        INSERT INTO media_assets
-            (media_kind, media_id, object_key, content_type, byte_size, duration,
-             width, height, frame_rate_numerator, frame_rate_denominator, frame_count)
-        SELECT media_kind, media_id, object_key, content_type, byte_size, duration,
-               width, height, frame_rate_numerator, frame_rate_denominator, frame_count
-        FROM candidate_media_assets WHERE true
-        ON CONFLICT (media_kind, media_id) DO UPDATE SET
+        INSERT INTO narrative_media_assets
+            (category, asset_id, object_key, mime, size, duration,
+             sample_rate, width, height, frame_rate_numerator,
+             frame_rate_denominator, frame_count)
+        SELECT category, asset_id, object_key, mime, size, duration,
+               sample_rate, width, height, frame_rate_numerator,
+               frame_rate_denominator, frame_count
+        FROM candidate_narrative_media_assets WHERE true
+        ON CONFLICT (category, asset_id) DO UPDATE SET
             object_key = excluded.object_key,
-            content_type = excluded.content_type,
-            byte_size = excluded.byte_size,
+            mime = excluded.mime,
+            size = excluded.size,
             duration = excluded.duration,
+            sample_rate = excluded.sample_rate,
             width = excluded.width,
             height = excluded.height,
             frame_rate_numerator = excluded.frame_rate_numerator,
@@ -450,10 +465,10 @@ def _apply_art(
     )
     connection.execute(
         """
-        INSERT INTO art_source_refs
-            (category, art_id, position, source_category, source_art_id)
-        SELECT category, art_id, position, source_category, source_art_id
-        FROM candidate_art_source_refs
+        INSERT INTO narrative_asset_material_references
+            (category, asset_id, position, material_category, material_asset_id)
+        SELECT category, asset_id, position, material_category, material_asset_id
+        FROM candidate_narrative_asset_material_references
         """
     )
 
@@ -471,10 +486,7 @@ def _replace_locale(connection: sqlite3.Connection, manifest: LocaleManifest) ->
         VALUES (?, ?, ?)
         """,
         (
-            *(
-                (unit, section.collection_id, "movement_section")
-                for section in manifest.movement_sections
-            ),
+            *((unit, section.collection_id, "section") for section in manifest.sections),
             *(
                 (unit, archive.collection_id, "archive_group")
                 for archive in manifest.archive_groups
@@ -506,7 +518,7 @@ def _replace_locale(connection: sqlite3.Connection, manifest: LocaleManifest) ->
     )
     connection.executemany(
         """
-        INSERT INTO movement_sections
+        INSERT INTO sections
             (locale, section_id, collection_id, section_type, name, review_group_id,
              sort_by_year, sort_within_year, key_visual_asset_id, title_asset_id,
              background_asset_id, decoration_asset_id, retro_background_asset_id,
@@ -531,7 +543,7 @@ def _replace_locale(connection: sqlite3.Connection, manifest: LocaleManifest) ->
                 section.description,
                 int(section.has_video),
             )
-            for section in manifest.movement_sections
+            for section in manifest.sections
         ),
     )
     connection.executemany(
@@ -539,7 +551,7 @@ def _replace_locale(connection: sqlite3.Connection, manifest: LocaleManifest) ->
         INSERT INTO movement_locations
             (locale, movement_id, location_id, position, location_type, sort_id,
              start_time, present_stage_id, unlock_stage_id, section_id,
-             split_icon_asset_id, split_sub_name, video_id)
+             divider_icon_asset_id, divider_sub_name, video_id)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
@@ -554,8 +566,8 @@ def _replace_locale(connection: sqlite3.Connection, manifest: LocaleManifest) ->
                 location.present_stage_id,
                 location.unlock_stage_id,
                 location.section_id,
-                location.split_icon_asset_id,
-                location.split_sub_name,
+                location.divider_icon_asset_id,
+                location.divider_sub_name,
                 location.video_id,
             )
             for movement in manifest.movements
@@ -565,7 +577,7 @@ def _replace_locale(connection: sqlite3.Connection, manifest: LocaleManifest) ->
     connection.executemany(
         """
         INSERT INTO archive_groups
-            (locale, archive_id, collection_id, position, name, archive_kind, story_type)
+            (locale, archive_id, collection_id, position, name, archive_category, story_type)
         VALUES (?, ?, ?, ?, ?, ?, ?)
         """,
         (
@@ -575,13 +587,13 @@ def _replace_locale(connection: sqlite3.Connection, manifest: LocaleManifest) ->
                 archive.collection_id,
                 archive.position,
                 archive.name,
-                archive.archive_kind,
+                archive.archive_category,
                 archive.story_type,
             )
             for archive in manifest.archive_groups
         ),
     )
-    groups = (*manifest.movement_sections, *manifest.archive_groups)
+    groups = (*manifest.sections, *manifest.archive_groups)
     connection.executemany(
         """
         INSERT INTO stories
@@ -607,8 +619,8 @@ def _replace_locale(connection: sqlite3.Connection, manifest: LocaleManifest) ->
     )
     connection.executemany(
         """
-        INSERT INTO story_art_references
-            (locale, story_id, position, art_id, kind, category,
+        INSERT INTO story_narrative_image_references
+            (locale, story_id, position, asset_id, kind, category,
              title, subtitle, names_json)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
@@ -617,7 +629,7 @@ def _replace_locale(connection: sqlite3.Connection, manifest: LocaleManifest) ->
                 unit,
                 story.id,
                 reference_position,
-                reference.art_id,
+                reference.asset_id,
                 reference.kind,
                 reference.category,
                 reference.title,
@@ -626,22 +638,23 @@ def _replace_locale(connection: sqlite3.Connection, manifest: LocaleManifest) ->
             )
             for group in groups
             for story in group.stories
-            for reference_position, reference in enumerate(story.art_references)
+            for reference_position, reference in enumerate(story.artwork_references)
         ),
     )
     connection.executemany(
         """
-        INSERT INTO story_media_references
-            (locale, story_id, position, media_id, kind)
-        VALUES (?, ?, ?, ?, ?)
+        INSERT INTO story_narrative_media_references
+            (locale, story_id, position, asset_id, category, usage)
+        VALUES (?, ?, ?, ?, ?, ?)
         """,
         (
             (
                 unit,
                 story.id,
                 reference_position,
-                reference.media_id,
-                reference.kind,
+                reference.asset_id,
+                "video" if reference.kind == "video" else "audio",
+                None if reference.kind == "video" else reference.kind,
             )
             for group in groups
             for story in group.stories
@@ -650,7 +663,7 @@ def _replace_locale(connection: sqlite3.Connection, manifest: LocaleManifest) ->
     )
     connection.executemany(
         """
-        INSERT INTO gallery_groups
+        INSERT INTO galleries
             (locale, gallery_id, collection_id, position, name, description, location_id)
         VALUES (?, ?, ?, ?, ?, ?, ?)
         """,
@@ -669,8 +682,8 @@ def _replace_locale(connection: sqlite3.Connection, manifest: LocaleManifest) ->
     )
     connection.executemany(
         """
-        INSERT INTO gallery_displays
-            (locale, gallery_id, display_id, position, name, description,
+        INSERT INTO gallery_groups
+            (locale, gallery_id, group_id, position, name, description,
              related_story_id, related_stage_id)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?)
         """,
@@ -678,52 +691,52 @@ def _replace_locale(connection: sqlite3.Connection, manifest: LocaleManifest) ->
             (
                 unit,
                 gallery.id,
-                display.id,
-                display.position,
-                display.name,
-                display.description,
-                display.related_story_id,
-                display.related_stage_id,
+                group.id,
+                group.position,
+                group.name,
+                group.description,
+                group.related_story_id,
+                group.related_stage_id,
             )
             for gallery in manifest.galleries
-            for display in gallery.displays
+            for group in gallery.groups
         ),
     )
     connection.executemany(
         """
-        INSERT INTO gallery_display_artworks
-            (locale, gallery_id, display_id, position, cg_id, art_id,
-             category, composite_type)
+        INSERT INTO gallery_narrative_asset_references
+            (locale, gallery_id, group_id, position, cg_id, asset_id,
+             category, layout)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             (
                 unit,
                 gallery.id,
-                display.id,
+                group.id,
                 artwork.position,
                 artwork.cg_id,
-                artwork.art_id,
+                artwork.asset_id,
                 artwork.category,
-                artwork.composite_type,
+                artwork.layout,
             )
             for gallery in manifest.galleries
-            for display in gallery.displays
-            for artwork in display.artworks
+            for group in gallery.groups
+            for artwork in group.artworks
         ),
     )
     connection.executemany(
         """
-        INSERT INTO gallery_display_artwork_panels
-            (locale, gallery_id, display_id, artwork_position,
-             position, panel_art_id, width, height)
+        INSERT INTO gallery_reference_panels
+            (locale, gallery_id, group_id, reference_position,
+             position, panel_asset_id, width, height)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             (
                 unit,
                 gallery.id,
-                display.id,
+                group.id,
                 artwork.position,
                 panel.position,
                 panel.id,
@@ -731,8 +744,8 @@ def _replace_locale(connection: sqlite3.Connection, manifest: LocaleManifest) ->
                 panel.height,
             )
             for gallery in manifest.galleries
-            for display in gallery.displays
-            for artwork in display.artworks
+            for group in gallery.groups
+            for artwork in group.artworks
             for panel in artwork.panels
         ),
     )
@@ -745,7 +758,7 @@ def _rebuild_search_entries(connection: sqlite3.Connection) -> None:
         """
         WITH
         locale_units AS (
-            SELECT unit AS locale FROM unit_versions WHERE unit <> 'art'
+            SELECT unit AS locale FROM unit_versions WHERE unit <> 'artwork'
         ),
         story_terms AS (
             SELECT reference.locale, reference.story_id,
@@ -755,96 +768,96 @@ def _rebuild_search_entries(connection: sqlite3.Connection) -> None:
                        COALESCE(reference.subtitle, ''), ' '
                    ) AS labels,
                    group_concat(
-                       reference.category || ' ' || reference.art_id, ' '
-                   ) AS arts
-            FROM story_art_references AS reference
+                       reference.category || ' ' || reference.asset_id, ' '
+                   ) AS narrative_image_assets
+            FROM story_narrative_image_references AS reference
             LEFT JOIN json_each(reference.names_json) AS name ON true
             GROUP BY reference.locale, reference.story_id
         ),
         story_thumbnails AS (
             SELECT locale, story_id, object_key
             FROM (
-                SELECT reference.locale, reference.story_id, art.object_key,
+                SELECT reference.locale, reference.story_id, artwork.object_key,
                        ROW_NUMBER() OVER (
                            PARTITION BY reference.locale, reference.story_id
                            ORDER BY CASE reference.category
-                               WHEN 'image' THEN 0
+                               WHEN 'illustration' THEN 0
                                WHEN 'background' THEN 1
                                ELSE 2
                            END, reference.position
                        ) AS thumbnail_rank
-                FROM story_art_references AS reference
-                JOIN arts AS art
-                  ON art.category = reference.category
-                 AND art.art_id = reference.art_id
-                WHERE reference.category IN ('image', 'background')
+                FROM story_narrative_image_references AS reference
+                JOIN narrative_image_assets AS artwork
+                  ON artwork.category = reference.category
+                 AND artwork.asset_id = reference.asset_id
+                WHERE reference.category IN ('illustration', 'background')
             )
             WHERE thumbnail_rank = 1
         ),
         collection_thumbnails AS (
             SELECT locale, collection_id, object_key
             FROM (
-                SELECT story.locale, story.collection_id, art.object_key,
+                SELECT story.locale, story.collection_id, artwork.object_key,
                        ROW_NUMBER() OVER (
                            PARTITION BY story.locale, story.collection_id
                            ORDER BY CASE reference.category
-                               WHEN 'image' THEN 0
+                               WHEN 'illustration' THEN 0
                                WHEN 'background' THEN 1
                                ELSE 2
                            END, story.position, reference.position
                        ) AS thumbnail_rank
                 FROM stories AS story
-                JOIN story_art_references AS reference
+                JOIN story_narrative_image_references AS reference
                   ON reference.locale = story.locale
                  AND reference.story_id = story.story_id
-                JOIN arts AS art
-                  ON art.category = reference.category
-                 AND art.art_id = reference.art_id
-                WHERE reference.category IN ('image', 'background')
+                JOIN narrative_image_assets AS artwork
+                  ON artwork.category = reference.category
+                 AND artwork.asset_id = reference.asset_id
+                WHERE reference.category IN ('illustration', 'background')
             )
             WHERE thumbnail_rank = 1
         ),
         gallery_thumbnails AS (
             SELECT locale, gallery_id, object_key
             FROM (
-                SELECT artwork.locale, artwork.gallery_id, art.object_key,
+                SELECT group_artwork.locale, group_artwork.gallery_id, artwork.object_key,
                        ROW_NUMBER() OVER (
-                           PARTITION BY artwork.locale, artwork.gallery_id
-                           ORDER BY CASE artwork.category
-                               WHEN 'image' THEN 0
+                           PARTITION BY group_artwork.locale, group_artwork.gallery_id
+                           ORDER BY CASE group_artwork.category
+                               WHEN 'illustration' THEN 0
                                WHEN 'background' THEN 1
                                ELSE 2
-                           END, display.position, artwork.position
+                           END, gallery_group.position, group_artwork.position
                        ) AS thumbnail_rank
-                FROM gallery_display_artworks AS artwork
-                JOIN gallery_displays AS display
-                  ON display.locale = artwork.locale
-                 AND display.gallery_id = artwork.gallery_id
-                 AND display.display_id = artwork.display_id
-                JOIN arts AS art
-                  ON art.category = artwork.category
-                 AND art.art_id = artwork.art_id
-                WHERE artwork.category IN ('image', 'background')
+                FROM gallery_narrative_asset_references AS group_artwork
+                JOIN gallery_groups AS gallery_group
+                  ON gallery_group.locale = group_artwork.locale
+                 AND gallery_group.gallery_id = group_artwork.gallery_id
+                 AND gallery_group.group_id = group_artwork.group_id
+                JOIN narrative_image_assets AS artwork
+                  ON artwork.category = group_artwork.category
+                 AND artwork.asset_id = group_artwork.asset_id
+                WHERE group_artwork.category IN ('illustration', 'background')
             )
             WHERE thumbnail_rank = 1
         ),
-        art_names AS (
-            SELECT reference.locale, reference.category, reference.art_id,
+        artwork_names AS (
+            SELECT reference.locale, reference.category, reference.asset_id,
                    min(name.value) AS first_name,
                    group_concat(name.value, ' ') AS names
-            FROM story_art_references AS reference
+            FROM story_narrative_image_references AS reference
             JOIN json_each(reference.names_json) AS name ON true
-            GROUP BY reference.locale, reference.category, reference.art_id
+            GROUP BY reference.locale, reference.category, reference.asset_id
         ),
-        art_labels AS (
-            SELECT reference.locale, reference.category, reference.art_id,
+        artwork_labels AS (
+            SELECT reference.locale, reference.category, reference.asset_id,
                    group_concat(
                        COALESCE(reference.title, '') || ' ' ||
                        COALESCE(reference.subtitle, ''), ' '
                    ) AS labels
-            FROM story_art_references AS reference
+            FROM story_narrative_image_references AS reference
             WHERE reference.title IS NOT NULL OR reference.subtitle IS NOT NULL
-            GROUP BY reference.locale, reference.category, reference.art_id
+            GROUP BY reference.locale, reference.category, reference.asset_id
             ),
         entries AS (
         SELECT 'story:' || story.locale || ':' || story.story_id,
@@ -854,11 +867,11 @@ def _rebuild_search_entries(connection: sqlite3.Connection) -> None:
                    story.story_id || ' ' || story.code || ' ' || story.name ||
                    ' ' || story.info || ' ' || COALESCE(terms.names, '') ||
                    ' ' || COALESCE(terms.labels, '') || ' ' ||
-                   COALESCE(terms.arts, '')
+                   COALESCE(terms.narrative_image_assets, '')
                ),
                CASE
                    WHEN section.section_id IS NOT NULL THEN json_object(
-                       'parentKind', 'movement_section',
+                       'parentKind', 'section',
                        'movementID', movement.movement_id,
                        'movementName', movement.name,
                        'sectionID', section.section_id,
@@ -866,7 +879,7 @@ def _rebuild_search_entries(connection: sqlite3.Connection) -> None:
                    )
                    WHEN archive.archive_id IS NOT NULL THEN json_object(
                        'parentKind', 'archive_group',
-                       'archiveKind', archive.archive_kind,
+                       'archiveCategory', archive.archive_category,
                        'groupID', archive.archive_id,
                        'groupName', archive.name
                    )
@@ -878,7 +891,7 @@ def _rebuild_search_entries(connection: sqlite3.Connection) -> None:
         LEFT JOIN story_thumbnails AS story_thumbnail
           ON story_thumbnail.locale = story.locale
          AND story_thumbnail.story_id = story.story_id
-        LEFT JOIN movement_sections AS section
+        LEFT JOIN sections AS section
           ON section.locale = story.locale
          AND section.collection_id = story.collection_id
         LEFT JOIN movement_locations AS location
@@ -910,14 +923,14 @@ def _rebuild_search_entries(connection: sqlite3.Connection) -> None:
                trim(section.section_id || ' ' || section.name || ' ' ||
                     section.description),
                json_object(
-                   'parentKind', 'movement_section',
+                   'parentKind', 'section',
                    'movementID', movement.movement_id,
                    'movementName', movement.name,
                    'sectionID', section.section_id,
                    'sectionName', section.name
                ),
                collection_thumbnail.object_key
-        FROM movement_sections AS section
+        FROM sections AS section
         JOIN movement_locations AS location
           ON location.locale = section.locale
          AND location.section_id = section.section_id
@@ -933,12 +946,12 @@ def _rebuild_search_entries(connection: sqlite3.Connection) -> None:
 
         SELECT 'archive_group:' || archive.locale || ':' || archive.archive_id,
                archive.locale, 'archive_group', archive.archive_id, NULL,
-               archive.collection_id, archive.name, archive.archive_kind,
+               archive.collection_id, archive.name, archive.archive_category,
                trim(archive.archive_id || ' ' || archive.name || ' ' ||
-                    archive.archive_kind),
+                    archive.archive_category),
                json_object(
                    'parentKind', 'archive_group',
-                   'archiveKind', archive.archive_kind,
+                   'archiveCategory', archive.archive_category,
                    'groupID', archive.archive_id,
                    'groupName', archive.name
                ),
@@ -957,7 +970,7 @@ def _rebuild_search_entries(connection: sqlite3.Connection) -> None:
                     gallery.description),
                CASE
                    WHEN section.section_id IS NOT NULL THEN json_object(
-                       'parentKind', 'movement_section',
+                       'parentKind', 'section',
                        'movementID', movement.movement_id,
                        'movementName', movement.name,
                        'sectionID', section.section_id,
@@ -965,17 +978,17 @@ def _rebuild_search_entries(connection: sqlite3.Connection) -> None:
                    )
                    WHEN archive.archive_id IS NOT NULL THEN json_object(
                        'parentKind', 'archive_group',
-                       'archiveKind', archive.archive_kind,
+                       'archiveCategory', archive.archive_category,
                        'groupID', archive.archive_id,
                        'groupName', archive.name
                    )
                END,
                gallery_thumbnail.object_key
-        FROM gallery_groups AS gallery
+        FROM galleries AS gallery
         LEFT JOIN gallery_thumbnails AS gallery_thumbnail
           ON gallery_thumbnail.locale = gallery.locale
          AND gallery_thumbnail.gallery_id = gallery.gallery_id
-        LEFT JOIN movement_sections AS section
+        LEFT JOIN sections AS section
           ON section.locale = gallery.locale
          AND section.collection_id = gallery.collection_id
         LEFT JOIN movement_locations AS location
@@ -991,25 +1004,25 @@ def _rebuild_search_entries(connection: sqlite3.Connection) -> None:
 
         UNION ALL
 
-        SELECT 'art:' || locale_units.locale || ':' || art.category || ':' || art.art_id,
-               locale_units.locale, 'art', art.art_id, art.category, NULL,
-               COALESCE(art_name.first_name, art.art_id), art.category,
+        SELECT 'narrative_asset:' || locale_units.locale || ':' || artwork.category || ':' || artwork.asset_id,
+               locale_units.locale, 'narrative_asset', artwork.asset_id, artwork.category, NULL,
+               COALESCE(artwork_name.first_name, artwork.asset_id), artwork.category,
                trim(
-                   art.art_id || ' ' || art.category || ' ' ||
-                   COALESCE(art_name.names, '') || ' ' ||
-                   COALESCE(art_label.labels, '')
+                   artwork.asset_id || ' ' || artwork.category || ' ' ||
+                   COALESCE(artwork_name.names, '') || ' ' ||
+                   COALESCE(artwork_label.labels, '')
                ),
-               NULL, art.object_key
+               NULL, artwork.object_key
         FROM locale_units
-        CROSS JOIN arts AS art
-        LEFT JOIN art_names AS art_name
-          ON art_name.locale = locale_units.locale
-         AND art_name.category = art.category
-         AND art_name.art_id = art.art_id
-        LEFT JOIN art_labels AS art_label
-          ON art_label.locale = locale_units.locale
-         AND art_label.category = art.category
-         AND art_label.art_id = art.art_id
+        CROSS JOIN narrative_image_assets AS artwork
+        LEFT JOIN artwork_names AS artwork_name
+          ON artwork_name.locale = locale_units.locale
+         AND artwork_name.category = artwork.category
+         AND artwork_name.asset_id = artwork.asset_id
+        LEFT JOIN artwork_labels AS artwork_label
+          ON artwork_label.locale = locale_units.locale
+         AND artwork_label.category = artwork.category
+         AND artwork_label.asset_id = artwork.asset_id
         )
         INSERT INTO search_entries (
             entry_key, locale, kind, entry_id, category, collection_id, title,
@@ -1020,8 +1033,8 @@ def _rebuild_search_entries(connection: sqlite3.Connection) -> None:
     )
 
 
-def find_missing_art_references(path: Path) -> tuple[str, ...]:
-    """Return locale art identifiers absent from the current art set."""
+def find_missing_artwork_references(path: Path) -> tuple[str, ...]:
+    """Return locale artwork identifiers absent from the current artwork set."""
 
     connection = _connect(path)
     try:
@@ -1030,15 +1043,15 @@ def find_missing_art_references(path: Path) -> tuple[str, ...]:
             for row in connection.execute(
                 """
                 WITH referenced AS (
-                    SELECT category, art_id FROM story_art_references
+                    SELECT category, asset_id FROM story_narrative_image_references
                     UNION
-                    SELECT category, art_id FROM gallery_display_artworks
+                    SELECT category, asset_id FROM gallery_narrative_asset_references
                 )
-                SELECT referenced.category || '/' || referenced.art_id
+                SELECT referenced.category || '/' || referenced.asset_id
                 FROM referenced
-                LEFT JOIN arts USING (category, art_id)
-                WHERE arts.art_id IS NULL
-                ORDER BY referenced.category, referenced.art_id
+                LEFT JOIN narrative_image_assets USING (category, asset_id)
+                WHERE narrative_image_assets.asset_id IS NULL
+                ORDER BY referenced.category, referenced.asset_id
                 """
             )
         )
@@ -1055,18 +1068,14 @@ def find_missing_media_references(path: Path) -> tuple[str, ...]:
             str(row[0])
             for row in connection.execute(
                 """
-                SELECT reference.kind || '/' || reference.media_id
-                FROM story_media_references AS reference
-                LEFT JOIN media_assets AS media
-                  ON media.media_id = reference.media_id
-                 AND (
-                     (reference.kind = 'video' AND media.media_kind = 'video')
-                     OR
-                     (reference.kind <> 'video' AND media.media_kind = 'audio')
-                 )
-                WHERE media.media_id IS NULL
-                GROUP BY reference.kind, reference.media_id
-                ORDER BY reference.kind, reference.media_id
+                SELECT reference.category || '/' || reference.asset_id
+                FROM story_narrative_media_references AS reference
+                LEFT JOIN narrative_media_assets AS media
+                  ON media.asset_id = reference.asset_id
+                 AND media.category = reference.category
+                WHERE media.asset_id IS NULL
+                GROUP BY reference.category, reference.asset_id
+                ORDER BY reference.category, reference.asset_id
                 """
             )
         )
@@ -1075,7 +1084,7 @@ def find_missing_media_references(path: Path) -> tuple[str, ...]:
 
 
 def find_missing_score_references(path: Path) -> tuple[str, ...]:
-    """Return declared Score PNG and video identifiers absent from the art set."""
+    """Return declared Score PNG and video identifiers absent from the artwork set."""
 
     connection = _connect(path)
     try:
@@ -1083,34 +1092,36 @@ def find_missing_score_references(path: Path) -> tuple[str, ...]:
             str(row[0])
             for row in connection.execute(
                 """
-                WITH declared_assets(asset_kind, asset_id) AS (
+                WITH declared_assets(category, asset_id) AS (
                     SELECT 'icon', icon_asset_id FROM movements WHERE icon_asset_id IS NOT NULL
                     UNION SELECT 'logo', logo_asset_id FROM movements
                         WHERE logo_asset_id IS NOT NULL
                     UNION SELECT 'background', background_asset_id FROM movements
                         WHERE background_asset_id IS NOT NULL
-                    UNION SELECT 'key_visual', key_visual_asset_id FROM movement_sections
+                    UNION SELECT 'key-visual', key_visual_asset_id FROM sections
                         WHERE key_visual_asset_id IS NOT NULL
-                    UNION SELECT 'title', title_asset_id FROM movement_sections
+                    UNION SELECT 'title', title_asset_id FROM sections
                         WHERE title_asset_id IS NOT NULL
-                    UNION SELECT 'background', background_asset_id FROM movement_sections
+                    UNION SELECT 'background', background_asset_id FROM sections
                         WHERE background_asset_id IS NOT NULL
-                    UNION SELECT 'decoration', decoration_asset_id FROM movement_sections
+                    UNION SELECT 'decoration', decoration_asset_id FROM sections
                         WHERE decoration_asset_id IS NOT NULL
-                    UNION SELECT 'retro_background', retro_background_asset_id
-                        FROM movement_sections WHERE retro_background_asset_id IS NOT NULL
-                    UNION SELECT 'split', split_icon_asset_id FROM movement_locations
-                        WHERE split_icon_asset_id IS NOT NULL
+                    UNION SELECT 'retro-background', retro_background_asset_id
+                        FROM sections WHERE retro_background_asset_id IS NOT NULL
+                    UNION SELECT 'divider', divider_icon_asset_id FROM movement_locations
+                        WHERE divider_icon_asset_id IS NOT NULL
                 ), missing_assets AS (
-                    SELECT 'score/' || declared.asset_kind || '/' || declared.asset_id AS identity
+                    SELECT 'presentation/' || declared.category || '/' || declared.asset_id AS identity
                     FROM declared_assets AS declared
-                    LEFT JOIN score_assets AS available USING (asset_kind, asset_id)
+                    LEFT JOIN presentation_image_assets AS available USING (category, asset_id)
                     WHERE available.asset_id IS NULL
                 ), missing_videos AS (
-                    SELECT 'score/video/' || locations.video_id AS identity
+                    SELECT 'presentation/video/' || locations.video_id AS identity
                     FROM movement_locations AS locations
-                    LEFT JOIN score_videos AS available USING (video_id)
-                    WHERE locations.video_id IS NOT NULL AND available.video_id IS NULL
+                    LEFT JOIN presentation_video_assets AS available
+                      ON available.category = 'video'
+                     AND available.asset_id = locations.video_id
+                    WHERE locations.video_id IS NOT NULL AND available.asset_id IS NULL
                 )
                 SELECT identity FROM missing_assets
                 UNION SELECT identity FROM missing_videos

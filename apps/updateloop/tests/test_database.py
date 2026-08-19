@@ -7,26 +7,26 @@ from PIL import Image
 
 from arkwaifu_updateloop.database import (
     apply_changes,
-    find_missing_art_references,
+    find_missing_artwork_references,
     find_missing_media_references,
     initialize_or_validate,
     read_versions,
 )
 from arkwaifu_updateloop.domain import (
     ArchiveGroup,
-    ArtManifest,
-    ArtRecord,
-    CompositePanel,
+    ArtworkManifest,
+    ArtworkPanel,
+    ArtworkRecord,
     FileAudioArtifact,
+    Gallery,
     GalleryArtwork,
-    GalleryDisplay,
     GalleryGroup,
     LocaleManifest,
     MediaRecord,
-    MovementSection,
     PngArtifact,
-    SourceArtReference,
-    StoryArtReference,
+    Section,
+    SourceLayerReference,
+    StoryArtworkReference,
     StoryMediaReference,
     StoryRecord,
 )
@@ -40,31 +40,35 @@ def test_fresh_database_has_the_current_schema_at_version_two(tmp_path):
 
     with sqlite3.connect(path) as connection:
         assert connection.execute("PRAGMA user_version").fetchone()[0] == 2
-        assert [row[1] for row in connection.execute("PRAGMA table_info(arts)")] == [
-            "art_id",
+        assert [
+            row[1] for row in connection.execute("PRAGMA table_info(narrative_image_assets)")
+        ] == [
+            "asset_id",
             "category",
             "object_key",
-            "byte_size",
+            "size",
             "width",
             "height",
         ]
-        assert [row[1] for row in connection.execute("PRAGMA table_info(source_arts)")] == [
+        assert [row[1] for row in connection.execute("PRAGMA table_info(material_assets)")] == [
             "category",
-            "source_art_id",
-            "kind",
+            "asset_id",
+            "material_type",
             "character_id",
             "role",
             "variant",
             "object_key",
-            "byte_size",
+            "size",
             "width",
             "height",
         ]
-        assert [row[1] for row in connection.execute("PRAGMA table_info(score_assets)")] == [
-            "asset_kind",
+        assert [
+            row[1] for row in connection.execute("PRAGMA table_info(presentation_image_assets)")
+        ] == [
+            "category",
             "asset_id",
             "object_key",
-            "byte_size",
+            "size",
             "width",
             "height",
         ]
@@ -74,23 +78,29 @@ def test_fresh_database_has_the_current_schema_at_version_two(tmp_path):
             "collection_kind",
         ]
         assert [
-            row[2] for row in connection.execute("PRAGMA index_info(story_art_references_by_art)")
-        ] == ["locale", "art_id"]
+            row[2]
+            for row in connection.execute(
+                "PRAGMA index_info(story_narrative_image_references_by_asset)"
+            )
+        ] == ["locale", "category", "asset_id"]
 
 
 def test_database_repairs_missing_performance_index_once(tmp_path):
     path = tmp_path / "arkwaifu.sqlite3"
     assert initialize_or_validate(path) is True
     with sqlite3.connect(path) as connection:
-        connection.execute("DROP INDEX story_art_references_by_art")
+        connection.execute("DROP INDEX story_narrative_image_references_by_asset")
 
     assert initialize_or_validate(path) is True
     assert initialize_or_validate(path) is False
 
     with sqlite3.connect(path) as connection:
         assert [
-            row[2] for row in connection.execute("PRAGMA index_info(story_art_references_by_art)")
-        ] == ["locale", "art_id"]
+            row[2]
+            for row in connection.execute(
+                "PRAGMA index_info(story_narrative_image_references_by_asset)"
+            )
+        ] == ["locale", "category", "asset_id"]
 
 
 def test_database_rejects_an_unsupported_schema_version(tmp_path):
@@ -110,14 +120,14 @@ def test_database_writer_keeps_foreign_key_enforcement(tmp_path):
     path = tmp_path / "arkwaifu.sqlite3"
     initialize_or_validate(path)
     image = PngArtifact.from_image(Image.new("RGBA", (1, 1), (1, 2, 3, 255)))
-    manifest = ArtManifest(
+    manifest = ArtworkManifest(
         "v1",
         (
-            ArtRecord(
+            ArtworkRecord(
                 "character#1$1",
                 "character",
                 image,
-                (SourceArtReference("character", "missing-source"),),
+                (SourceLayerReference("character", "missing-source"),),
             ),
         ),
         (),
@@ -127,13 +137,13 @@ def test_database_writer_keeps_foreign_key_enforcement(tmp_path):
         apply_changes(
             path,
             (manifest,),
-            art_keys={
+            artwork_keys={
                 (
                     "character",
                     "character#1$1",
                 ): "ART/v1/composition/character/character%231%241.png"
             },
-            source_keys={},
+            source_layer_keys={},
             score_asset_keys={},
             score_video_keys={},
         )
@@ -146,7 +156,9 @@ def test_story_text_and_media_are_published_and_searchable(tmp_path):
     initialize_or_validate(path)
     audio_path = tmp_path / "flashback.wav"
     audio_path.write_bytes(b"RIFF" + b"audio")
-    audio = FileAudioArtifact.from_path(audio_path, content_type="audio/wav", duration=1.5)
+    audio = FileAudioArtifact.from_path(
+        audio_path, content_type="audio/wav", duration=1.5, sample_rate=48_000
+    )
     media = MediaRecord("flashback", "audio", audio)
     story = StoryRecord(
         id="story",
@@ -156,7 +168,7 @@ def test_story_text_and_media_are_published_and_searchable(tmp_path):
         code="1-1",
         name="Opening",
         info="summary",
-        art_references=(StoryArtReference("context-art", "picture", "image"),),
+        artwork_references=(StoryArtworkReference("indexed-artwork", "picture", "illustration"),),
         text="A searchable context sentence.",
         media_references=(StoryMediaReference("flashback", "sound"),),
     )
@@ -164,14 +176,14 @@ def test_story_text_and_media_are_published_and_searchable(tmp_path):
         unit="CN",
         upstream_version="locale-v1",
         movements=(),
-        movement_sections=(),
+        sections=(),
         archive_groups=(
             ArchiveGroup(
                 id="group",
                 collection_id="archive_group:group",
                 position=0,
                 name="Group",
-                archive_kind="others",
+                archive_category="others",
                 story_type=None,
                 stories=(story,),
             ),
@@ -182,12 +194,12 @@ def test_story_text_and_media_are_published_and_searchable(tmp_path):
     apply_changes(
         path,
         (
-            ArtManifest(
-                "art-v1",
+            ArtworkManifest(
+                "artwork-v1",
                 (
-                    ArtRecord(
-                        "context-art",
-                        "image",
+                    ArtworkRecord(
+                        "indexed-artwork",
+                        "illustration",
                         PngArtifact.from_image(Image.new("RGBA", (1, 1))),
                     ),
                 ),
@@ -196,11 +208,16 @@ def test_story_text_and_media_are_published_and_searchable(tmp_path):
             ),
             locale,
         ),
-        art_keys={("image", "context-art"): "ART/art-v1/composition/image/context-art.png"},
-        source_keys={},
+        artwork_keys={
+            (
+                "illustration",
+                "indexed-artwork",
+            ): "ART/artwork-v1/composition/illustration/indexed-artwork.png"
+        },
+        source_layer_keys={},
         score_asset_keys={},
         score_video_keys={},
-        media_keys={("audio", "flashback"): "MEDIA/art-v1/audio/flashback.wav"},
+        media_keys={("audio", "flashback"): "MEDIA/artwork-v1/audio/flashback.wav"},
     )
 
     with sqlite3.connect(path) as connection:
@@ -208,22 +225,21 @@ def test_story_text_and_media_are_published_and_searchable(tmp_path):
             "A searchable context sentence.",
         )
         assert connection.execute(
-            "SELECT kind, media_id FROM story_media_references"
+            "SELECT usage, asset_id FROM story_narrative_media_references"
         ).fetchone() == ("sound", "flashback")
-        assert connection.execute("SELECT object_key, duration FROM media_assets").fetchone() == (
-            "MEDIA/art-v1/audio/flashback.wav",
-            1.5,
-        )
+        assert connection.execute(
+            "SELECT object_key, duration, sample_rate FROM narrative_media_assets"
+        ).fetchone() == ("MEDIA/artwork-v1/audio/flashback.wav", 1.5, 48_000)
         search_text = connection.execute(
             "SELECT search_text FROM search_entries WHERE kind = 'story'"
         ).fetchone()[0]
         assert "summary" in search_text
         assert "searchable context" not in search_text
         assert (
-            "context-art"
+            "indexed-artwork"
             in connection.execute(
                 "SELECT search_text FROM search_entries "
-                "WHERE kind = 'art' AND entry_id = 'context-art'"
+                "WHERE kind = 'narrative_asset' AND entry_id = 'indexed-artwork'"
             ).fetchone()[0]
         )
     assert find_missing_media_references(path) == ()
@@ -232,7 +248,7 @@ def test_story_text_and_media_are_published_and_searchable(tmp_path):
 def test_archive_and_section_categories_are_explicit(tmp_path):
     path = tmp_path / "arkwaifu.sqlite3"
     initialize_or_validate(path)
-    archive_kinds = (
+    archive_categories = (
         "events",
         "operator_record",
         "integrated_strategies",
@@ -244,7 +260,10 @@ def test_archive_and_section_categories_are_explicit(tmp_path):
         connection.execute("INSERT INTO unit_versions VALUES ('CN', 'v1')")
         connection.executemany(
             "INSERT INTO story_collections VALUES ('CN', ?, 'archive_group')",
-            ((f"archive_group:group-{position}",) for position, _kind in enumerate(archive_kinds)),
+            (
+                (f"archive_group:group-{position}",)
+                for position, _category in enumerate(archive_categories)
+            ),
         )
         connection.executemany(
             "INSERT INTO archive_groups VALUES ('CN', ?, ?, ?, ?, ?, ?)",
@@ -257,17 +276,17 @@ def test_archive_and_section_categories_are_explicit(tmp_path):
                     kind,
                     "side_story" if kind == "events" else None,
                 )
-                for position, kind in enumerate(archive_kinds)
+                for position, kind in enumerate(archive_categories)
             ),
         )
         assert (
             tuple(
                 row[0]
                 for row in connection.execute(
-                    "SELECT archive_kind FROM archive_groups ORDER BY position"
+                    "SELECT archive_category FROM archive_groups ORDER BY position"
                 )
             )
-            == archive_kinds
+            == archive_categories
         )
         with pytest.raises(sqlite3.IntegrityError, match="CHECK constraint failed"):
             connection.execute(
@@ -279,12 +298,12 @@ def test_archive_and_section_categories_are_explicit(tmp_path):
             )
 
 
-def test_gallery_writer_constraints_cascade_and_composite_missing_art(tmp_path):
+def test_gallery_writer_constraints_cascade_and_missing_panel_artwork(tmp_path):
     path = tmp_path / "arkwaifu.sqlite3"
     initialize_or_validate(path)
-    section = MovementSection(
+    section = Section(
         id="set",
-        collection_id="movement_section:set",
+        collection_id="section:set",
         section_type="side_story",
         name="Section",
         review_group_id=None,
@@ -300,31 +319,31 @@ def test_gallery_writer_constraints_cascade_and_composite_missing_art(tmp_path):
         stories=(),
     )
     panels = (
-        CompositePanel("top", 0, 10, 20),
-        CompositePanel("bottom", 1, 10, 30),
+        ArtworkPanel("top", 0, 10, 20),
+        ArtworkPanel("bottom", 1, 10, 30),
     )
-    gallery = GalleryGroup(
+    gallery = Gallery(
         id="gallery",
         collection_id=section.collection_id,
         position=0,
         name="Gallery",
         description="Description",
         location_id="location",
-        displays=(
-            GalleryDisplay(
-                id="display",
+        groups=(
+            GalleryGroup(
+                id="group",
                 position=0,
-                name="Display",
-                description="Sibling artworks",
+                name="Group",
+                description="Gallery Group Artwork",
                 related_story_id=None,
                 related_stage_id=None,
                 artworks=(
                     GalleryArtwork(
                         position=0,
-                        cg_id="composite",
-                        art_id="top/bottom",
+                        cg_id="panel-artwork",
+                        asset_id="top/bottom",
                         category="background",
-                        composite_type="vertical",
+                        layout="vertical",
                         panels=panels,
                     ),
                 ),
@@ -335,7 +354,7 @@ def test_gallery_writer_constraints_cascade_and_composite_missing_art(tmp_path):
         unit="CN",
         upstream_version="locale-v1",
         movements=(),
-        movement_sections=(section,),
+        sections=(section,),
         archive_groups=(),
         galleries=(gallery,),
     )
@@ -343,8 +362,8 @@ def test_gallery_writer_constraints_cascade_and_composite_missing_art(tmp_path):
     apply_changes(
         path,
         (locale,),
-        art_keys={},
-        source_keys={},
+        artwork_keys={},
+        source_layer_keys={},
         score_asset_keys={},
         score_video_keys={},
     )
@@ -354,66 +373,67 @@ def test_gallery_writer_constraints_cascade_and_composite_missing_art(tmp_path):
             "SELECT kind, entry_id FROM search_entries ORDER BY kind, entry_id"
         ).fetchall() == [("gallery", "gallery")]
 
-    assert find_missing_art_references(path) == ("background/top/bottom",)
+    assert find_missing_artwork_references(path) == ("background/top/bottom",)
     with sqlite3.connect(path) as connection:
         connection.execute("PRAGMA foreign_keys = ON")
         assert connection.execute(
-            "SELECT cg_id, art_id, composite_type FROM gallery_display_artworks"
-        ).fetchone() == ("composite", "top/bottom", "vertical")
+            "SELECT cg_id, asset_id, layout FROM gallery_narrative_asset_references"
+        ).fetchone() == ("panel-artwork", "top/bottom", "vertical")
         assert connection.execute(
-            "SELECT panel_art_id, width, height "
-            "FROM gallery_display_artwork_panels ORDER BY position"
+            "SELECT panel_asset_id, width, height FROM gallery_reference_panels ORDER BY position"
         ).fetchall() == [("top", 10, 20), ("bottom", 10, 30)]
         with pytest.raises(sqlite3.IntegrityError, match="UNIQUE constraint failed"):
             connection.execute(
-                "INSERT INTO gallery_display_artwork_panels VALUES "
-                "('CN', 'gallery', 'display', 0, 2, 'top', 10, 20)"
+                "INSERT INTO gallery_reference_panels VALUES "
+                "('CN', 'gallery', 'group', 0, 2, 'top', 10, 20)"
             )
         with pytest.raises(sqlite3.IntegrityError, match="FOREIGN KEY constraint failed"):
             connection.execute(
-                "INSERT INTO gallery_display_artwork_panels VALUES "
-                "('CN', 'gallery', 'display', 99, 0, 'orphan', 1, 1)"
+                "INSERT INTO gallery_reference_panels VALUES "
+                "('CN', 'gallery', 'group', 99, 0, 'orphan', 1, 1)"
             )
         with pytest.raises(sqlite3.IntegrityError, match="UNIQUE constraint failed"):
             connection.execute(
-                "INSERT INTO gallery_display_artworks VALUES "
-                "('CN', 'gallery', 'display', 1, 'composite', 'other', "
+                "INSERT INTO gallery_narrative_asset_references VALUES "
+                "('CN', 'gallery', 'group', 1, 'panel-artwork', 'other', "
                 "'background', 'none')"
             )
 
     image = PngArtifact.from_image(Image.new("RGBA", (1, 1), (1, 2, 3, 255)))
-    art = ArtManifest(
-        "art-v1",
-        (ArtRecord("top/bottom", "background", image),),
+    artwork = ArtworkManifest(
+        "artwork-v1",
+        (ArtworkRecord("top/bottom", "background", image),),
         (),
     )
     apply_changes(
         path,
-        (art,),
-        art_keys={("background", "top/bottom"): "ART/art-v1/composition/background/top/bottom.png"},
-        source_keys={},
+        (artwork,),
+        artwork_keys={
+            ("background", "top/bottom"): "ART/artwork-v1/composition/background/top/bottom.png"
+        },
+        source_layer_keys={},
         score_asset_keys={},
         score_video_keys={},
     )
 
     with sqlite3.connect(path) as connection:
         assert connection.execute(
-            "SELECT title, thumbnail_object_key FROM search_entries WHERE kind = 'art'"
+            "SELECT title, thumbnail_object_key FROM search_entries WHERE kind = 'narrative_asset'"
         ).fetchone() == (
             "top/bottom",
-            "ART/art-v1/composition/background/top/bottom.png",
+            "ART/artwork-v1/composition/background/top/bottom.png",
         )
 
-    assert find_missing_art_references(path) == ()
+    assert find_missing_artwork_references(path) == ()
     with sqlite3.connect(path) as connection:
         connection.execute("PRAGMA foreign_keys = ON")
         connection.execute("DELETE FROM unit_versions WHERE unit = 'CN'")
         for table in (
             "story_collections",
-            "movement_sections",
+            "sections",
+            "galleries",
             "gallery_groups",
-            "gallery_displays",
-            "gallery_display_artworks",
-            "gallery_display_artwork_panels",
+            "gallery_narrative_asset_references",
+            "gallery_reference_panels",
         ):
             assert connection.execute(f"SELECT count(*) FROM {table}").fetchone()[0] == 0

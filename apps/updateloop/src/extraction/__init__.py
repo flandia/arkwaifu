@@ -1,4 +1,4 @@
-"""Extract the Unity objects required by the art processor."""
+"""Extract the Unity objects required by the artwork processor."""
 
 from .unity import ExtractionError, extract_assets, mono_behaviour_name, normalize_container_path
 

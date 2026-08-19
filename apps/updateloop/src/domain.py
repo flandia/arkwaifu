@@ -9,33 +9,33 @@ from typing import Literal
 
 from PIL import Image
 
-ArtCategory = Literal["image", "background", "item", "character"]
+ArtworkCategory = Literal["illustration", "background", "item", "character"]
 SourceRole = Literal["body", "face", "whole_body"]
-SourceArtKind = Literal["character", "composite_panel"]
+SourceLayerKind = Literal["character", "panel"]
 StoryMediaKind = Literal["sound", "music", "video"]
 MediaAssetKind = Literal["audio", "video"]
 ScoreAssetKind = Literal[
     "icon",
     "logo",
     "background",
-    "key_visual",
+    "key-visual",
     "title",
     "decoration",
-    "retro_background",
-    "split",
+    "retro-background",
+    "divider",
 ]
 LocaleUnit = Literal["CN", "EN", "JP", "KR", "TW"]
 MovementType = Literal["continue", "discrete"]
-MovementSectionType = Literal["main_theme", "side_story", "vignette"]
-MovementLocationType = Literal["before", "after", "mainline_split", "story_set"]
-ArchiveKind = Literal[
+SectionType = Literal["main_theme", "side_story", "vignette"]
+MovementLocationType = Literal["before", "after", "divider", "story_set"]
+ArchiveCategory = Literal[
     "events",
     "operator_record",
     "integrated_strategies",
     "reclamation_algorithm",
     "others",
 ]
-CompositeType = Literal["none", "vertical", "horizontal"]
+ArtworkLayout = Literal["none", "vertical", "horizontal"]
 StoryTag = Literal["before", "after", "interlude"]
 
 
@@ -207,6 +207,7 @@ class FileAudioArtifact:
     content_type: str
     byte_size: int
     duration: float | None = None
+    sample_rate: int | None = None
 
     @classmethod
     def from_path(
@@ -215,6 +216,7 @@ class FileAudioArtifact:
         *,
         content_type: str,
         duration: float | None = None,
+        sample_rate: int | None = None,
     ) -> FileAudioArtifact:
         """Resolve one audio file and retain only its stable metadata."""
 
@@ -230,11 +232,16 @@ class FileAudioArtifact:
             not isinstance(duration, (int, float)) or isinstance(duration, bool) or duration <= 0
         ):
             raise ValueError(f"invalid audio duration: {duration!r}")
+        if sample_rate is not None and (
+            not isinstance(sample_rate, int) or isinstance(sample_rate, bool) or sample_rate <= 0
+        ):
+            raise ValueError(f"invalid audio sample rate: {sample_rate!r}")
         return cls(
             path=stable_path,
             content_type=content_type,
             byte_size=byte_size,
             duration=float(duration) if duration is not None else None,
+            sample_rate=sample_rate,
         )
 
     @property
@@ -245,16 +252,16 @@ class FileAudioArtifact:
 
 
 @dataclass(frozen=True, slots=True)
-class SourceArtReference:
-    """Identify one category-qualified source image in composition order."""
+class SourceLayerReference:
+    """Identify one category-qualified source layer in artwork order."""
 
-    category: ArtCategory
+    category: ArtworkCategory
     id: str
 
 
 @dataclass(frozen=True, slots=True)
-class SourceArtRecord:
-    """Represent one retained character layer or composite panel.
+class SourceLayerRecord:
+    """Represent one retained character layer or gallery panel.
 
     ``res_version`` is the version which contributed this record. ``None``
     means the enclosing manifest's version; complete-history merges set it
@@ -262,8 +269,8 @@ class SourceArtRecord:
     """
 
     id: str
-    category: ArtCategory
-    kind: SourceArtKind
+    category: ArtworkCategory
+    kind: SourceLayerKind
     image: PngImage
     character_id: str | None = None
     role: SourceRole | None = None
@@ -272,16 +279,16 @@ class SourceArtRecord:
 
 
 @dataclass(frozen=True, slots=True)
-class ArtRecord:
-    """Represent one category-qualified art and its versioned composition object.
+class ArtworkRecord:
+    """Represent one category-qualified final artwork and its versioned object.
 
-    ``res_version`` follows the same origin rule as on ``SourceArtRecord``.
+    ``res_version`` follows the same origin rule as on ``SourceLayerRecord``.
     """
 
     id: str
-    category: ArtCategory
+    category: ArtworkCategory
     image: PngImage
-    source_art_references: tuple[SourceArtReference, ...] = ()
+    source_layer_references: tuple[SourceLayerReference, ...] = ()
     res_version: str | None = None
 
 
@@ -305,16 +312,16 @@ class ScoreVideoRecord:
 
 
 @dataclass(frozen=True, slots=True)
-class ArtManifest:
-    """Contain art produced for one upstream version.
+class ArtworkManifest:
+    """Contain artwork produced for one upstream version.
 
     An incremental manifest may contain only resources changed since the active
     version. Publication overlays those records on the existing database.
     """
 
     upstream_version: str
-    arts: tuple[ArtRecord, ...]
-    source_arts: tuple[SourceArtRecord, ...]
+    artworks: tuple[ArtworkRecord, ...]
+    source_layers: tuple[SourceLayerRecord, ...]
     score_assets: tuple[ScoreAssetRecord, ...] = ()
     score_videos: tuple[ScoreVideoRecord, ...] = ()
     media: tuple[MediaRecord, ...] = ()
@@ -331,12 +338,12 @@ class MediaRecord:
 
 
 @dataclass(frozen=True, slots=True)
-class StoryArtReference:
+class StoryArtworkReference:
     """Describe one picture or character referenced by a story directive."""
 
-    art_id: str
+    asset_id: str
     kind: Literal["picture", "character"]
-    category: ArtCategory
+    category: ArtworkCategory
     title: str | None = None
     subtitle: str | None = None
     names: tuple[str, ...] = ()
@@ -346,13 +353,13 @@ class StoryArtReference:
 class StoryMediaReference:
     """Describe one ordered sound, music, or video story reference."""
 
-    media_id: str
+    asset_id: str
     kind: StoryMediaKind
 
 
 @dataclass(frozen=True, slots=True)
 class StoryRecord:
-    """Represent one localized story and its ordered art references."""
+    """Represent one localized story and its ordered artwork references."""
 
     id: str
     collection_id: str
@@ -361,7 +368,7 @@ class StoryRecord:
     code: str
     name: str
     info: str
-    art_references: tuple[StoryArtReference, ...]
+    artwork_references: tuple[StoryArtworkReference, ...]
     text: str = ""
     media_references: tuple[StoryMediaReference, ...] = ()
 
@@ -378,8 +385,8 @@ class MovementLocation:
     present_stage_id: str | None
     unlock_stage_id: str | None
     section_id: str | None
-    split_icon_asset_id: str | None
-    split_sub_name: str | None
+    divider_icon_asset_id: str | None
+    divider_sub_name: str | None
     video_id: str | None
 
 
@@ -400,12 +407,12 @@ class Movement:
 
 
 @dataclass(frozen=True, slots=True)
-class MovementSection:
+class Section:
     """Represent one Story Set and its one-to-one review-group stories."""
 
     id: str
     collection_id: str
-    section_type: MovementSectionType
+    section_type: SectionType
     name: str
     review_group_id: str | None
     sort_by_year: int
@@ -428,14 +435,14 @@ class ArchiveGroup:
     collection_id: str
     position: int
     name: str
-    archive_kind: ArchiveKind
+    archive_category: ArchiveCategory
     story_type: Literal["side_story", "vignette"] | None
     stories: tuple[StoryRecord, ...]
 
 
 @dataclass(frozen=True, slots=True)
-class CompositePanel:
-    """Represent one ordered source panel in an upstream composite recipe."""
+class ArtworkPanel:
+    """Represent one ordered source panel in an upstream artwork layout."""
 
     id: str
     position: int
@@ -445,19 +452,19 @@ class CompositePanel:
 
 @dataclass(frozen=True, slots=True)
 class GalleryArtwork:
-    """Represent one ordered sibling artwork inside a gallery display."""
+    """Represent one ordered artwork inside a Gallery Group."""
 
     position: int
     cg_id: str
-    art_id: str
-    category: ArtCategory
-    composite_type: CompositeType
-    panels: tuple[CompositePanel, ...]
+    asset_id: str
+    category: ArtworkCategory
+    layout: ArtworkLayout
+    panels: tuple[ArtworkPanel, ...]
 
 
 @dataclass(frozen=True, slots=True)
-class GalleryDisplay:
-    """Represent sibling artworks sharing one game gallery card."""
+class GalleryGroup:
+    """Represent artworks sharing one Gallery Group."""
 
     id: str
     position: int
@@ -469,8 +476,8 @@ class GalleryDisplay:
 
 
 @dataclass(frozen=True, slots=True)
-class GalleryGroup:
-    """Represent one collection-owned gallery and its ordered displays."""
+class Gallery:
+    """Represent one collection-owned gallery and its ordered groups."""
 
     id: str
     collection_id: str
@@ -478,7 +485,7 @@ class GalleryGroup:
     name: str
     description: str
     location_id: str | None
-    displays: tuple[GalleryDisplay, ...]
+    groups: tuple[GalleryGroup, ...]
 
 
 @dataclass(frozen=True, slots=True)
@@ -488,6 +495,6 @@ class LocaleManifest:
     unit: LocaleUnit
     upstream_version: str
     movements: tuple[Movement, ...]
-    movement_sections: tuple[MovementSection, ...]
+    sections: tuple[Section, ...]
     archive_groups: tuple[ArchiveGroup, ...]
-    galleries: tuple[GalleryGroup, ...]
+    galleries: tuple[Gallery, ...]

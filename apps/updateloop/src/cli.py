@@ -17,13 +17,13 @@ from dotenv import load_dotenv
 
 from .asset_bundle_archive import S3AssetBundleArchiveStore
 from .config import Settings
-from .domain import ArtManifest, LocaleManifest, LocaleUnit
+from .domain import ArtworkManifest, LocaleManifest, LocaleUnit
 from .object_store import S3ObjectStore
 from .updater import Updater, UpdateRequest, UpdateUnit
-from .upstream import UpstreamArtBuilder, UpstreamCache, UpstreamLocaleBuilder
-from .upstream.art_history import WindowsVersionHistory
+from .upstream import UpstreamArtworkBuilder, UpstreamCache, UpstreamLocaleBuilder
+from .upstream.artwork_history import WindowsVersionHistory
 
-_ALL_UNITS: tuple[UpdateUnit, ...] = ("art", "CN", "EN", "JP", "KR", "TW")
+_ALL_UNITS: tuple[UpdateUnit, ...] = ("artwork", "CN", "EN", "JP", "KR", "TW")
 _STRUCTURED_LOG_FIELDS = (
     "action",
     "status",
@@ -70,7 +70,7 @@ def _configure_logging(*, suppress_incomplete_upstream_warnings: bool = False) -
 
 
 def _unit(value: str) -> UpdateUnit:
-    normalized = "art" if value.lower() == "art" else value.upper()
+    normalized = "artwork" if value.lower() == "artwork" else value.upper()
     if normalized not in _ALL_UNITS:
         raise argparse.ArgumentTypeError(f"unknown update unit: {value}")
     return cast(UpdateUnit, normalized)
@@ -85,7 +85,7 @@ def _parser() -> argparse.ArgumentParser:
     run.add_argument(
         "--complete",
         action="store_true",
-        help="rebuild art additively across every recorded Windows resVersion",
+        help="rebuild artwork additively across every recorded Windows resVersion",
     )
     run.add_argument(
         "--archive",
@@ -111,12 +111,12 @@ def _validate_arguments(parser: argparse.ArgumentParser, args: argparse.Namespac
     if args.command == "run" and args.complete:
         if args.force:
             parser.error("--complete cannot be combined with --force")
-        if args.units != ["art"]:
-            parser.error("--complete requires exactly one update unit: art")
-    if args.command == "run" and args.force and (not args.units or "art" in args.units):
+        if args.units != ["artwork"]:
+            parser.error("--complete requires exactly one update unit: artwork")
+    if args.command == "run" and args.force and (not args.units or "artwork" in args.units):
         parser.error("--force is available only for locale-only updates")
-    if args.command == "run" and args.archive and args.units and "art" not in args.units:
-        parser.error("--archive requires an update request containing art")
+    if args.command == "run" and args.archive and args.units and "artwork" not in args.units:
+        parser.error("--archive requires an update request containing artwork")
 
 
 def _updater(settings: Settings) -> Updater:
@@ -148,16 +148,16 @@ def _asset_bundle_archive(settings: Settings) -> S3AssetBundleArchiveStore:
     )
 
 
-async def _prepare_art(
+async def _prepare_artwork(
     settings: Settings,
     cache: UpstreamCache,
     *,
     complete: bool = False,
     archive: bool = False,
 ) -> UpdateRequest:
-    builder = UpstreamArtBuilder(
-        version_url=settings.art_version_url,
-        asset_base_url=settings.art_asset_base_url,
+    builder = UpstreamArtworkBuilder(
+        version_url=settings.artwork_version_url,
+        asset_base_url=settings.artwork_asset_base_url,
         download_workers=settings.download_workers,
         extraction_workers=settings.extraction_workers,
         cache=cache,
@@ -184,17 +184,17 @@ async def _prepare_art(
 
     if complete:
         if versions is None:
-            raise AssertionError("complete art history was not loaded")
+            raise AssertionError("complete artwork history was not loaded")
 
-        async def build_complete(_active: str | None, _force: bool) -> ArtManifest:
+        async def build_complete(_active: str | None, _force: bool) -> ArtworkManifest:
             return await builder.build_history(versions)
 
-        return UpdateRequest("art", res_version, build_complete, complete=True)
+        return UpdateRequest("artwork", res_version, build_complete, complete=True)
 
-    async def build(active: str | None, force: bool) -> ArtManifest:
+    async def build(active: str | None, force: bool) -> ArtworkManifest:
         return await builder.build(res_version, active, force)
 
-    return UpdateRequest("art", res_version, build)
+    return UpdateRequest("artwork", res_version, build)
 
 
 def _locale_builder(
@@ -267,16 +267,18 @@ async def _run_with_cache(
     requested_units = tuple(dict.fromkeys(units or _ALL_UNITS))
     updater = _updater(settings)
     locale_builder = (
-        _locale_builder(settings, cache) if any(unit != "art" for unit in requested_units) else None
+        _locale_builder(settings, cache)
+        if any(unit != "artwork" for unit in requested_units)
+        else None
     )
     preparation_tasks: dict[UpdateUnit, asyncio.Task[UpdateRequest]] = {}
     try:
         for unit in requested_units:
-            if unit == "art":
+            if unit == "artwork":
                 preparation = (
-                    _prepare_art(settings, cache, complete=complete, archive=archive)
+                    _prepare_artwork(settings, cache, complete=complete, archive=archive)
                     if complete or archive
-                    else _prepare_art(settings, cache)
+                    else _prepare_artwork(settings, cache)
                 )
             else:
                 if locale_builder is None:

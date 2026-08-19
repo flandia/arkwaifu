@@ -13,8 +13,8 @@ from arkwaifu_updateloop.asset_bundle_archive import (
     MemoryAssetBundleArchiveStore,
     S3AssetBundleArchiveStore,
 )
-from arkwaifu_updateloop.upstream import art as art_module
-from arkwaifu_updateloop.upstream.art import UpstreamArtBuilder
+from arkwaifu_updateloop.upstream import artwork as artwork_module
+from arkwaifu_updateloop.upstream.artwork import UpstreamArtworkBuilder
 from arkwaifu_updateloop.upstream.cache import UpstreamCache
 
 
@@ -36,7 +36,7 @@ def _wrapper(name: str, content: bytes) -> bytes:
     return output.getvalue()
 
 
-def _mock_art_client(
+def _mock_artwork_client(
     monkeypatch: pytest.MonkeyPatch,
     versions: dict[str, dict[str, bytes]],
     requests: list[str],
@@ -50,12 +50,12 @@ def _mock_art_client(
         resources = versions[version]
         if filename == "hot_update_list.json":
             return httpx.Response(200, content=_manifest(resources))
-        logical_names = {art_module._resource_filename(name): name for name in resources}
+        logical_names = {artwork_module._resource_filename(name): name for name in resources}
         name = logical_names[filename]
         return httpx.Response(200, content=_wrapper(name, resources[name]))
 
     monkeypatch.setattr(
-        art_module.httpx,
+        artwork_module.httpx,
         "AsyncClient",
         lambda **kwargs: real_client(
             transport=httpx.MockTransport(respond),
@@ -64,22 +64,19 @@ def _mock_art_client(
     )
 
 
-def test_archive_manifest_accepts_the_short_anon_digest():
-    resources = UpstreamArtBuilder._parse_all_resources(
-        {
-            "abInfos": [
-                {
-                    "name": "anon/f97e80db75bb062d98254cfb40e2d578.bin",
-                    "md5": "26A8",
-                }
-            ]
-        },
-        "v1",
-    )
-
-    assert [(resource.name, resource.md5) for resource in resources] == [
-        ("anon/f97e80db75bb062d98254cfb40e2d578.bin", "26a8")
-    ]
+def test_archive_manifest_rejects_short_digest():
+    with pytest.raises(ValueError, match="invalid MD5"):
+        UpstreamArtworkBuilder._parse_all_resources(
+            {
+                "abInfos": [
+                    {
+                        "name": "anon/f97e80db75bb062d98254cfb40e2d578.bin",
+                        "md5": "26A8",
+                    }
+                ]
+            },
+            "v1",
+        )
 
 
 @pytest.mark.asyncio
@@ -99,8 +96,8 @@ async def test_first_archive_builds_full_history_then_resumes_from_last_manifest
         },
     }
     requests: list[str] = []
-    _mock_art_client(monkeypatch, versions, requests)
-    builder = UpstreamArtBuilder(
+    _mock_artwork_client(monkeypatch, versions, requests)
+    builder = UpstreamArtworkBuilder(
         version_url="https://version.example",
         asset_base_url="https://assets.example",
         cache=UpstreamCache(tmp_path / ".cache"),
@@ -141,14 +138,14 @@ async def test_bundle_failure_does_not_publish_completion_manifest(
     monkeypatch: pytest.MonkeyPatch,
 ):
     versions = {"v1": {"a.ab": b"a-v1"}}
-    _mock_art_client(monkeypatch, versions, [])
+    _mock_artwork_client(monkeypatch, versions, [])
 
     class FailingArchive(MemoryAssetBundleArchiveStore):
         async def put_bundle(self, version, filename, source, *, bundle_md5):
             raise RuntimeError("archive upload failed")
 
     archive = FailingArchive()
-    builder = UpstreamArtBuilder(
+    builder = UpstreamArtworkBuilder(
         version_url="https://version.example",
         asset_base_url="https://assets.example",
         cache=UpstreamCache(tmp_path / ".cache"),
@@ -216,9 +213,7 @@ async def test_s3_archive_uses_cn_windows_prefix_and_create_only_metadata(
     manifest.write_bytes(b'{"abInfos":[]}')
     bundle_md5 = _md5(b"inner bundle")
 
-    assert await store.put_bundle(
-        "v1", "[uc]shaders shadow 1.dat", bundle, bundle_md5=bundle_md5
-    )
+    assert await store.put_bundle("v1", "[uc]shaders shadow 1.dat", bundle, bundle_md5=bundle_md5)
     assert await store.put_manifest("v1", manifest)
     assert not await store.put_bundle(
         "v1", "[uc]shaders shadow 1.dat", bundle, bundle_md5=bundle_md5
@@ -238,6 +233,4 @@ async def test_s3_archive_uses_cn_windows_prefix_and_create_only_metadata(
 
     bundle.write_bytes(b"conflicting wrapper")
     with pytest.raises(ValueError, match="immutable asset-bundle archive object conflicts"):
-        await store.put_bundle(
-            "v1", "[uc]shaders shadow 1.dat", bundle, bundle_md5=bundle_md5
-        )
+        await store.put_bundle("v1", "[uc]shaders shadow 1.dat", bundle, bundle_md5=bundle_md5)

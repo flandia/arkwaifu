@@ -1,4 +1,4 @@
-"""Parse the game gallery hierarchy without flattening sibling artworks."""
+"""Parse the game Gallery hierarchy without flattening Gallery Groups."""
 
 from __future__ import annotations
 
@@ -9,16 +9,16 @@ from pathlib import Path
 from typing import Any, cast
 
 from ..domain import (
-    ArtCategory,
-    CompositePanel,
-    CompositeType,
+    ArtworkCategory,
+    ArtworkLayout,
+    ArtworkPanel,
+    Gallery,
     GalleryArtwork,
-    GalleryDisplay,
     GalleryGroup,
 )
 
 _EXCEL_ROOT = Path("assets/torappu/dynamicassets/gamedata/excel")
-_COMPOSITE_TYPES = frozenset({"none", "vertical", "horizontal"})
+_ARTWORK_LAYOUTS = frozenset({"none", "vertical", "horizontal"})
 
 
 def parse_galleries(
@@ -26,11 +26,11 @@ def parse_galleries(
     *,
     collection_names: Mapping[str, str] | None = None,
     legacy_collections: Mapping[str, str] | None = None,
-) -> tuple[GalleryGroup, ...]:
+) -> tuple[Gallery, ...]:
     """Parse current galleries, then add only non-overlapping legacy galleries.
 
     ``cgGalleryGroups`` supplies the authoritative hierarchy and labels.
-    Distinct older pictures are appended as singleton displays, including in
+    Distinct older pictures are appended as singleton groups, including in
     collections which have a current group. Callers provide normalized
     ownership so legacy activity IDs resolve to the shared story leaf seam.
     """
@@ -51,111 +51,111 @@ def parse_galleries(
 def _parse_current(
     stage: Mapping[str, Any],
     names: Mapping[str, str],
-) -> tuple[GalleryGroup, ...]:
-    raw_groups = _normalized_mapping(stage.get("cgGalleryGroups"))
-    raw_displays = _normalized_mapping(stage.get("cgGalleryDisplays"))
-    raw_cgs = _normalized_mapping(stage.get("cgGalleryCgs"))
+) -> tuple[Gallery, ...]:
+    raw_galleries = _normalized_mapping(stage.get("cgGalleryGroups"))
+    raw_groups = _normalized_mapping(stage.get("cgGalleryDisplays"))
+    raw_cgs = _asset_mapping(stage.get("cgGalleryCgs"))
     story_sets = _normalized_mapping(stage.get("storylineStorySets"))
     group_rank = _group_ranks(stage)
-    ordered_groups = sorted(
-        raw_groups.items(),
+    ordered_galleries = sorted(
+        raw_galleries.items(),
         key=lambda item: (
             *group_rank.get(item[0].lower(), (2**31 - 1, 2**31 - 1)),
             item[0].lower(),
         ),
     )
 
-    galleries: list[GalleryGroup] = []
-    for position, (raw_group_id, value) in enumerate(ordered_groups):
-        raw_group = _required_object(value, f"gallery group {raw_group_id}")
+    galleries: list[Gallery] = []
+    for position, (raw_gallery_id, value) in enumerate(ordered_galleries):
+        raw_gallery = _required_object(value, f"Gallery {raw_gallery_id}")
         section_id = _declared_mapping_identifier(
-            raw_group,
+            raw_gallery,
             "storySetId",
-            raw_group_id,
-            "gallery group",
+            raw_gallery_id,
+            "Gallery",
         )
         collection_id = _movement_collection_id(section_id)
         story_set = _required_mapping_entry(story_sets, section_id, "gallery Story Set")
         rank = group_rank.get(section_id)
         if rank is not None:
             _, _, canonical_storyline_id, canonical_location_id = rank
-            declared_storyline_id = _identifier(raw_group.get("storylineId"))
-            declared_location_id = _identifier(raw_group.get("locationId"))
+            declared_storyline_id = _identifier(raw_gallery.get("storylineId"))
+            declared_location_id = _identifier(raw_gallery.get("locationId"))
             if declared_storyline_id not in {None, canonical_storyline_id}:
                 raise ValueError(
-                    "gallery group Movement does not match canonical placement: "
+                    "Gallery Movement does not match canonical placement: "
                     f"section_id={section_id} expected={canonical_storyline_id} "
                     f"actual={declared_storyline_id}"
                 )
             if declared_location_id not in {None, canonical_location_id}:
                 raise ValueError(
-                    "gallery group location does not match canonical placement: "
+                    "Gallery location does not match canonical placement: "
                     f"section_id={section_id} expected={canonical_location_id} "
                     f"actual={declared_location_id}"
                 )
-        raw_display_ids = _strings(raw_group.get("displays"))
-        if not raw_display_ids:
-            raise ValueError(f"gallery group has no displays: {raw_group_id}")
-        normalized_display_ids = tuple(display_id.lower() for display_id in raw_display_ids)
-        if len(normalized_display_ids) != len(set(normalized_display_ids)):
-            raise ValueError(f"gallery group references duplicate display: {raw_group_id}")
-        displays = tuple(
-            _display(
-                raw_display_id,
-                display_position,
+        raw_group_ids = _strings(raw_gallery.get("displays"))
+        if not raw_group_ids:
+            raise ValueError(f"Gallery has no Gallery Groups: {raw_gallery_id}")
+        normalized_group_ids = tuple(group_id.lower() for group_id in raw_group_ids)
+        if len(normalized_group_ids) != len(set(normalized_group_ids)):
+            raise ValueError(f"Gallery references duplicate Gallery Group: {raw_gallery_id}")
+        groups = tuple(
+            _group(
+                raw_group_id,
+                group_position,
                 section_id,
-                raw_displays,
+                raw_groups,
                 raw_cgs,
             )
-            for display_position, raw_display_id in enumerate(raw_display_ids)
+            for group_position, raw_group_id in enumerate(raw_group_ids)
         )
         galleries.append(
-            GalleryGroup(
-                id=raw_group_id.lower(),
+            Gallery(
+                id=raw_gallery_id.lower(),
                 collection_id=collection_id,
                 position=position,
                 name=names.get(collection_id, ""),
                 description=_story_set_description(story_set),
-                location_id=_identifier(raw_group.get("locationId")),
-                displays=displays,
+                location_id=_identifier(raw_gallery.get("locationId")),
+                groups=groups,
             )
         )
     return tuple(galleries)
 
 
-def _display(
-    raw_display_id: str,
+def _group(
+    raw_group_id: str,
     position: int,
     section_id: str,
-    displays: Mapping[str, Any],
+    raw_groups: Mapping[str, Any],
     cgs: Mapping[str, Any],
-) -> GalleryDisplay:
-    raw = _required_mapping_entry(displays, raw_display_id, "gallery display")
-    display_id = _declared_mapping_identifier(
+) -> GalleryGroup:
+    raw = _required_mapping_entry(raw_groups, raw_group_id, "Gallery Group")
+    group_id = _declared_mapping_identifier(
         raw,
         "displayId",
-        raw_display_id,
-        "gallery display",
+        raw_group_id,
+        "Gallery Group",
     )
     declared_section = _identifier(raw.get("storySetId"))
     if declared_section is not None and declared_section != section_id:
         raise ValueError(
-            "gallery display belongs to a different Story Set: "
-            f"display_id={display_id} expected={section_id} actual={declared_section}"
+            "Gallery Group belongs to a different Story Set: "
+            f"group_id={group_id} expected={section_id} actual={declared_section}"
         )
-    category = _gallery_art_category(raw.get("cgSource"))
+    category = _gallery_artwork_category(raw.get("cgSource"))
     raw_cg_ids = _strings(raw.get("cgList"))
-    normalized_cg_ids = tuple(cg_id.lower() for cg_id in raw_cg_ids)
+    normalized_cg_ids = tuple(cg_id.casefold() for cg_id in raw_cg_ids)
     if len(normalized_cg_ids) != len(set(normalized_cg_ids)):
-        raise ValueError(f"gallery display references duplicate artwork: {display_id}")
+        raise ValueError(f"Gallery Group references duplicate Artwork: {group_id}")
     artworks = tuple(
         _artwork(cg_id, artwork_position, section_id, category, cgs)
         for artwork_position, cg_id in enumerate(raw_cg_ids)
     )
     if not artworks:
-        raise ValueError(f"gallery display has no artworks: {display_id}")
-    return GalleryDisplay(
-        id=display_id,
+        raise ValueError(f"Gallery Group has no Artwork: {group_id}")
+    return GalleryGroup(
+        id=group_id,
         position=position,
         name=_text(raw.get("displayName")),
         description=_text(raw.get("displayDesc")),
@@ -169,11 +169,11 @@ def _artwork(
     raw_cg_id: str,
     position: int,
     section_id: str,
-    category: ArtCategory,
+    category: ArtworkCategory,
     cgs: Mapping[str, Any],
 ) -> GalleryArtwork:
-    raw = _required_mapping_entry(cgs, raw_cg_id, "gallery artwork")
-    cg_id = _declared_mapping_identifier(
+    raw = _required_asset_mapping_entry(cgs, raw_cg_id, "gallery artwork")
+    cg_id = _declared_asset_mapping_identifier(
         raw,
         "cgId",
         raw_cg_id,
@@ -185,41 +185,41 @@ def _artwork(
             "gallery artwork belongs to a different Story Set: "
             f"cg_id={cg_id} expected={section_id} actual={declared_section}"
         )
-    composite_type = _text(raw.get("compositeType")).lower()
-    if composite_type not in _COMPOSITE_TYPES:
-        raise ValueError(f"unknown gallery composite type: {composite_type!r}")
+    layout = _text(raw.get("compositeType")).lower()
+    if layout not in _ARTWORK_LAYOUTS:
+        raise ValueError(f"unknown Gallery Artwork layout: {layout!r}")
     raw_panels = _mappings(raw.get("compositeList"))
     panels = ()
-    art_id = cg_id
-    if composite_type == "none":
+    asset_id = cg_id
+    if layout == "none":
         if raw_panels:
-            raise ValueError(f"non-composite gallery artwork has panels: {cg_id}")
+            raise ValueError(f"non-panel Gallery Artwork has panels: {cg_id}")
     else:
         panels = tuple(
-            CompositePanel(
+            ArtworkPanel(
                 id=_required_panel_identifier(
                     panel,
                     "cgId",
-                    f"gallery composite {cg_id}",
+                    f"Gallery Artwork {cg_id}",
                 ),
                 position=panel_position,
-                width=_positive_integer(panel, "width", f"gallery composite {cg_id}"),
-                height=_positive_integer(panel, "height", f"gallery composite {cg_id}"),
+                width=_positive_integer(panel, "width", f"Gallery Artwork {cg_id}"),
+                height=_positive_integer(panel, "height", f"Gallery Artwork {cg_id}"),
             )
             for panel_position, panel in enumerate(raw_panels)
         )
         if not panels:
-            raise ValueError(f"gallery composite has no panels: {cg_id}")
+            raise ValueError(f"Gallery Artwork has no panels: {cg_id}")
         panel_ids = tuple(panel.id for panel in panels)
         if len(panel_ids) != len(set(panel_ids)):
-            raise ValueError(f"gallery composite has duplicate panel: {cg_id}")
-        art_id = "/".join(panel.id for panel in panels)
+            raise ValueError(f"Gallery Artwork has duplicate panel: {cg_id}")
+        asset_id = "/".join(panel.id for panel in panels)
     return GalleryArtwork(
         position=position,
         cg_id=cg_id,
-        art_id=art_id,
+        asset_id=asset_id,
         category=category,
-        composite_type=cast(CompositeType, composite_type),
+        layout=cast(ArtworkLayout, layout),
         panels=panels,
     )
 
@@ -229,8 +229,8 @@ def _merge_legacy(
     stage: Mapping[str, Any],
     names: Mapping[str, str],
     ownership: Mapping[str, str],
-    current: tuple[GalleryGroup, ...],
-) -> tuple[GalleryGroup, ...]:
+    current: tuple[Gallery, ...],
+) -> tuple[Gallery, ...]:
     review_meta = _mapping(_read(root, "story_review_meta_table.json", optional=True))
     retro = _mapping(_read(root, "retro_table.json", optional=True))
     roguelike = _mapping(_read(root, "roguelike_topic_table.json", optional=True))
@@ -240,9 +240,9 @@ def _merge_legacy(
     pictures: dict[str, dict[str, Any]] = {}
     for raw_identifier, raw_value in picture_rows.items():
         value = _mapping(raw_value)
-        identifier = (_text(value.get("id")) or raw_identifier).lower()
+        identifier = _text(value.get("id")) or raw_identifier
         if identifier:
-            pictures[identifier] = value
+            pictures[identifier.casefold()] = value
     retro_names: dict[str, str] = {}
     retro_details: dict[str, str] = {}
     for raw in _mappings(_at(retro, "retroActList")):
@@ -278,9 +278,9 @@ def _merge_legacy(
         raw_component = _mapping(components[activity_id])
         gallery_index = by_collection.get(collection_id)
         if gallery_index is None:
-            section_id = collection_id.removeprefix("movement_section:")
+            section_id = collection_id.removeprefix("section:")
             story_set = _mapping(story_sets.get(section_id))
-            gallery = GalleryGroup(
+            gallery = Gallery(
                 id=normalized_activity,
                 collection_id=collection_id,
                 position=len(result),
@@ -291,39 +291,37 @@ def _merge_legacy(
                 or topic_details.get(normalized_activity)
                 or _story_set_description(story_set),
                 location_id=None,
-                displays=(),
+                groups=(),
             )
             gallery_index = len(result)
             by_collection[collection_id] = gallery_index
             result.append(gallery)
         gallery = result[gallery_index]
-        displays = list(gallery.displays)
-        existing_arts = {
-            (artwork.category, artwork.art_id)
-            for display in displays
-            for artwork in display.artworks
+        groups = list(gallery.groups)
+        existing_artworks = {
+            (artwork.category, artwork.asset_id) for group in groups for artwork in group.artworks
         }
-        used_display_ids = {display.id for display in displays}
+        used_group_ids = {group.id for group in groups}
         ordered_refs = sorted(
             _mappings(_at(raw_component, "pic", "pics")),
             key=lambda ref: (_integer(ref.get("picSortId")), _text(ref.get("picId")).lower()),
         )
         for ref in ordered_refs:
-            picture_id = _identifier(ref.get("picId"))
-            picture = pictures.get(picture_id or "")
+            picture_id = _raw_identifier(ref.get("picId"))
+            picture = pictures.get(picture_id.casefold() if picture_id else "")
             if picture is None:
                 continue
-            art_id = _identifier(picture.get("assetPath"))
-            if art_id is None:
+            asset_id = _raw_identifier(picture.get("assetPath"))
+            if asset_id is None:
                 continue
-            identity = ("image", art_id)
-            if identity in existing_arts:
+            identity = ("illustration", asset_id)
+            if identity in existing_artworks:
                 continue
-            display_id = _unique_id(f"{picture_id or art_id}_legacy", used_display_ids)
-            displays.append(
-                GalleryDisplay(
-                    id=display_id,
-                    position=len(displays),
+            group_id = _unique_id(f"{picture_id or asset_id}_legacy", used_group_ids)
+            groups.append(
+                GalleryGroup(
+                    id=group_id,
+                    position=len(groups),
                     name=_text(picture.get("desc")),
                     description=_text(picture.get("picDescription")),
                     related_story_id=None,
@@ -331,17 +329,17 @@ def _merge_legacy(
                     artworks=(
                         GalleryArtwork(
                             position=0,
-                            cg_id=picture_id or art_id,
-                            art_id=art_id,
-                            category="image",
-                            composite_type="none",
+                            cg_id=picture_id or asset_id,
+                            asset_id=asset_id,
+                            category="illustration",
+                            layout="none",
                             panels=(),
                         ),
                     ),
                 )
             )
-            existing_arts.add(identity)
-        result[gallery_index] = replace(gallery, displays=tuple(displays))
+            existing_artworks.add(identity)
+        result[gallery_index] = replace(gallery, groups=tuple(groups))
     return tuple(result)
 
 
@@ -403,6 +401,12 @@ def _normalized_mapping(value: Any) -> dict[str, Any]:
     return {key.lower(): item for key, item in _mapping(value).items() if isinstance(key, str)}
 
 
+def _asset_mapping(value: Any) -> dict[str, Any]:
+    """Keep resource mapping keys intact while parsing their declarations."""
+
+    return {key: item for key, item in _mapping(value).items() if isinstance(key, str)}
+
+
 def _mappings(value: Any) -> tuple[dict[str, Any], ...]:
     if isinstance(value, dict):
         return tuple(item for item in value.values() if isinstance(item, dict))
@@ -430,6 +434,11 @@ def _identifier(value: Any) -> str | None:
     return text.lower() if text else None
 
 
+def _raw_identifier(value: Any) -> str | None:
+    text = _text(value)
+    return text if text else None
+
+
 def _integer(value: Any) -> int:
     return value if isinstance(value, int) and not isinstance(value, bool) else 0
 
@@ -443,6 +452,13 @@ def _positive_integer(value: Mapping[str, Any], field: str, context: str) -> int
 
 def _required_identifier(value: Mapping[str, Any], field: str, context: str) -> str:
     identifier = _identifier(value.get(field))
+    if identifier is None:
+        raise ValueError(f"{context} has invalid {field}: {value.get(field)!r}")
+    return identifier
+
+
+def _required_raw_identifier(value: Mapping[str, Any], field: str, context: str) -> str:
+    identifier = _raw_identifier(value.get(field))
     if identifier is None:
         raise ValueError(f"{context} has invalid {field}: {value.get(field)!r}")
     return identifier
@@ -465,6 +481,21 @@ def _required_mapping_entry(
     return _required_object(values[identifier], f"{context} {identifier}")
 
 
+def _required_asset_mapping_entry(
+    values: Mapping[str, Any],
+    raw_identifier: str,
+    context: str,
+) -> Mapping[str, Any]:
+    if raw_identifier in values:
+        return _required_object(values[raw_identifier], f"{context} {raw_identifier}")
+    matches = [
+        value for key, value in values.items() if key.casefold() == raw_identifier.casefold()
+    ]
+    if len(matches) != 1:
+        raise ValueError(f"{context} is not declared: {raw_identifier}")
+    return _required_object(matches[0], f"{context} {raw_identifier}")
+
+
 def _declared_mapping_identifier(
     value: Mapping[str, Any],
     field: str,
@@ -481,15 +512,26 @@ def _declared_mapping_identifier(
     return declared
 
 
+def _declared_asset_mapping_identifier(
+    value: Mapping[str, Any],
+    field: str,
+    mapping_key: str,
+    context: str,
+) -> str:
+    declared = _required_raw_identifier(value, field, context)
+    if declared.casefold() != mapping_key.casefold():
+        raise ValueError(
+            f"{context} mapping key does not match {field}: key={mapping_key} declared={declared}"
+        )
+    return declared
+
+
 def _required_panel_identifier(
     value: Mapping[str, Any],
     field: str,
     context: str,
 ) -> str:
-    identifier = _required_identifier(value, field, context)
-    if "/" in identifier:
-        raise ValueError(f"{context} panel ID contains reserved '/': {identifier!r}")
-    return identifier
+    return _required_raw_identifier(value, field, context)
 
 
 def _story_set_description(story_set: Mapping[str, Any]) -> str:
@@ -500,17 +542,17 @@ def _story_set_description(story_set: Mapping[str, Any]) -> str:
     return ""
 
 
-def _gallery_art_category(value: Any) -> ArtCategory:
+def _gallery_artwork_category(value: Any) -> ArtworkCategory:
     source = _text(value).upper()
     if source == "BACKGROUND":
         return "background"
     if source == "IMAGE":
-        return "image"
+        return "illustration"
     raise ValueError(f"unknown gallery CG source: {value!r}")
 
 
 def _movement_collection_id(section_id: str) -> str:
-    return f"movement_section:{section_id}"
+    return f"section:{section_id}"
 
 
 def _unique_id(base: str, used: set[str]) -> str:

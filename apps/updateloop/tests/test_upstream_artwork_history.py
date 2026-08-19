@@ -7,7 +7,7 @@ from pathlib import Path
 import httpx
 import pytest
 
-from arkwaifu_updateloop.upstream.art_history import WindowsVersionHistory
+from arkwaifu_updateloop.upstream.artwork_history import WindowsVersionHistory
 from arkwaifu_updateloop.upstream.cache import UpstreamCache
 
 _CURRENT = "26-08-07-10-51-39_26e0fc"
@@ -60,7 +60,7 @@ async def test_history_pages_orders_deduplicates_and_appends_current(tmp_path: P
 
     assert versions == (_EARLIEST, _MIDDLE, _CURRENT)
     assert api_pages == [1, 2]
-    cache = tmp_path / ".cache" / _CURRENT / "art" / "windows-version-history.txt"
+    cache = tmp_path / ".cache" / _CURRENT / "artwork" / "windows-version-history.txt"
     assert cache.read_text(encoding="utf-8") == f"{_EARLIEST}\n{_MIDDLE}\n{_CURRENT}\n"
     assert "OpenBachelorS" not in cache.read_text(encoding="utf-8")
     assert "oldest" not in cache.read_text(encoding="utf-8")

@@ -27,12 +27,12 @@ def test_json_formatter_keeps_exception_details():
     assert "RuntimeError: diagnostic" in payload["exception"]
 
 
-def test_json_formatter_keeps_structured_art_action_fields():
-    record = logging.LogRecord("test", logging.INFO, __file__, 1, "art action", (), None)
+def test_json_formatter_keeps_structured_artwork_action_fields():
+    record = logging.LogRecord("test", logging.INFO, __file__, 1, "artwork action", (), None)
     for key, value in {
         "action": "version",
         "status": "cached",
-        "res_version": "art-v1",
+        "res_version": "artwork-v1",
         "resource": "avg/images/example.ab",
         "current": 3,
         "total": 7,
@@ -45,10 +45,10 @@ def test_json_formatter_keeps_structured_art_action_fields():
     assert payload == {
         "timestamp": payload["timestamp"],
         "level": "info",
-        "message": "art action",
+        "message": "artwork action",
         "action": "version",
         "status": "cached",
-        "res_version": "art-v1",
+        "res_version": "artwork-v1",
         "resource": "avg/images/example.ab",
         "current": 3,
         "total": 7,
@@ -73,15 +73,15 @@ def test_incomplete_upstream_suppression_flag_disables_only_its_logger():
 
 
 def test_no_cache_flag_is_available_on_run():
-    args = _parser().parse_args(["run", "art", "--no-cache"])
+    args = _parser().parse_args(["run", "artwork", "--no-cache"])
 
-    assert args.units == ["art"]
+    assert args.units == ["artwork"]
     assert args.no_cache is True
 
 
-def test_archive_is_available_for_default_or_explicit_art_runs():
+def test_archive_is_available_for_default_or_explicit_artwork_runs():
     parser = _parser()
-    for arguments in (["run", "--archive"], ["run", "art", "--archive"]):
+    for arguments in (["run", "--archive"], ["run", "artwork", "--archive"]):
         args = parser.parse_args(arguments)
         _validate_arguments(parser, args)
         assert args.archive is True
@@ -89,7 +89,7 @@ def test_archive_is_available_for_default_or_explicit_art_runs():
 
 def test_archive_can_be_combined_with_complete():
     parser = _parser()
-    args = parser.parse_args(["run", "art", "--complete", "--archive"])
+    args = parser.parse_args(["run", "artwork", "--complete", "--archive"])
 
     _validate_arguments(parser, args)
 
@@ -137,9 +137,9 @@ def test_main_loads_dotenv_without_overriding_process_environment(monkeypatch, t
     assert observed == [("process-bucket", "file-access", "3")]
 
 
-def test_complete_is_available_for_exactly_the_art_unit():
+def test_complete_is_available_for_exactly_the_artwork_unit():
     parser = _parser()
-    args = parser.parse_args(["run", "art", "--complete"])
+    args = parser.parse_args(["run", "artwork", "--complete"])
 
     _validate_arguments(parser, args)
 
@@ -151,12 +151,12 @@ def test_complete_is_available_for_exactly_the_art_unit():
     [
         ["run", "--complete"],
         ["run", "CN", "--complete"],
-        ["run", "art", "CN", "--complete"],
-        ["run", "art", "art", "--complete"],
-        ["run", "art", "--complete", "--force"],
+        ["run", "artwork", "CN", "--complete"],
+        ["run", "artwork", "artwork", "--complete"],
+        ["run", "artwork", "--complete", "--force"],
     ],
 )
-def test_complete_rejects_default_multiple_non_art_and_force(arguments):
+def test_complete_rejects_default_multiple_non_artwork_and_force(arguments):
     parser = _parser()
     args = parser.parse_args(arguments)
 
@@ -164,8 +164,8 @@ def test_complete_rejects_default_multiple_non_art_and_force(arguments):
         _validate_arguments(parser, args)
 
 
-@pytest.mark.parametrize("units", [[], ["art"], ["art", "EN"]])
-def test_force_rejects_default_or_explicit_art_units(units):
+@pytest.mark.parametrize("units", [[], ["artwork"], ["artwork", "EN"]])
+def test_force_rejects_default_or_explicit_artwork_units(units):
     parser = _parser()
     args = parser.parse_args(["run", *units, "--force"])
 

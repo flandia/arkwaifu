@@ -119,9 +119,9 @@ def test_score_parser_preserves_every_declared_visual_and_video_link(tmp_path: P
         "storyline_ur",
         "continue",
         "People, Us",
-        "storyline_abbr_ur",
-        "storyline_ur",
-        "bg_mainline_3",
+        "StoryLine_Abbr_UR",
+        "StoryLine_UR",
+        "BG_MainLine_3",
         True,
         123,
     )
@@ -136,14 +136,14 @@ def test_score_parser_preserves_every_declared_visual_and_video_link(tmp_path: P
     assert (
         split.position,
         split.location_type,
-        split.split_icon_asset_id,
-        split.split_sub_name,
+        split.divider_icon_asset_id,
+        split.divider_sub_name,
         split.video_id,
         split.section_id,
     ) == (
         1,
-        "mainline_split",
-        "act_3",
+        "divider",
+        "Act_3",
         "NEXUS POINT OF FUTURE",
         "bg_mainline_3",
         None,
@@ -171,15 +171,15 @@ def test_score_parser_preserves_every_declared_visual_and_video_link(tmp_path: P
         section.has_video,
     ) == (
         "set_main_17",
-        "movement_section:set_main_17",
+        "section:set_main_17",
         "main_theme",
         "Critical Phase Transition",
         "main_17",
-        "kv_critical_phase_transition",
-        "title_critical_phase_transition",
-        "bg_mainline_3",
-        "deco_critical_phase_transition",
-        "storybg_critical_phase_transition",
+        "KV_Critical_Phase_Transition",
+        "Title_Critical_Phase_Transition",
+        "BG_MainLine_3",
+        "Deco_Critical_Phase_Transition",
+        "StoryBG_Critical_Phase_Transition",
         "Description",
         True,
     )
@@ -336,7 +336,7 @@ def test_score_parser_rejects_an_invalid_canonical_placement_graph(
         },
     )
 
-    message = "unknown Movement Section" if case == "dangling" else "exactly one canonical"
+    message = "unknown Section" if case == "dangling" else "exactly one canonical"
     with pytest.raises(ValueError, match=message):
         parse_score(tmp_path, {"activity": "Event"})
 

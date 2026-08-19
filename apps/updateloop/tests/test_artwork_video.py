@@ -7,13 +7,13 @@ from pathlib import Path
 import av
 import pytest
 
-from arkwaifu_updateloop.art import read_art_manifest, write_art_manifest
-from arkwaifu_updateloop.art.video import (
+from arkwaifu_updateloop.artwork import read_artwork_manifest, write_artwork_manifest
+from arkwaifu_updateloop.artwork.video import (
     demux_usm_to_ivf,
     remux_ivf_to_webm,
     validate_ivf,
 )
-from arkwaifu_updateloop.domain import ArtManifest, ScoreVideoRecord
+from arkwaifu_updateloop.domain import ArtworkManifest, ScoreVideoRecord
 
 
 def _tiny_ivf(path: Path) -> bytes:
@@ -121,8 +121,8 @@ def test_score_video_manifest_uses_one_canonical_file_backed_artifact(tmp_path: 
         metadata,
     )
 
-    write_art_manifest(
-        ArtManifest(
+    write_artwork_manifest(
+        ArtworkManifest(
             "v1",
             (),
             (),
@@ -130,7 +130,7 @@ def test_score_video_manifest_uses_one_canonical_file_backed_artifact(tmp_path: 
         ),
         rendered,
     )
-    cached = read_art_manifest(rendered)
+    cached = read_artwork_manifest(rendered)
 
     assert cached.score_videos[0].video.path == artifact.path
     assert [path.name for path in (rendered / "processed").iterdir()] == ["00000000.webm"]

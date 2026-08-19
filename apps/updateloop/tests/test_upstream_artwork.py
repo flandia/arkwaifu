@@ -16,19 +16,19 @@ import httpx
 import pytest
 from PIL import Image
 
-from arkwaifu_updateloop.art import write_art_manifest
+from arkwaifu_updateloop.artwork import write_artwork_manifest
 from arkwaifu_updateloop.domain import (
-    ArtManifest,
-    ArtRecord,
+    ArtworkManifest,
+    ArtworkRecord,
     PngArtifact,
-    SourceArtRecord,
+    SourceLayerRecord,
 )
 from arkwaifu_updateloop.upstream import UpstreamCache
-from arkwaifu_updateloop.upstream import art as art_module
-from arkwaifu_updateloop.upstream.art import (
-    UpstreamArtBuilder,
+from arkwaifu_updateloop.upstream import artwork as artwork_module
+from arkwaifu_updateloop.upstream.artwork import (
+    UpstreamArtworkBuilder,
     _bundle_md5,
-    _extract_and_render_art_resource,
+    _extract_and_render_artwork_resource,
     _ProcessingStageError,
     _Resource,
     _unzip_resource,
@@ -52,7 +52,7 @@ def _write_wrapper(destination: Path, resource: _Resource, content: bytes) -> No
 def _empty_render(extracted: Path, rendered: Path, version: str) -> None:
     extracted.mkdir(parents=True, exist_ok=True)
     (extracted / "unity-export.txt").write_text("uncomposed", encoding="utf-8")
-    write_art_manifest(ArtManifest(version, (), ()), rendered)
+    write_artwork_manifest(ArtworkManifest(version, (), ()), rendered)
 
 
 def test_animated_kv_unwrap_keeps_adjacent_stream_resource(tmp_path: Path):
@@ -82,7 +82,7 @@ def test_worker_counts_must_be_positive(
     tmp_path: Path,
 ):
     with pytest.raises(ValueError, match=message):
-        UpstreamArtBuilder(
+        UpstreamArtworkBuilder(
             version_url="https://example.test/version",
             asset_base_url="https://example.test/assets",
             cache=UpstreamCache(tmp_path / ".cache"),
@@ -91,9 +91,9 @@ def test_worker_counts_must_be_positive(
         )
 
 
-def test_art_builder_requires_a_cache_workspace():
+def test_artwork_builder_requires_a_cache_workspace():
     with pytest.raises(TypeError, match="cache"):
-        UpstreamArtBuilder(
+        UpstreamArtworkBuilder(
             version_url="https://example.test/version",
             asset_base_url="https://example.test/assets",
         )
@@ -125,15 +125,15 @@ async def test_gallery_recipes_are_branch_consistent_and_fetched_once(tmp_path: 
     calls = []
     stage = {
         "cgGalleryDisplays": {
-            "display": {
-                "displayId": "Display",
+            "group": {
+                "displayId": "Group",
                 "cgSource": "BACKGROUND",
-                "cgList": ["Composite"],
+                "cgList": ["PanelArtwork"],
             }
         },
         "cgGalleryCgs": {
-            "Composite": {
-                "cgId": "Composite",
+            "PanelArtwork": {
+                "cgId": "PanelArtwork",
                 "compositeType": "VERTICAL",
                 "compositeList": [
                     {"cgId": "Top", "width": 2, "height": 1},
@@ -149,7 +149,7 @@ async def test_gallery_recipes_are_branch_consistent_and_fetched_once(tmp_path: 
             return httpx.Response(200, json={"versionId": "cn-v1"})
         return httpx.Response(200, json=stage)
 
-    builder = UpstreamArtBuilder(
+    builder = UpstreamArtworkBuilder(
         version_url="https://example.test/version",
         asset_base_url="https://example.test/assets",
         gallery_metadata_base_url="https://example.test/cn",
@@ -166,7 +166,7 @@ async def test_gallery_recipes_are_branch_consistent_and_fetched_once(tmp_path: 
         "/cn/hot_update_list.json",
     ]
     assert first.version == "cn-v1"
-    assert first.recipes[0].art_id == "top/bottom"
+    assert first.recipes[0].asset_id == "Top/Bottom"
     assert first.recipes[0].category == "background"
 
 
@@ -182,29 +182,29 @@ async def test_gallery_recipe_fetch_rejects_a_branch_race(tmp_path: Path):
             json={"cgGalleryDisplays": {}, "cgGalleryCgs": {}},
         )
 
-    builder = UpstreamArtBuilder(
+    builder = UpstreamArtworkBuilder(
         version_url="https://example.test/version",
         asset_base_url="https://example.test/assets",
         gallery_metadata_base_url="https://example.test/cn",
         cache=UpstreamCache(tmp_path / ".cache"),
     )
     async with httpx.AsyncClient(transport=httpx.MockTransport(respond)) as client:
-        with pytest.raises(RuntimeError, match="changed during art preparation"):
+        with pytest.raises(RuntimeError, match="changed during artwork preparation"):
             await builder._load_gallery_recipes(client)
 
 
 def _gallery_recipe_stage() -> dict[str, object]:
     return {
         "cgGalleryDisplays": {
-            "Display": {
-                "displayId": "display",
+            "Group": {
+                "displayId": "group",
                 "cgSource": "IMAGE",
-                "cgList": ["Composite"],
+                "cgList": ["PanelArtwork"],
             }
         },
         "cgGalleryCgs": {
-            "Composite": {
-                "cgId": "composite",
+            "PanelArtwork": {
+                "cgId": "panelartwork",
                 "compositeType": "VERTICAL",
                 "compositeList": [
                     {"cgId": "Top", "width": 2, "height": 1},
@@ -220,10 +220,9 @@ def _gallery_recipe_stage() -> dict[str, object]:
     [
         ("unknown_source", ValueError, "unknown cgSource"),
         ("missing_cg", ValueError, "artwork is not declared"),
-        ("missing_composite_type", TypeError, "has no compositeType"),
-        ("display_id_mismatch", ValueError, "mapping key does not match displayId"),
+        ("missing_layout", TypeError, "has no layout"),
+        ("group_id_mismatch", ValueError, "mapping key does not match displayId"),
         ("cg_id_mismatch", ValueError, "mapping key does not match cgId"),
-        ("slash_panel", ValueError, "contains reserved '/'"),
     ],
 )
 def test_gallery_recipe_parser_rejects_modern_schema_drift(
@@ -232,23 +231,30 @@ def test_gallery_recipe_parser_rejects_modern_schema_drift(
     message: str,
 ):
     stage = _gallery_recipe_stage()
-    display = stage["cgGalleryDisplays"]["Display"]
-    cg = stage["cgGalleryCgs"]["Composite"]
+    group = stage["cgGalleryDisplays"]["Group"]
+    artwork = stage["cgGalleryCgs"]["PanelArtwork"]
     if case == "unknown_source":
-        display["cgSource"] = "UNKNOWN"
+        group["cgSource"] = "UNKNOWN"
     elif case == "missing_cg":
         stage["cgGalleryCgs"] = {}
-    elif case == "missing_composite_type":
-        del cg["compositeType"]
-    elif case == "display_id_mismatch":
-        display["displayId"] = "different"
+    elif case == "missing_layout":
+        del artwork["compositeType"]
+    elif case == "group_id_mismatch":
+        group["displayId"] = "different"
     elif case == "cg_id_mismatch":
-        cg["cgId"] = "different"
-    elif case == "slash_panel":
-        cg["compositeList"][0]["cgId"] = "top/ambiguous"
+        artwork["cgId"] = "different"
 
     with pytest.raises(error_type, match=message):
-        UpstreamArtBuilder._parse_gallery_recipes(stage)
+        UpstreamArtworkBuilder._parse_gallery_recipes(stage)
+
+
+def test_gallery_recipe_parser_preserves_slashes_in_panel_ids():
+    stage = _gallery_recipe_stage()
+    stage["cgGalleryCgs"]["PanelArtwork"]["compositeList"][0]["cgId"] = "top/ambiguous"
+
+    (recipe,) = UpstreamArtworkBuilder._parse_gallery_recipes(stage)
+
+    assert recipe.asset_id == "top/ambiguous/Bottom"
 
 
 @pytest.mark.parametrize("failing_stage", ["extract", "compose"])
@@ -262,11 +268,11 @@ def test_combined_worker_reports_the_stage_that_failed(tmp_path, monkeypatch, fa
     def compose(_extracted, _rendered, _version):
         raise ValueError("cannot compose")
 
-    monkeypatch.setattr(art_module, "extract_assets", extract)
-    monkeypatch.setattr(art_module, "_render_art_resource", compose)
+    monkeypatch.setattr(artwork_module, "extract_assets", extract)
+    monkeypatch.setattr(artwork_module, "_render_artwork_resource", compose)
 
     with pytest.raises(_ProcessingStageError) as raised:
-        _extract_and_render_art_resource(
+        _extract_and_render_artwork_resource(
             tmp_path / "bundle.ab",
             tmp_path / "extracted",
             tmp_path / "rendered",
@@ -289,13 +295,13 @@ async def test_complete_history_is_additive_and_latest_identity_wins(
     caplog: pytest.LogCaptureFixture,
 ):
     image = PngArtifact.from_image(Image.new("RGBA", (1, 1)))
-    original = ArtRecord("shared", "image", image)
+    original = ArtworkRecord("shared", "illustration", image)
     replacement_image = PngArtifact.from_image(Image.new("RGBA", (1, 1), (1, 2, 3, 255)))
-    replacement = ArtRecord("shared", "image", replacement_image)
-    transient = ArtRecord("temporary", "background", image)
-    same_id_other_category = ArtRecord("shared", "background", image)
-    old_source = SourceArtRecord("source", "char", "body", "1", image)
-    new_source = SourceArtRecord(
+    replacement = ArtworkRecord("shared", "illustration", replacement_image)
+    transient = ArtworkRecord("temporary", "background", image)
+    same_id_other_category = ArtworkRecord("shared", "background", image)
+    old_source = SourceLayerRecord("source", "char", "body", "1", image)
+    new_source = SourceLayerRecord(
         "source",
         "char",
         "whole_body",
@@ -303,12 +309,12 @@ async def test_complete_history_is_additive_and_latest_identity_wins(
         image,
     )
     manifests = {
-        "v1": ArtManifest("v1", (original, transient), (old_source,)),
-        "v2": ArtManifest("v2", (replacement,), (new_source,)),
-        "v3": ArtManifest("v3", (same_id_other_category,), ()),
+        "v1": ArtworkManifest("v1", (original, transient), (old_source,)),
+        "v2": ArtworkManifest("v2", (replacement,), (new_source,)),
+        "v3": ArtworkManifest("v3", (same_id_other_category,), ()),
     }
     calls = []
-    builder = UpstreamArtBuilder(
+    builder = UpstreamArtworkBuilder(
         version_url="https://example.test/version",
         asset_base_url="https://example.test/assets",
         cache=UpstreamCache(tmp_path / ".cache"),
@@ -319,7 +325,7 @@ async def test_complete_history_is_additive_and_latest_identity_wins(
         return manifests[version]
 
     monkeypatch.setattr(builder, "build", build)
-    caplog.set_level(logging.INFO, logger=art_module.__name__)
+    caplog.set_level(logging.INFO, logger=artwork_module.__name__)
 
     result = await builder.build_history(("v1", "v2", "v3"))
 
@@ -329,12 +335,12 @@ async def test_complete_history_is_additive_and_latest_identity_wins(
         ("v3", "v2", False),
     ]
     assert result.upstream_version == "v3"
-    assert result.arts == (
+    assert result.artworks == (
         replace(same_id_other_category, res_version="v3"),
         replace(transient, res_version="v1"),
         replace(replacement, res_version="v2"),
     )
-    assert result.source_arts == (replace(new_source, res_version="v2"),)
+    assert result.source_layers == (replace(new_source, res_version="v2"),)
     version_records = [
         record for record in caplog.records if getattr(record, "action", None) == "version"
     ]
@@ -377,7 +383,7 @@ async def test_cold_fetched_stage_retries_a_corrupt_wrapper(
         requests += 1
         return httpx.Response(200, content=corrupt_wrapper if requests == 1 else valid_wrapper)
 
-    builder = UpstreamArtBuilder(
+    builder = UpstreamArtworkBuilder(
         version_url="https://example.test/version",
         asset_base_url="https://example.test/assets",
         cache=UpstreamCache(tmp_path / ".cache"),
@@ -393,31 +399,31 @@ async def test_cold_fetched_stage_retries_a_corrupt_wrapper(
     ) -> None:
         _empty_render(extracted, rendered, upstream_version)
 
-    monkeypatch.setattr(art_module, "ProcessPoolExecutor", executor_factory)
-    monkeypatch.setattr(art_module, "_extract_and_render_art_resource", process_resource)
+    monkeypatch.setattr(artwork_module, "ProcessPoolExecutor", executor_factory)
+    monkeypatch.setattr(artwork_module, "_extract_and_render_artwork_resource", process_resource)
 
     async with httpx.AsyncClient(transport=httpx.MockTransport(respond)) as client:
         manifests = await builder._process_resources(client, "version", [resource])
 
     assert requests == 2
-    assert manifests == [ArtManifest("version", (), ())]
+    assert manifests == [ArtworkManifest("version", (), ())]
     cached_wrapper = (
         tmp_path
         / ".cache"
         / "version"
-        / "art"
+        / "artwork"
         / "resources"
         / "avg%2Fimages%2Fretry.ab"
         / resource.md5
         / "fetched"
         / "wrapper.dat"
     )
-    UpstreamArtBuilder._validate_bundle(cached_wrapper, resource)
+    UpstreamArtworkBuilder._validate_bundle(cached_wrapper, resource)
 
 
 @pytest.mark.asyncio
 async def test_current_gallery_image_bundles_are_selected(tmp_path: Path):
-    builder = UpstreamArtBuilder(
+    builder = UpstreamArtworkBuilder(
         version_url="https://example.test/version",
         asset_base_url="https://x",
         cache=UpstreamCache(tmp_path / ".cache"),
@@ -428,9 +434,9 @@ async def test_current_gallery_image_bundles_are_selected(tmp_path: Path):
             200,
             json={
                 "abInfos": [
-                    {"name": "avg/images/76_i01_2.ab", "md5": "AABB"},
-                    {"name": "avg/backgrounds/76_g1.ab", "md5": "BBCC"},
-                    {"name": "unrelated/data.ab", "md5": "CCDD"},
+                    {"name": "avg/images/76_i01_2.ab", "md5": "AABB" * 8},
+                    {"name": "avg/backgrounds/76_g1.ab", "md5": "BBCC" * 8},
+                    {"name": "unrelated/data.ab", "md5": "CCDD" * 8},
                 ]
             },
         )
@@ -439,14 +445,14 @@ async def test_current_gallery_image_bundles_are_selected(tmp_path: Path):
         resources = await builder._resources(client, "version")
 
     assert [(resource.name, resource.md5) for resource in resources] == [
-        ("avg/backgrounds/76_g1.ab", "bbcc"),
-        ("avg/images/76_i01_2.ab", "aabb"),
+        ("avg/backgrounds/76_g1.ab", "bbcc" * 8),
+        ("avg/images/76_i01_2.ab", "aabb" * 8),
     ]
 
 
 @pytest.mark.asyncio
 async def test_story_media_and_animated_bundles_are_selected(tmp_path: Path):
-    builder = UpstreamArtBuilder(
+    builder = UpstreamArtworkBuilder(
         version_url="https://example.test/version",
         asset_base_url="https://x",
         cache=UpstreamCache(tmp_path / ".cache"),
@@ -457,13 +463,13 @@ async def test_story_media_and_animated_bundles_are_selected(tmp_path: Path):
             200,
             json={
                 "abInfos": [
-                    {"name": "avg/animatedkv/act3mainss_01.ab", "md5": "AA11"},
-                    {"name": "audio/sound_beta_2/music/act16main/intro.ab", "md5": "BB22"},
-                    {"name": "audio/custom_se/act50side/impact.ab", "md5": "CC33"},
-                    {"name": "audio/sound_beta_2/battle/b_char.ab", "md5": "BC44"},
-                    {"name": "raw/video/03.usm", "md5": "DD44"},
-                    {"name": "audio/sound_beta_2/voice_en/foo.ab", "md5": "EE55"},
-                    {"name": "avg/effects/background/spark.ab", "md5": "FF66"},
+                    {"name": "avg/animatedkv/act3mainss_01.ab", "md5": "AA11" * 8},
+                    {"name": "audio/sound_beta_2/music/act16main/intro.ab", "md5": "BB22" * 8},
+                    {"name": "audio/custom_se/act50side/impact.ab", "md5": "CC33" * 8},
+                    {"name": "audio/sound_beta_2/battle/b_char.ab", "md5": "BC44" * 8},
+                    {"name": "raw/video/03.usm", "md5": "DD44" * 8},
+                    {"name": "audio/sound_beta_2/voice_en/foo.ab", "md5": "EE55" * 8},
+                    {"name": "avg/effects/background/spark.ab", "md5": "FF66" * 8},
                 ]
             },
         )
@@ -472,11 +478,11 @@ async def test_story_media_and_animated_bundles_are_selected(tmp_path: Path):
         resources = await builder._resources(client, "version")
 
     assert [(resource.name, resource.md5) for resource in resources] == [
-        ("audio/custom_se/act50side/impact.ab", "cc33"),
-        ("audio/sound_beta_2/battle/b_char.ab", "bc44"),
-        ("audio/sound_beta_2/music/act16main/intro.ab", "bb22"),
-        ("avg/animatedkv/act3mainss_01.ab", "aa11"),
-        ("raw/video/03.usm", "dd44"),
+        ("audio/custom_se/act50side/impact.ab", "cc33" * 8),
+        ("audio/sound_beta_2/battle/b_char.ab", "bc44" * 8),
+        ("audio/sound_beta_2/music/act16main/intro.ab", "bb22" * 8),
+        ("avg/animatedkv/act3mainss_01.ab", "aa11" * 8),
+        ("raw/video/03.usm", "dd44" * 8),
     ]
 
 
@@ -505,7 +511,7 @@ async def test_resource_processing_starts_while_another_download_is_in_flight(
             processing_started.set()
         _empty_render(extracted, rendered, upstream_version)
 
-    builder = UpstreamArtBuilder(
+    builder = UpstreamArtworkBuilder(
         version_url="https://example.test/version",
         asset_base_url="https://example.test/assets",
         cache=UpstreamCache(tmp_path / ".cache"),
@@ -527,8 +533,8 @@ async def test_resource_processing_starts_while_another_download_is_in_flight(
         _write_wrapper(destination, resource, content)
         return destination
 
-    monkeypatch.setattr(art_module, "ProcessPoolExecutor", executor_factory)
-    monkeypatch.setattr(art_module, "_extract_and_render_art_resource", process_resource)
+    monkeypatch.setattr(artwork_module, "ProcessPoolExecutor", executor_factory)
+    monkeypatch.setattr(artwork_module, "_extract_and_render_artwork_resource", process_resource)
     monkeypatch.setattr(builder, "_download_resource", download)
 
     resources = [
@@ -564,13 +570,13 @@ async def test_resource_processing_concurrency_is_bounded(
             await release.wait()
             return CachedDirectory(
                 tmp_path,
-                ArtManifest("version", (), ()),
+                ArtworkManifest("version", (), ()),
             )
         finally:
             active -= 1
 
     monkeypatch.setattr(cache, "directory", directory)
-    builder = UpstreamArtBuilder(
+    builder = UpstreamArtworkBuilder(
         version_url="https://example.test/version",
         asset_base_url="https://example.test/assets",
         cache=cache,
@@ -611,17 +617,17 @@ async def test_build_returns_promoted_file_backed_paths_in_cache_workspace(
         _recipes=(),
     ) -> None:
         image = PngArtifact.from_image(Image.new("RGBA", (2, 3), (1, 2, 3, 255)))
-        write_art_manifest(
-            ArtManifest(
+        write_artwork_manifest(
+            ArtworkManifest(
                 upstream_version,
-                (ArtRecord("callback", "image", image),),
+                (ArtworkRecord("callback", "illustration", image),),
                 (),
             ),
             rendered,
         )
         extracted.mkdir(parents=True, exist_ok=True)
 
-    builder = UpstreamArtBuilder(
+    builder = UpstreamArtworkBuilder(
         version_url="https://example.test/version",
         asset_base_url="https://example.test/assets",
         cache=UpstreamCache(tmp_path / ".cache"),
@@ -640,14 +646,14 @@ async def test_build_returns_promoted_file_backed_paths_in_cache_workspace(
         _write_wrapper(destination, selected, content)
         return destination
 
-    monkeypatch.setattr(art_module, "ProcessPoolExecutor", executor_factory)
-    monkeypatch.setattr(art_module, "_extract_and_render_art_resource", process_resource)
+    monkeypatch.setattr(artwork_module, "ProcessPoolExecutor", executor_factory)
+    monkeypatch.setattr(artwork_module, "_extract_and_render_artwork_resource", process_resource)
     monkeypatch.setattr(builder, "_resources", resources)
     monkeypatch.setattr(builder, "_download_resource", download)
 
     merged = await builder.build("version", None, False)
 
-    path = merged.arts[0].image.path
+    path = merged.artworks[0].image.path
     assert path is not None and path.is_file()
     assert "rendered" in path.parts
     assert "avg%2Fimages%2Fcallback.ab" in path.parts
@@ -694,9 +700,9 @@ async def test_staged_cache_retains_inputs_and_render_only_reuses_extracted_tree
         nonlocal renders
         renders += 1
         assert (extracted / "unity-export.txt").read_text(encoding="utf-8") == "uncomposed"
-        write_art_manifest(ArtManifest(upstream_version, (), ()), rendered)
+        write_artwork_manifest(ArtworkManifest(upstream_version, (), ()), rendered)
 
-    builder = UpstreamArtBuilder(
+    builder = UpstreamArtworkBuilder(
         version_url="https://example.test/version",
         asset_base_url="https://example.test/assets",
         extraction_workers=1,
@@ -714,12 +720,12 @@ async def test_staged_cache_retains_inputs_and_render_only_reuses_extracted_tree
         _write_wrapper(destination, selected, content)
         return destination
 
-    monkeypatch.setattr(art_module, "ProcessPoolExecutor", executor_factory)
-    monkeypatch.setattr(art_module, "_extract_and_render_art_resource", process_resource)
-    monkeypatch.setattr(art_module, "_render_art_resource", render_resource)
+    monkeypatch.setattr(artwork_module, "ProcessPoolExecutor", executor_factory)
+    monkeypatch.setattr(artwork_module, "_extract_and_render_artwork_resource", process_resource)
+    monkeypatch.setattr(artwork_module, "_render_artwork_resource", render_resource)
     monkeypatch.setattr(builder, "_download_resource", download)
     resource = _resource("avg/images/cached.ab", content)
-    caplog.set_level(logging.INFO, logger=art_module.__name__)
+    caplog.set_level(logging.INFO, logger=artwork_module.__name__)
 
     async with httpx.AsyncClient() as client:
         first = await builder._process_resources(client, "version", [resource])
@@ -728,7 +734,7 @@ async def test_staged_cache_retains_inputs_and_render_only_reuses_extracted_tree
     assert downloads == 1
     assert extractions == 1
     assert renders == 1
-    assert first[0].arts == second[0].arts
+    assert first[0].artworks == second[0].artworks
     action_records = [record for record in caplog.records if hasattr(record, "action")]
     assert [(record.action, record.status) for record in action_records] == [
         ("fetch", "done"),
@@ -744,7 +750,7 @@ async def test_staged_cache_retains_inputs_and_render_only_reuses_extracted_tree
         tmp_path
         / ".cache"
         / "version"
-        / "art"
+        / "artwork"
         / "resources"
         / "avg%2Fimages%2Fcached.ab"
         / resource.md5
@@ -769,8 +775,8 @@ async def test_staged_cache_retains_inputs_and_render_only_reuses_extracted_tree
     assert extractions == 1
     assert renders == 2
     assert manifests[0].upstream_version == "version"
-    assert manifests[0].arts == ()
-    assert manifests[0].source_arts == ()
+    assert manifests[0].artworks == ()
+    assert manifests[0].source_layers == ()
     rerender_records = [record for record in caplog.records if hasattr(record, "action")][
         prior_action_count:
     ]

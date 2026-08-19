@@ -98,7 +98,7 @@ def _parse_manifest(
     collection_names = {record.collection_id: record.name for record in (*sections, *archives)}
     legacy_collections = {archive.id: archive.collection_id for archive in archives}
     for archive in archives:
-        if archive.archive_kind in {"integrated_strategies", "reclamation_algorithm"}:
+        if archive.archive_category in {"integrated_strategies", "reclamation_algorithm"}:
             _, separator, source_id = archive.id.partition(":")
             if separator:
                 legacy_collections[source_id] = archive.collection_id
@@ -113,7 +113,7 @@ def _parse_manifest(
         unit=unit,
         upstream_version=upstream_version,
         movements=movements,
-        movement_sections=sections,
+        sections=sections,
         archive_groups=archives,
         galleries=parse_galleries(
             data_root,

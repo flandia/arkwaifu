@@ -1,4 +1,4 @@
-"""Discover historical Windows resource versions for a complete art run.
+"""Discover historical Windows resource versions for a complete artwork run.
 
 The official client API exposes only the current ``resVersion``.  OpenBachelorS
 keeps a secondary, twice-daily ledger of values observed from that API, which
@@ -30,7 +30,7 @@ _REPOSITORY = "pfyy/OpenBachelorS"
 _VERSION_PATH = "conf/version_windows.json"
 _PAGE_SIZE = 100
 _RAW_CONCURRENCY = 8
-_CACHE_PATH = PurePosixPath("art", "windows-version-history.txt")
+_CACHE_PATH = PurePosixPath("artwork", "windows-version-history.txt")
 _VERSION_PATTERN = re.compile(
     r"(?P<year>\d{2})-(?P<month>\d{2})-(?P<day>\d{2})-"
     r"(?P<hour>\d{2})-(?P<minute>\d{2})-(?P<second>\d{2})_"
@@ -59,7 +59,7 @@ def _log_history_action(
         extra["total"] = count
     if elapsed_seconds is not None:
         extra["elapsed_ms"] = round(elapsed_seconds * 1000, 3)
-    _LOGGER.info("art action", extra=extra)
+    _LOGGER.info("artwork action", extra=extra)
 
 
 def _version_key(version: str) -> datetime:

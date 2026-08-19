@@ -5,7 +5,7 @@ import pytest
 from PIL import Image
 
 from arkwaifu_updateloop.domain import (
-    ArtManifest,
+    ArtworkManifest,
     FilePngArtifact,
     LocaleManifest,
     PngArtifact,
@@ -100,5 +100,5 @@ def test_file_png_artifact_has_a_stable_path_and_loads_content_lazily(
 
 
 def test_manifests_leave_validation_to_storage_constraints():
-    assert not hasattr(ArtManifest, "validate")
+    assert not hasattr(ArtworkManifest, "validate")
     assert not hasattr(LocaleManifest, "validate")

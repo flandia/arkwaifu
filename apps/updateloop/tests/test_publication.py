@@ -22,56 +22,56 @@ from arkwaifu_updateloop import updater as updater_module
 from arkwaifu_updateloop.database import initialize_or_validate
 from arkwaifu_updateloop.domain import (
     ArchiveGroup,
-    ArtManifest,
-    ArtRecord,
+    ArtworkManifest,
+    ArtworkRecord,
     FilePngArtifact,
     FileVideoArtifact,
+    Gallery,
     GalleryArtwork,
-    GalleryDisplay,
     GalleryGroup,
     LocaleManifest,
     Movement,
     MovementLocation,
-    MovementSection,
     PngArtifact,
     ScoreAssetRecord,
     ScoreVideoRecord,
-    SourceArtRecord,
-    SourceArtReference,
-    StoryArtReference,
+    Section,
+    SourceLayerRecord,
+    SourceLayerReference,
+    StoryArtworkReference,
     StoryRecord,
 )
 from arkwaifu_updateloop.thumbnail import make_thumbnail
 from arkwaifu_updateloop.updater import (
-    art_object_key,
+    image_object_key,
     score_asset_object_key,
     score_video_object_key,
 )
 
 
-def art_manifest(
+def artwork_manifest(
     version: str,
-    art_id: str,
+    asset_id: str,
     color: tuple[int, int, int, int] = (1, 2, 3, 255),
     *,
-    category: str = "image",
-) -> ArtManifest:
-    return ArtManifest(
+    category: str = "illustration",
+) -> ArtworkManifest:
+    return ArtworkManifest(
         upstream_version=version,
-        arts=(
-            ArtRecord(
-                id=art_id,
+        artworks=(
+            ArtworkRecord(
+                id=asset_id,
                 category=category,
                 image=PngArtifact.from_image(Image.new("RGBA", (2, 2), color)),
             ),
         ),
-        source_arts=(),
+        source_layers=(),
     )
 
 
-def character_manifest(version: str, character_id: str) -> ArtManifest:
+def character_manifest(version: str, character_id: str) -> ArtworkManifest:
     source_id = f"{character_id}:body:1"
-    source = SourceArtRecord(
+    source = SourceLayerRecord(
         id=source_id,
         category="character",
         kind="character",
@@ -80,13 +80,13 @@ def character_manifest(version: str, character_id: str) -> ArtManifest:
         variant="1",
         image=PngArtifact.from_image(Image.new("RGBA", (2, 3), (1, 2, 3, 255))),
     )
-    art = ArtRecord(
+    artwork = ArtworkRecord(
         id=f"{character_id}#1$1",
         category="character",
         image=PngArtifact.from_image(Image.new("RGBA", (2, 3), (3, 2, 1, 255))),
-        source_art_references=(SourceArtReference("character", source_id),),
+        source_layer_references=(SourceLayerReference("character", source_id),),
     )
-    return ArtManifest(version, (art,), (source,))
+    return ArtworkManifest(version, (artwork,), (source,))
 
 
 def locale_manifest(
@@ -94,11 +94,11 @@ def locale_manifest(
     version: str,
     *,
     suffix: str = "one",
-    art_id: str = "event",
+    asset_id: str = "event",
 ) -> LocaleManifest:
     movement_id = f"movement_{suffix}"
     section_id = f"section_{suffix}"
-    section_collection_id = f"movement_section:{section_id}"
+    section_collection_id = f"section:{section_id}"
     group_id = f"group_{suffix}"
     group_collection_id = f"archive_group:{group_id}"
     story_id = f"story_{suffix}"
@@ -127,15 +127,15 @@ def locale_manifest(
                         present_stage_id=None,
                         unlock_stage_id=None,
                         section_id=section_id,
-                        split_icon_asset_id=None,
-                        split_sub_name=None,
+                        divider_icon_asset_id=None,
+                        divider_sub_name=None,
                         video_id=None,
                     ),
                 ),
             ),
         ),
-        movement_sections=(
-            MovementSection(
+        sections=(
+            Section(
                 id=section_id,
                 collection_id=section_collection_id,
                 section_type="main_theme",
@@ -159,7 +159,7 @@ def locale_manifest(
                 collection_id=group_collection_id,
                 position=0,
                 name="Group",
-                archive_kind="events",
+                archive_category="events",
                 story_type="side_story",
                 stories=(
                     StoryRecord(
@@ -170,11 +170,11 @@ def locale_manifest(
                         code="1",
                         name="Story",
                         info="",
-                        art_references=(
-                            StoryArtReference(
-                                art_id,
+                        artwork_references=(
+                            StoryArtworkReference(
+                                asset_id,
                                 "picture",
-                                "image",
+                                "illustration",
                                 "Title",
                                 "Subtitle",
                                 ("A", "B"),
@@ -185,15 +185,15 @@ def locale_manifest(
             ),
         ),
         galleries=(
-            GalleryGroup(
+            Gallery(
                 id=gallery_id,
                 collection_id=group_collection_id,
                 position=0,
                 name="Gallery",
                 description="Description",
                 location_id=None,
-                displays=(
-                    GalleryDisplay(
+                groups=(
+                    GalleryGroup(
                         id=f"display_{suffix}",
                         position=0,
                         name="Entry",
@@ -204,9 +204,9 @@ def locale_manifest(
                             GalleryArtwork(
                                 position=0,
                                 cg_id=f"entry_{suffix}",
-                                art_id=art_id,
-                                category="image",
-                                composite_type="none",
+                                asset_id=asset_id,
+                                category="illustration",
+                                layout="none",
                                 panels=(),
                             ),
                         ),
@@ -217,12 +217,12 @@ def locale_manifest(
     )
 
 
-def update_request(manifest: ArtManifest | LocaleManifest) -> UpdateRequest:
+def update_request(manifest: ArtworkManifest | LocaleManifest) -> UpdateRequest:
     async def build(_active: str | None, _force: bool):
         return manifest
 
-    if isinstance(manifest, ArtManifest):
-        return UpdateRequest("art", manifest.upstream_version, build)
+    if isinstance(manifest, ArtworkManifest):
+        return UpdateRequest("artwork", manifest.upstream_version, build)
     return UpdateRequest(manifest.unit, manifest.upstream_version, build)
 
 
@@ -249,8 +249,8 @@ def video_artifact(tmp_path: Path, content: bytes = b"webm-fixture") -> FileVide
     )
 
 
-def test_object_key_uses_requested_art_path_and_logical_identity_without_sha():
-    key = art_object_key(
+def test_object_key_uses_requested_image_path_and_logical_identity_without_sha():
+    key = image_object_key(
         res_version="v1",
         variant="composition",
         category="character",
@@ -267,9 +267,9 @@ def test_object_key_uses_requested_art_path_and_logical_identity_without_sha():
         ("composition", "ART/v1/composition/character/id.png"),
     ],
 )
-def test_object_key_supports_art_variants(variant, expected):
+def test_object_key_supports_image_variants(variant, expected):
     assert (
-        art_object_key(
+        image_object_key(
             res_version="v1",
             variant=variant,
             category="character",
@@ -285,11 +285,11 @@ def test_object_key_supports_art_variants(variant, expected):
         "icon",
         "logo",
         "background",
-        "key_visual",
+        "key-visual",
         "title",
         "decoration",
-        "retro_background",
-        "split",
+        "retro-background",
+        "divider",
     ],
 )
 def test_score_asset_object_key_has_a_deep_kind_namespace(kind):
@@ -341,7 +341,7 @@ async def test_s3_remote_streams_a_file_backed_png(monkeypatch, tmp_path):
 
     client = Client()
     monkeypatch.setattr(remote_module.boto3, "client", lambda *_args, **_kwargs: client)
-    png_path = tmp_path / "art.png"
+    png_path = tmp_path / "artwork.png"
     Image.new("RGBA", (2, 3), (1, 2, 3, 255)).save(png_path, format="PNG")
     artifact = FilePngArtifact.from_path(png_path)
     remote = S3ObjectStore(
@@ -351,12 +351,12 @@ async def test_s3_remote_streams_a_file_backed_png(monkeypatch, tmp_path):
         secret_access_key="secret",
     )
 
-    await remote.put_png("ART/v1/composition/image/art.png", artifact)
+    await remote.put_png("ART/v1/composition/illustration/artwork.png", artifact)
 
     assert client.puts == [
         {
             "Bucket": "bucket",
-            "Key": "ART/v1/composition/image/art.png",
+            "Key": "ART/v1/composition/illustration/artwork.png",
             "Body": png_path.read_bytes(),
             "ContentLength": artifact.byte_size,
             "ContentType": "image/png",
@@ -387,7 +387,7 @@ async def test_s3_remote_accepts_matching_immutable_png_without_put(monkeypatch)
         secret_access_key="secret",
     )
 
-    await remote.put_png("ART/v1/composition/image/art.png", artifact)
+    await remote.put_png("ART/v1/composition/illustration/artwork.png", artifact)
 
 
 async def test_s3_remote_rejects_conflicting_immutable_png(monkeypatch):
@@ -410,7 +410,7 @@ async def test_s3_remote_rejects_conflicting_immutable_png(monkeypatch):
     )
 
     with pytest.raises(ValueError, match="immutable PNG object conflicts"):
-        await remote.put_png("ART/v1/composition/image/art.png", artifact)
+        await remote.put_png("ART/v1/composition/illustration/artwork.png", artifact)
 
 
 async def test_s3_remote_streams_a_file_backed_score_video(monkeypatch, tmp_path):
@@ -526,7 +526,7 @@ async def test_s3_remote_always_replaces_thumbnail_with_storage_defaults(monkeyp
         access_key_id="access",
         secret_access_key="secret",
     )
-    key = "ART/v1/thumbnail/image/art.webp"
+    key = "ART/v1/thumbnail/illustration/artwork.webp"
 
     await remote.put_thumbnail(key, first)
     await remote.put_thumbnail(key, second)
@@ -543,7 +543,7 @@ async def test_s3_remote_always_replaces_thumbnail_with_storage_defaults(monkeyp
 
 async def test_memory_remote_replaces_mutable_thumbnail():
     remote = MemoryObjectStore()
-    key = "ART/v1/thumbnail/image/art.webp"
+    key = "ART/v1/thumbnail/illustration/artwork.webp"
     first = make_thumbnail(PngArtifact.from_image(Image.new("RGBA", (2, 3), (1, 2, 3, 255))))
     second = make_thumbnail(PngArtifact.from_image(Image.new("RGBA", (2, 3), (4, 5, 6, 255))))
 
@@ -555,7 +555,7 @@ async def test_memory_remote_replaces_mutable_thumbnail():
 
 async def test_memory_remote_does_not_replace_versioned_png():
     remote = MemoryObjectStore()
-    key = "ART/v1/composition/image/art.png"
+    key = "ART/v1/composition/illustration/artwork.png"
     first = PngArtifact.from_image(Image.new("RGBA", (1, 1), (1, 2, 3, 255)))
     second = PngArtifact.from_image(Image.new("RGBA", (1, 1), (4, 5, 6, 255)))
 
@@ -593,7 +593,7 @@ async def test_memory_remote_does_not_replace_versioned_score_video(tmp_path):
 async def test_partial_first_run_creates_one_valid_database(tmp_path, caplog):
     remote = MemoryObjectStore()
     updater = Updater(remote)
-    locale = locale_manifest("EN", "en-v1", art_id="absent")
+    locale = locale_manifest("EN", "en-v1", asset_id="absent")
 
     with caplog.at_level("WARNING", logger="arkwaifu_updateloop.incomplete_upstream"):
         result = await updater.run([update_request(locale)])
@@ -605,24 +605,24 @@ async def test_partial_first_run_creates_one_valid_database(tmp_path, caplog):
             "unit": "EN",
             "res_version": "en-v1",
         }
-        assert connection.execute("SELECT names_json FROM story_art_references").fetchone()[0] == (
-            '["A","B"]'
-        )
+        assert connection.execute(
+            "SELECT names_json FROM story_narrative_image_references"
+        ).fetchone()[0] == ('["A","B"]')
 
 
-async def test_art_reference_requires_matching_category_and_id(caplog):
+async def test_artwork_reference_requires_matching_category_and_id(caplog):
     remote = MemoryObjectStore()
 
     with caplog.at_level("WARNING", logger="arkwaifu_updateloop.incomplete_upstream"):
         await Updater(remote).run(
             [
-                update_request(art_manifest("art-v1", "shared", category="background")),
-                update_request(locale_manifest("EN", "en-v1", art_id="shared")),
+                update_request(artwork_manifest("artwork-v1", "shared", category="background")),
+                update_request(locale_manifest("EN", "en-v1", asset_id="shared")),
             ]
         )
 
     assert "count=1" in caplog.text
-    assert "image/shared" in caplog.text
+    assert "illustration/shared" in caplog.text
 
 
 async def test_locale_leading_missing_score_assets_warn_and_still_publish(caplog):
@@ -634,68 +634,68 @@ async def test_locale_leading_missing_score_assets_warn_and_still_publish(caplog
         locations=(replace(locale.movements[0].locations[0], video_id="missing-video"),),
     )
     section = replace(
-        locale.movement_sections[0],
+        locale.sections[0],
         key_visual_asset_id="missing-key-visual",
     )
     locale = replace(
         locale,
         movements=(movement,),
-        movement_sections=(section,),
+        sections=(section,),
     )
 
     with caplog.at_level("WARNING", logger="arkwaifu_updateloop.incomplete_upstream"):
         result = await Updater(remote).run([update_request(locale)])
 
     assert result == (UpdateResult("EN", "en-v1", "updated"),)
-    assert "database references unavailable Score assets" in caplog.text
+    assert "database references unavailable presentation assets" in caplog.text
     assert "count=3" in caplog.text
-    assert "score/icon/missing-icon" in caplog.text
-    assert "score/key_visual/missing-key-visual" in caplog.text
-    assert "score/video/missing-video" in caplog.text
+    assert "presentation/icon/missing-icon" in caplog.text
+    assert "presentation/key-visual/missing-key-visual" in caplog.text
+    assert "presentation/video/missing-video" in caplog.text
 
 
 async def test_score_assets_and_videos_publish_before_database(tmp_path):
     remote = MemoryObjectStore()
     image = PngArtifact.from_image(Image.new("RGBA", (64, 32), (1, 2, 3, 255)))
     video = video_artifact(tmp_path)
-    manifest = ArtManifest(
-        upstream_version="art-v1",
-        arts=(),
-        source_arts=(),
+    manifest = ArtworkManifest(
+        upstream_version="artwork-v1",
+        artworks=(),
+        source_layers=(),
         score_assets=(ScoreAssetRecord("icon-main", "icon", image),),
         score_videos=(ScoreVideoRecord("background-main", video),),
     )
 
     result = await Updater(remote).run([update_request(manifest)])
 
-    assert result == (UpdateResult("art", "art-v1", "updated"),)
+    assert result == (UpdateResult("artwork", "artwork-v1", "updated"),)
     assert remote.objects == {
-        "SCORE/art-v1/icon/icon-main.png": image.content,
-        "SCORE/art-v1/video/background-main.webm": video.content,
+        "SCORE/artwork-v1/icon/icon-main.png": image.content,
+        "SCORE/artwork-v1/video/background-main.webm": video.content,
     }
     with database_connection(remote, tmp_path) as connection:
         assert tuple(
             connection.execute(
-                "SELECT asset_kind, asset_id, object_key, byte_size, width, height "
-                "FROM score_assets"
+                "SELECT category, asset_id, object_key, size, width, height "
+                "FROM presentation_image_assets"
             ).fetchone()
         ) == (
             "icon",
             "icon-main",
-            "SCORE/art-v1/icon/icon-main.png",
+            "SCORE/artwork-v1/icon/icon-main.png",
             image.byte_size,
             64,
             32,
         )
         assert tuple(
             connection.execute(
-                "SELECT video_id, object_key, byte_size, width, height, "
+                "SELECT asset_id, object_key, size, width, height, "
                 "frame_rate_numerator, frame_rate_denominator, frame_count "
-                "FROM score_videos"
+                "FROM presentation_video_assets"
             ).fetchone()
         ) == (
             "background-main",
-            "SCORE/art-v1/video/background-main.webm",
+            "SCORE/artwork-v1/video/background-main.webm",
             video.byte_size,
             1920,
             1080,
@@ -712,10 +712,10 @@ async def test_score_video_upload_failure_prevents_database_publication(tmp_path
 
     remote = FailingRemote()
     video = video_artifact(tmp_path)
-    manifest = ArtManifest(
-        upstream_version="art-v1",
-        arts=(),
-        source_arts=(),
+    manifest = ArtworkManifest(
+        upstream_version="artwork-v1",
+        artworks=(),
+        source_layers=(),
         score_videos=(ScoreVideoRecord("background-main", video),),
     )
 
@@ -730,7 +730,7 @@ async def test_score_video_upload_failure_prevents_database_publication(tmp_path
     [
         (("movements",), "movements"),
         (("galleries",), "galleries"),
-        (("movements", "movement_sections"), "movements,movement_sections"),
+        (("movements", "sections"), "movements,sections"),
         (("archive_groups", "galleries"), "archive_groups,galleries"),
     ],
 )
@@ -746,7 +746,7 @@ async def test_incomplete_locale_sections_warn_and_still_publish(
 
     with caplog.at_level("WARNING", logger="arkwaifu_updateloop.incomplete_upstream"):
         results = await Updater(remote).run(
-            [update_request(art_manifest("art-v1", "event")), update_request(locale)]
+            [update_request(artwork_manifest("artwork-v1", "event")), update_request(locale)]
         )
 
     assert [result.status for result in results] == ["updated", "updated"]
@@ -760,9 +760,9 @@ async def test_incomplete_locale_sections_warn_and_still_publish(
         )
         expected = {
             "movements": 0 if "movements" in missing_fields else 1,
-            "movement_sections": 0 if "movement_sections" in missing_fields else 1,
+            "sections": 0 if "sections" in missing_fields else 1,
             "archive_groups": 0 if "archive_groups" in missing_fields else 1,
-            "gallery_groups": 0 if "galleries" in missing_fields else 1,
+            "galleries": 0 if "galleries" in missing_fields else 1,
         }
         for table, count in expected.items():
             assert connection.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0] == count
@@ -771,7 +771,7 @@ async def test_incomplete_locale_sections_warn_and_still_publish(
 async def test_equal_res_version_is_a_noop_without_calling_builder():
     remote = MemoryObjectStore()
     updater = Updater(remote)
-    first = art_manifest("v1", "first")
+    first = artwork_manifest("v1", "first")
     await updater.run([update_request(first)])
     original = remote.database
     called = False
@@ -781,7 +781,7 @@ async def test_equal_res_version_is_a_noop_without_calling_builder():
         called = True
         return first
 
-    result = await updater.run([UpdateRequest("art", "v1", should_not_build)])
+    result = await updater.run([UpdateRequest("artwork", "v1", should_not_build)])
 
     assert result[0].status == "unchanged"
     assert called is False
@@ -802,8 +802,8 @@ async def test_missing_performance_index_is_published_without_rebuilding(tmp_pat
     initialize_or_validate(legacy_path)
     connection = sqlite3.connect(legacy_path)
     try:
-        connection.execute("INSERT INTO unit_versions VALUES ('art', 'v1')")
-        connection.execute("DROP INDEX story_art_references_by_art")
+        connection.execute("INSERT INTO unit_versions VALUES ('artwork', 'v1')")
+        connection.execute("DROP INDEX story_narrative_image_references_by_asset")
         connection.commit()
     finally:
         connection.close()
@@ -815,24 +815,27 @@ async def test_missing_performance_index_is_published_without_rebuilding(tmp_pat
     async def should_not_build(_active: str | None, _force: bool):
         nonlocal called
         called = True
-        return art_manifest("v1", "unused")
+        return artwork_manifest("v1", "unused")
 
-    result = await Updater(remote).run([UpdateRequest("art", "v1", should_not_build)])
+    result = await Updater(remote).run([UpdateRequest("artwork", "v1", should_not_build)])
 
-    assert result == (UpdateResult("art", "v1", "unchanged"),)
+    assert result == (UpdateResult("artwork", "v1", "unchanged"),)
     assert called is False
     assert remote.pushes == 1
     with database_connection(remote, tmp_path) as published:
         assert [
-            row[2] for row in published.execute("PRAGMA index_info(story_art_references_by_art)")
-        ] == ["locale", "art_id"]
+            row[2]
+            for row in published.execute(
+                "PRAGMA index_info(story_narrative_image_references_by_asset)"
+            )
+        ] == ["locale", "category", "asset_id"]
 
-    await Updater(remote).run([UpdateRequest("art", "v1", should_not_build)])
+    await Updater(remote).run([UpdateRequest("artwork", "v1", should_not_build)])
     assert called is False
     assert remote.pushes == 1
 
 
-async def test_complete_art_builds_at_current_version_and_pushes_database_once(
+async def test_complete_artwork_builds_at_current_version_and_pushes_database_once(
     tmp_path,
     caplog,
 ):
@@ -847,19 +850,19 @@ async def test_complete_art_builds_at_current_version_and_pushes_database_once(
 
     remote = CountingRemote()
     updater = Updater(remote)
-    await updater.run([update_request(art_manifest("v3", "current"))])
+    await updater.run([update_request(artwork_manifest("v3", "current"))])
     remote.pushes = 0
     caplog.clear()
     caplog.set_level("INFO", logger=updater_module.__name__)
     calls = []
-    complete_manifest = ArtManifest(
+    complete_manifest = ArtworkManifest(
         "v3",
         (
             replace(
-                art_manifest("v1", "historical", category="background").arts[0],
+                artwork_manifest("v1", "historical", category="background").artworks[0],
                 res_version="v1",
             ),
-            art_manifest("v3", "current").arts[0],
+            artwork_manifest("v3", "current").artworks[0],
         ),
         (),
     )
@@ -868,9 +871,9 @@ async def test_complete_art_builds_at_current_version_and_pushes_database_once(
         calls.append((active, force))
         return complete_manifest
 
-    result = await updater.run([UpdateRequest("art", "v3", build, complete=True)])
+    result = await updater.run([UpdateRequest("artwork", "v3", build, complete=True)])
 
-    assert result == (UpdateResult("art", "v3", "updated"),)
+    assert result == (UpdateResult("artwork", "v3", "updated"),)
     assert calls == [("v3", False)]
     assert remote.pushes == 1
     records = [record for record in caplog.records if hasattr(record, "action")]
@@ -886,25 +889,30 @@ async def test_complete_art_builds_at_current_version_and_pushes_database_once(
     assert sorted((record.current, record.total) for record in thumbnails) == [(1, 2), (2, 2)]
     assert all(record.res_version == "v3" for record in records)
     with database_connection(remote, tmp_path) as connection:
-        assert {tuple(row) for row in connection.execute("SELECT category, art_id FROM arts")} == {
+        assert {
+            tuple(row)
+            for row in connection.execute("SELECT category, asset_id FROM narrative_image_assets")
+        } == {
             ("background", "historical"),
-            ("image", "current"),
+            ("illustration", "current"),
         }
-        assert dict(connection.execute("SELECT art_id, object_key FROM arts")) == {
+        assert dict(
+            connection.execute("SELECT asset_id, object_key FROM narrative_image_assets")
+        ) == {
             "historical": "ART/v1/composition/background/historical.png",
-            "current": "ART/v3/composition/image/current.png",
+            "current": "ART/v3/composition/illustration/current.png",
         }
     assert set(remote.objects) >= {
         "ART/v1/composition/background/historical.png",
         "ART/v1/thumbnail/background/historical.webp",
-        "ART/v3/composition/image/current.png",
-        "ART/v3/thumbnail/image/current.webp",
+        "ART/v3/composition/illustration/current.png",
+        "ART/v3/thumbnail/illustration/current.webp",
     }
 
 
-async def test_complete_art_cannot_be_combined_with_other_units_or_force():
+async def test_complete_artwork_cannot_be_combined_with_other_units_or_force():
     complete = UpdateRequest(
-        "art", "v1", update_request(art_manifest("v1", "art")).build, complete=True
+        "artwork", "v1", update_request(artwork_manifest("v1", "artwork")).build, complete=True
     )
     locale = update_request(locale_manifest("EN", "en-v1"))
 
@@ -914,18 +922,18 @@ async def test_complete_art_cannot_be_combined_with_other_units_or_force():
         await Updater(MemoryObjectStore()).run([complete], force=True)
 
 
-async def test_art_delta_overlays_only_the_same_category_qualified_identity(tmp_path):
+async def test_artwork_delta_overlays_only_the_same_category_qualified_identity(tmp_path):
     remote = MemoryObjectStore()
     updater = Updater(remote)
-    await updater.run([update_request(art_manifest("v1", "shared", category="background"))])
+    await updater.run([update_request(artwork_manifest("v1", "shared", category="background"))])
     await updater.run(
         [
             update_request(
-                ArtManifest(
+                ArtworkManifest(
                     "v2",
                     (
-                        art_manifest("v2", "shared", category="image").arts[0],
-                        art_manifest("v2", "new").arts[0],
+                        artwork_manifest("v2", "shared", category="illustration").artworks[0],
+                        artwork_manifest("v2", "new").artworks[0],
                     ),
                     (),
                 )
@@ -937,23 +945,23 @@ async def test_art_delta_overlays_only_the_same_category_qualified_identity(tmp_
         rows = [
             tuple(row)
             for row in connection.execute(
-                "SELECT art_id, category FROM arts ORDER BY art_id, category"
+                "SELECT asset_id, category FROM narrative_image_assets ORDER BY asset_id, category"
             )
         ]
         assert rows == [
-            ("new", "image"),
+            ("new", "illustration"),
             ("shared", "background"),
-            ("shared", "image"),
+            ("shared", "illustration"),
         ]
         assert (
             connection.execute(
-                "SELECT res_version FROM unit_versions WHERE unit = 'art'"
+                "SELECT res_version FROM unit_versions WHERE unit = 'artwork'"
             ).fetchone()[0]
             == "v2"
         )
     assert "ART/v1/composition/background/shared.png" in remote.objects
-    assert "ART/v2/composition/image/shared.png" in remote.objects
-    assert "ART/v2/composition/image/new.png" in remote.objects
+    assert "ART/v2/composition/illustration/shared.png" in remote.objects
+    assert "ART/v2/composition/illustration/new.png" in remote.objects
 
 
 async def test_character_sources_and_ordered_references_are_persisted(tmp_path):
@@ -965,45 +973,47 @@ async def test_character_sources_and_ordered_references_are_persisted(tmp_path):
     with database_connection(remote, tmp_path) as connection:
         assert tuple(
             connection.execute(
-                "SELECT character_id, role, variant, width, height FROM source_arts"
+                "SELECT character_id, role, variant, width, height FROM material_assets"
             ).fetchone()
         ) == ("amiya", "body", "1", 2, 3)
         assert tuple(
             connection.execute(
-                "SELECT art_id, position, source_art_id FROM art_source_refs"
+                "SELECT asset_id, position, material_asset_id FROM narrative_asset_material_references"
             ).fetchone()
         ) == ("amiya#1$1", 0, "amiya:body:1")
 
 
-async def test_source_art_identity_is_category_qualified(tmp_path):
+async def test_material_asset_identity_is_category_qualified(tmp_path):
     remote = MemoryObjectStore()
     image = PngArtifact.from_image(Image.new("RGBA", (2, 3), (1, 2, 3, 255)))
     sources = tuple(
-        SourceArtRecord(
+        SourceLayerRecord(
             id="shared-panel",
             category=category,
-            kind="composite_panel",
+            kind="panel",
             image=image,
         )
-        for category in ("image", "background")
+        for category in ("illustration", "background")
     )
-    arts = tuple(
-        ArtRecord(
-            id=f"composite-{category}",
+    artworks = tuple(
+        ArtworkRecord(
+            id=f"panel-artwork-{category}",
             category=category,
             image=image,
-            source_art_references=(SourceArtReference(category, "shared-panel"),),
+            source_layer_references=(SourceLayerReference(category, "shared-panel"),),
         )
-        for category in ("image", "background")
+        for category in ("illustration", "background")
     )
 
-    await Updater(remote).run([update_request(ArtManifest("v1", arts=arts, source_arts=sources))])
+    await Updater(remote).run(
+        [update_request(ArtworkManifest("v1", artworks=artworks, source_layers=sources))]
+    )
 
     with database_connection(remote, tmp_path) as connection:
         assert [
             tuple(row)
             for row in connection.execute(
-                "SELECT category, source_art_id, object_key FROM source_arts ORDER BY category"
+                "SELECT category, asset_id, object_key FROM material_assets ORDER BY category"
             )
         ] == [
             (
@@ -1011,40 +1021,40 @@ async def test_source_art_identity_is_category_qualified(tmp_path):
                 "shared-panel",
                 "ART/v1/source/background/shared-panel.png",
             ),
-            ("image", "shared-panel", "ART/v1/source/image/shared-panel.png"),
+            ("illustration", "shared-panel", "ART/v1/source/illustration/shared-panel.png"),
         ]
         assert [
             tuple(row)
             for row in connection.execute(
-                "SELECT category, source_category, source_art_id "
-                "FROM art_source_refs ORDER BY category"
+                "SELECT category, material_category, material_asset_id "
+                "FROM narrative_asset_material_references ORDER BY category"
             )
         ] == [
             ("background", "background", "shared-panel"),
-            ("image", "image", "shared-panel"),
+            ("illustration", "illustration", "shared-panel"),
         ]
 
 
-async def test_art_delta_preserves_unmentioned_record_and_replaces_matching_identity(tmp_path):
+async def test_artwork_delta_preserves_unmentioned_record_and_replaces_matching_identity(tmp_path):
     remote = MemoryObjectStore()
-    await Updater(remote).run([update_request(art_manifest("v1", "fallback"))])
+    await Updater(remote).run([update_request(artwork_manifest("v1", "fallback"))])
 
-    await Updater(remote).run([update_request(art_manifest("v2", "different"))])
+    await Updater(remote).run([update_request(artwork_manifest("v2", "different"))])
     with database_connection(remote, tmp_path) as connection:
         assert (
             connection.execute(
-                "SELECT object_key FROM arts WHERE category = 'image' AND art_id = 'fallback'"
+                "SELECT object_key FROM narrative_image_assets WHERE category = 'illustration' AND asset_id = 'fallback'"
             ).fetchone()[0]
-            == "ART/v1/composition/image/fallback.png"
+            == "ART/v1/composition/illustration/fallback.png"
         )
 
-    await Updater(remote).run([update_request(art_manifest("v3", "fallback", (4, 5, 6, 255)))])
+    await Updater(remote).run([update_request(artwork_manifest("v3", "fallback", (4, 5, 6, 255)))])
     with database_connection(remote, tmp_path) as connection:
         assert (
             connection.execute(
-                "SELECT object_key FROM arts WHERE category = 'image' AND art_id = 'fallback'"
+                "SELECT object_key FROM narrative_image_assets WHERE category = 'illustration' AND asset_id = 'fallback'"
             ).fetchone()[0]
-            == "ART/v3/composition/image/fallback.png"
+            == "ART/v3/composition/illustration/fallback.png"
         )
 
 
@@ -1076,7 +1086,7 @@ async def test_replacing_one_locale_preserves_other_units(tmp_path):
 async def test_all_requested_builds_are_atomic():
     remote = MemoryObjectStore()
     updater = Updater(remote)
-    await updater.run([update_request(art_manifest("v1", "stable"))])
+    await updater.run([update_request(artwork_manifest("v1", "stable"))])
     original_database = remote.database
     original_objects = dict(remote.objects)
 
@@ -1086,7 +1096,7 @@ async def test_all_requested_builds_are_atomic():
     with pytest.raises(RuntimeError, match="locale build failed"):
         await updater.run(
             [
-                update_request(art_manifest("v2", "candidate")),
+                update_request(artwork_manifest("v2", "candidate")),
                 UpdateRequest("EN", "en-v1", fail),
             ]
         )
@@ -1098,7 +1108,7 @@ async def test_all_requested_builds_are_atomic():
 async def test_constraint_failure_publishes_none_of_the_requested_units():
     remote = MemoryObjectStore()
     updater = Updater(remote)
-    await updater.run([update_request(art_manifest("v1", "stable"))])
+    await updater.run([update_request(artwork_manifest("v1", "stable"))])
     original_database = remote.database
     original_objects = dict(remote.objects)
     invalid = locale_manifest("EN", "en-v1")
@@ -1109,7 +1119,7 @@ async def test_constraint_failure_publishes_none_of_the_requested_units():
 
     with pytest.raises(sqlite3.IntegrityError):
         await updater.run(
-            [update_request(art_manifest("v2", "candidate")), update_request(invalid)]
+            [update_request(artwork_manifest("v2", "candidate")), update_request(invalid)]
         )
 
     assert remote.database == original_database
@@ -1138,7 +1148,7 @@ async def test_batch_upload_waits_for_build_and_sqlite_transaction(
             await super().push_database(source)
 
     remote = GatedRemote()
-    manifest = art_manifest("v1", "candidate")
+    manifest = artwork_manifest("v1", "candidate")
     build_started = asyncio.Event()
     allow_build_finish = asyncio.Event()
     transaction_applied = threading.Event()
@@ -1155,7 +1165,7 @@ async def test_batch_upload_waits_for_build_and_sqlite_transaction(
         return manifest
 
     monkeypatch.setattr(updater_module, "apply_changes", apply_changes)
-    run = asyncio.create_task(Updater(remote).run([UpdateRequest("art", "v1", build)]))
+    run = asyncio.create_task(Updater(remote).run([UpdateRequest("artwork", "v1", build)]))
     await asyncio.wait_for(build_started.wait(), timeout=1)
 
     assert not run.done()
@@ -1202,9 +1212,9 @@ async def test_final_artifact_batch_has_bounded_concurrency_and_one_upload_per_w
                 self.active -= 1
 
     remote = GatedRemote()
-    manifest = ArtManifest(
+    manifest = ArtworkManifest(
         "v1",
-        tuple(art_manifest("v1", f"winner-{index}").arts[0] for index in range(5)),
+        tuple(artwork_manifest("v1", f"winner-{index}").artworks[0] for index in range(5)),
         (),
     )
 
@@ -1240,9 +1250,9 @@ async def test_thumbnail_workers_generate_then_upload_one_image_at_a_time(monkey
             await super().put_thumbnail(key, thumbnail)
 
     remote = GatedRemote()
-    manifest = ArtManifest(
+    manifest = ArtworkManifest(
         "v1",
-        tuple(art_manifest("v1", f"winner-{index}").arts[0] for index in range(5)),
+        tuple(artwork_manifest("v1", f"winner-{index}").artworks[0] for index in range(5)),
         (),
     )
     generated = 0
@@ -1273,13 +1283,13 @@ async def test_batch_upload_failure_prevents_database_publication():
             raise RuntimeError("batch upload failed")
 
     remote = FailingRemote()
-    manifest = art_manifest("v1", "candidate")
+    manifest = artwork_manifest("v1", "candidate")
 
     async def build(_active, _force):
         return manifest
 
     with pytest.raises(RuntimeError, match="batch upload failed"):
-        await Updater(remote).run([UpdateRequest("art", "v1", build)])
+        await Updater(remote).run([UpdateRequest("artwork", "v1", build)])
 
     assert remote.database is None
 
@@ -1304,11 +1314,11 @@ async def test_thumbnail_upload_finishes_before_database_publication():
 
     remote = RecordingRemote()
 
-    await Updater(remote).run([update_request(art_manifest("v1", "candidate"))])
+    await Updater(remote).run([update_request(artwork_manifest("v1", "candidate"))])
 
     assert remote.events == [
-        ("png", "ART/v1/composition/image/candidate.png"),
-        ("thumbnail", "ART/v1/thumbnail/image/candidate.webp"),
+        ("png", "ART/v1/composition/illustration/candidate.png"),
+        ("thumbnail", "ART/v1/thumbnail/illustration/candidate.webp"),
         ("database", DATABASE_OBJECT_KEY),
     ]
 
@@ -1321,10 +1331,10 @@ async def test_thumbnail_upload_failure_prevents_database_publication():
     remote = FailingRemote()
 
     with pytest.raises(RuntimeError, match="thumbnail upload failed"):
-        await Updater(remote).run([update_request(art_manifest("v1", "candidate"))])
+        await Updater(remote).run([update_request(artwork_manifest("v1", "candidate"))])
 
     assert remote.database is None
-    assert "ART/v1/composition/image/candidate.png" in remote.objects
+    assert "ART/v1/composition/illustration/candidate.png" in remote.objects
 
 
 async def test_database_push_failure_can_retry_mutable_thumbnail_publication():
@@ -1345,13 +1355,13 @@ async def test_database_push_failure_can_retry_mutable_thumbnail_publication():
             await super().push_database(source)
 
     remote = FailOnceRemote()
-    update = update_request(art_manifest("v1", "candidate"))
+    update = update_request(artwork_manifest("v1", "candidate"))
 
     with pytest.raises(RuntimeError, match="database push failed"):
         await Updater(remote).run([update])
     result = await Updater(remote).run([update])
 
-    assert result == (UpdateResult("art", "v1", "updated"),)
+    assert result == (UpdateResult("artwork", "v1", "updated"),)
     assert remote.thumbnail_puts == 2
     assert remote.database is not None
 
@@ -1368,7 +1378,7 @@ async def test_thumbnail_failure_logs_only_terminal_status_and_publishes_nothing
     caplog.set_level("INFO", logger=updater_module.__name__)
 
     with pytest.raises(RuntimeError, match="thumbnail generation failed"):
-        await Updater(remote).run([update_request(art_manifest("v1", "candidate"))])
+        await Updater(remote).run([update_request(artwork_manifest("v1", "candidate"))])
 
     records = [
         record for record in caplog.records if getattr(record, "action", None) == "thumbnail"
@@ -1376,7 +1386,7 @@ async def test_thumbnail_failure_logs_only_terminal_status_and_publishes_nothing
     assert [(record.status, record.current, record.total) for record in records] == [
         ("failed", 1, 1)
     ]
-    assert set(remote.objects) == {"ART/v1/composition/image/candidate.png"}
+    assert set(remote.objects) == {"ART/v1/composition/illustration/candidate.png"}
     assert remote.database is None
 
 
@@ -1401,11 +1411,11 @@ async def test_batch_upload_failure_drains_already_started_uploads():
             await super().put_png(key, artifact)
 
     remote = DrainingRemote()
-    manifest = ArtManifest(
+    manifest = ArtworkManifest(
         "v1",
         (
-            art_manifest("v1", "fail").arts[0],
-            art_manifest("v1", "survivor").arts[0],
+            artwork_manifest("v1", "fail").artworks[0],
+            artwork_manifest("v1", "survivor").artworks[0],
         ),
         (),
     )
@@ -1436,7 +1446,7 @@ async def test_batch_cancellation_drains_already_started_uploads():
 
     remote = BlockingRemote()
     run = asyncio.create_task(
-        Updater(remote).run([update_request(art_manifest("v1", "candidate"))])
+        Updater(remote).run([update_request(artwork_manifest("v1", "candidate"))])
     )
     await asyncio.wait_for(remote.started.wait(), timeout=1)
 
@@ -1471,7 +1481,7 @@ async def test_cancellation_waits_for_database_push_before_removing_local_file()
 
     remote = BlockingRemote()
     run = asyncio.create_task(
-        Updater(remote).run([update_request(locale_manifest("EN", "en-v1", art_id="absent"))])
+        Updater(remote).run([update_request(locale_manifest("EN", "en-v1", asset_id="absent"))])
     )
     await asyncio.wait_for(remote.started.wait(), timeout=1)
     assert remote.source is not None
@@ -1494,11 +1504,11 @@ async def test_cancellation_waits_for_database_push_before_removing_local_file()
     assert not remote.source.exists()
 
 
-async def test_force_art_at_a_new_version_is_rejected_before_building_or_copying_objects():
+async def test_force_artwork_at_a_new_version_is_rejected_before_building_or_copying_objects():
     remote = MemoryObjectStore()
     updater = Updater(remote)
-    first = art_manifest("v1", "same", (1, 2, 3, 255))
-    second = art_manifest("v2", "same", (4, 5, 6, 255))
+    first = artwork_manifest("v1", "same", (1, 2, 3, 255))
+    second = artwork_manifest("v2", "same", (4, 5, 6, 255))
     await updater.run([update_request(first)])
     original_database = remote.database
     original_objects = remote.objects.copy()
@@ -1509,8 +1519,8 @@ async def test_force_art_at_a_new_version_is_rejected_before_building_or_copying
         built = True
         return second
 
-    with pytest.raises(ValueError, match="force is not supported for art updates"):
-        await updater.run([UpdateRequest("art", "v2", build)], force=True)
+    with pytest.raises(ValueError, match="force is not supported for artwork updates"):
+        await updater.run([UpdateRequest("artwork", "v2", build)], force=True)
 
     assert built is False
     assert remote.database == original_database
@@ -1528,12 +1538,12 @@ async def test_png_upload_failure_keeps_previous_database():
 
     remote = FailingRemote()
     updater = Updater(remote)
-    await updater.run([update_request(art_manifest("v1", "stable"))])
+    await updater.run([update_request(artwork_manifest("v1", "stable"))])
     original_database = remote.database
     remote.fail = True
 
     with pytest.raises(RuntimeError, match="upload failed"):
-        await updater.run([update_request(art_manifest("v2", "candidate"))])
+        await updater.run([update_request(artwork_manifest("v2", "candidate"))])
 
     assert remote.database == original_database
 
@@ -1561,8 +1571,8 @@ def test_schema_rejects_non_string_story_reference_names(tmp_path):
         with pytest.raises(sqlite3.IntegrityError, match="names must be strings"):
             connection.execute(
                 """
-                INSERT INTO story_art_references VALUES
-                    ('EN', 'story', 0, 'art', 'picture', 'image', NULL, NULL,
+                INSERT INTO story_narrative_image_references VALUES
+                    ('EN', 'story', 0, 'artwork', 'picture', 'image', NULL, NULL,
                      '["valid", 1]')
                 """
             )

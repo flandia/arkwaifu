@@ -1,4 +1,4 @@
-"""Extract the Unity objects used by the art processor.
+"""Extract the Unity objects used by the artwork processor.
 
 Texture, sprite, and character-hub objects are written into the normalized
 ``assets/torappu/dynamicassets`` tree. Concurrent production extraction uses
@@ -94,7 +94,7 @@ class ExtractionError(RuntimeError):
 
 
 def normalize_container_path(container: str | PurePosixPath) -> PurePosixPath:
-    """Map Arknights' short bundle paths to the tree used by the art processor."""
+    """Map Arknights' short bundle paths to the tree used by the artwork processor."""
 
     normalized = PurePosixPath(str(container).replace("\\", "/"))
     if normalized.parts and normalized.parts[0].lower() == "dyn":
@@ -105,7 +105,7 @@ def normalize_container_path(container: str | PurePosixPath) -> PurePosixPath:
 def mono_behaviour_name(obj: MonoBehaviour, type_tree=None) -> str:
     """Get a useful class name even when UnityPy cannot resolve MonoScript.
 
-    Some character bundles reference a shared MonoScript CAB that they do not include. The sprite hub's serialized type-tree shape still identifies the names required by the art scanner.
+    Some character bundles reference a shared MonoScript CAB that they do not include. The sprite hub's serialized type-tree shape still identifies the names required by the artwork scanner.
     """
 
     try:
@@ -239,6 +239,9 @@ def _export(
         duration = type_tree.get("m_Length") if isinstance(type_tree, dict) else None
         if not isinstance(duration, (int, float)) or isinstance(duration, bool) or duration <= 0:
             duration = None
+        sample_rate = type_tree.get("m_Frequency") if isinstance(type_tree, dict) else None
+        if not isinstance(sample_rate, int) or isinstance(sample_rate, bool) or sample_rate <= 0:
+            sample_rate = None
         output_directory = fallback_directory
         for raw_name, content in raw_samples.items():
             if not isinstance(raw_name, str) or not isinstance(content, bytes) or not content:
@@ -259,7 +262,9 @@ def _export(
             output_path.parent.mkdir(parents=True, exist_ok=True)
             output_path.write_bytes(content)
             output_path.with_suffix(output_path.suffix + ".audio.json").write_text(
-                json.dumps({"duration": duration}, separators=(",", ":")),
+                json.dumps(
+                    {"duration": duration, "sample_rate": sample_rate}, separators=(",", ":")
+                ),
                 encoding="utf-8",
             )
             path_ids[path_id] = output_path.name
