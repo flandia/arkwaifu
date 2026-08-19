@@ -1667,8 +1667,22 @@ def _normalize_asset_id(
         value = value.removeprefix("$")
         resolved = variables.get(value.casefold())
         if resolved:
-            value = PurePosixPath(resolved.replace("\\", "/")).name
-            value = PurePosixPath(value).stem
+            path = PurePosixPath(resolved.replace("\\", "/"))
+            voice_index = next(
+                (index for index, part in enumerate(path.parts) if part.casefold() == "voice"),
+                None,
+            )
+            if voice_index is None:
+                value = PurePosixPath(path.name).stem
+            else:
+                voice_parts = path.parts[voice_index + 1 :]
+                voice_path = PurePosixPath(*voice_parts).with_suffix("")
+                if (
+                    len(voice_path.parts) >= 2
+                    and voice_path.parts[-1].casefold() == voice_path.parts[-2].casefold()
+                ):
+                    voice_path = PurePosixPath(*voice_path.parts[:-1])
+                value = voice_path.as_posix()
         return value
     if kind == "video":
         try:

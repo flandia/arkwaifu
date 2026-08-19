@@ -301,10 +301,24 @@ def _audio_records_under(root: Path, *, namespace: str | None) -> list[MediaReco
             duration=duration,
             sample_rate=sample_rate,
         )
+        relative = path.relative_to(root).with_suffix("")
         if namespace is None:
-            asset_id = path.stem
+            voice_index = next(
+                (index for index, part in enumerate(relative.parts) if part.casefold() == "voice"),
+                None,
+            )
+            if voice_index is None:
+                asset_id = path.stem
+            else:
+                voice_parts = relative.parts[voice_index + 1 :]
+                if (
+                    len(voice_parts) >= 2
+                    and voice_parts[-1].casefold() == voice_parts[-2].casefold()
+                ):
+                    voice_parts = voice_parts[:-1]
+                asset_id = "/".join(voice_parts) or path.stem
         else:
-            asset_id = f"{namespace}/{path.relative_to(root).with_suffix('').as_posix()}"
+            asset_id = f"{namespace}/{relative.as_posix()}"
         previous = seen_ids.get(asset_id)
         if previous is not None:
             raise ValueError(f"duplicate audio asset ID {asset_id!r}: {previous} and {path}")

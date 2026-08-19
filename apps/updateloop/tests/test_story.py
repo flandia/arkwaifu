@@ -174,6 +174,19 @@ def test_story_media_references_resolve_story_variables():
     ]
 
 
+def test_story_voice_media_references_keep_the_character_namespace():
+    directives = parse_directives('[PlaySound(key="$voice")]')
+
+    media = story_module._media_references(
+        directives,
+        {"voice": "Sound_Beta_2/Voice/char_101_sora/CN_038/CN_038.wav"},
+    )
+
+    assert [(reference.kind, reference.asset_id) for reference in media] == [
+        ("sound", "char_101_sora/CN_038")
+    ]
+
+
 @pytest.mark.parametrize(
     "raw",
     ['[name="Closure",delay=0.1]', "[name='Closure',delay=0.1]"],

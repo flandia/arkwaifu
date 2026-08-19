@@ -137,6 +137,21 @@ def test_global_audio_ids_must_be_unique(tmp_path: Path):
         build_artwork_manifest(tmp_path, "v1")
 
 
+def test_character_voice_audio_ids_keep_the_character_namespace(tmp_path: Path):
+    root = tmp_path / "assets/torappu/dynamicassets/audio/sound_beta_2/voice"
+    for character in ("char_1016_agoat2", "char_101_sora"):
+        audio_path = root / character / "CN_038/CN_038.wav"
+        audio_path.parent.mkdir(parents=True)
+        audio_path.write_bytes(b"RIFF" + character.encode())
+
+    manifest = build_artwork_manifest(tmp_path, "v1")
+
+    assert [(media.kind, media.id) for media in manifest.media] == [
+        ("audio", "char_1016_agoat2/CN_038"),
+        ("audio", "char_101_sora/CN_038"),
+    ]
+
+
 def test_animated_kv_media_is_namespaced_and_preserves_video_format(tmp_path: Path):
     root = tmp_path / "assets/torappu/dynamicassets/avg/animatedkv/act3mainss_01"
     root.mkdir(parents=True)
