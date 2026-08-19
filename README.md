@@ -12,6 +12,9 @@
 
 Arkwaifu archives artwork and story metadata from Arknights. 
 
+The [project glossary](GLOSSARY.md) is the design truth for the archive
+hierarchy, asset model, references, catalogs, and their frontend examples.
+
 We are happy to announce that Arkwaifu v2 has launched! Browse it at [arkwaifu.cc](https://arkwaifu.cc/). A CN mirror is also available at [cn.arkwaifu.cc](https://cn.arkwaifu.cc/) (although connectivity is not guaranteed).
 
 ## Features
