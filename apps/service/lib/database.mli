@@ -6,10 +6,10 @@ type t
 type sitemap_data = {
   movements : (string * string) list;
       (** [(locale, movement_id)] rows. *)
-  movement_sections : (string * string * string) list;
+  sections : (string * string * string) list;
       (** [(locale, movement_id, section_id)] canonical Score placements. *)
   archive_groups : (string * string * string) list;
-      (** [(locale, archive_kind, group_id)] rows using database kind names. *)
+      (** [(locale, archive_category, group_id)] rows using database kind names. *)
   galleries : (string * string) list;  (** [(locale, gallery_id)] rows. *)
 }
 
@@ -47,29 +47,36 @@ val close : t -> unit Lwt.t
 val health : t -> (unit, error) result Lwt.t
 val sitemap_data : t -> (sitemap_data, error) result Lwt.t
 
-val art : t -> string -> string -> (Model.art, error) result Lwt.t
+val narrative_image_asset : t -> string -> string -> (Model.narrative_image_asset, error) result Lwt.t
 
-val source_art :
-  t -> string -> string -> (Model.source_art, error) result Lwt.t
+val material_asset :
+  t -> string -> string -> (Model.material_asset, error) result Lwt.t
 
-val media : t -> string -> string -> (Model.media_asset, error) result Lwt.t
+val narrative_media_asset :
+  t -> string -> string -> (Model.narrative_media_asset, error) result Lwt.t
 
-val unreferenced_arts : t -> (Model.unreferenced_art list, error) result Lwt.t
+val orphan_narrative_image_assets :
+  t -> string -> (Model.orphan_narrative_image_asset list, error) result Lwt.t
+val orphan_narrative_media_assets :
+  t -> string -> (Model.orphan_narrative_media_asset list, error) result Lwt.t
 
-val art_context :
-  t -> string -> string -> string -> (Model.art_context, error) result Lwt.t
+val narrative_image_asset_reverse_references :
+  t -> string -> string -> string -> (Model.narrative_image_asset_reverse_references, error) result Lwt.t
+
+val narrative_media_asset_reverse_references :
+  t -> string -> string -> string -> (Model.narrative_media_asset_reverse_references, error) result Lwt.t
 
 val movements : t -> string -> (Model.movement list, error) result Lwt.t
 
 val movement :
   t -> string -> string -> (Model.movement_detail, error) result Lwt.t
 
-val movement_section :
+val section :
   t ->
   string ->
   string ->
   string ->
-  (Model.movement_section_detail, error) result Lwt.t
+  (Model.section_detail, error) result Lwt.t
 
 val score_story :
   t ->
@@ -105,4 +112,12 @@ val archive_story :
 
 val galleries : t -> string -> (Model.gallery_summary list, error) result Lwt.t
 val gallery : t -> string -> string -> (Model.gallery, error) result Lwt.t
+val presentation_assets :
+  t -> string -> (Model.presentation_asset list, error) result Lwt.t
+val presentation_asset :
+  t ->
+  string ->
+  string ->
+  string ->
+  (Model.presentation_asset_detail, error) result Lwt.t
 val search : t -> string -> string -> (Model.search_result list, error) result Lwt.t

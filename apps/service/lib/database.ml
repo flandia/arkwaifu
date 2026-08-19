@@ -6,7 +6,7 @@ type error = [ `Not_found | `Unavailable of string ]
 
 type sitemap_data = {
   movements : (string * string) list;
-  movement_sections : (string * string * string) list;
+  sections : (string * string * string) list;
   archive_groups : (string * string * string) list;
   galleries : (string * string) list;
 }
@@ -16,19 +16,24 @@ type t = {
   check : unit -> (unit, error) result Lwt.t;
   health : unit -> (unit, error) result Lwt.t;
   sitemap_data : unit -> (sitemap_data, error) result Lwt.t;
-  art : string -> string -> (Model.art, error) result Lwt.t;
-  source_art : string -> string -> (Model.source_art, error) result Lwt.t;
-  media : string -> string -> (Model.media_asset, error) result Lwt.t;
-  unreferenced_arts : unit -> (Model.unreferenced_art list, error) result Lwt.t;
-  art_context :
-    string -> string -> string -> (Model.art_context, error) result Lwt.t;
+  narrative_image_asset : string -> string -> (Model.narrative_image_asset, error) result Lwt.t;
+  material_asset : string -> string -> (Model.material_asset, error) result Lwt.t;
+  narrative_media_asset :
+    string -> string -> (Model.narrative_media_asset, error) result Lwt.t;
+  orphan_narrative_image_assets : string -> (Model.orphan_narrative_image_asset list, error) result Lwt.t;
+  orphan_narrative_media_assets :
+    string -> (Model.orphan_narrative_media_asset list, error) result Lwt.t;
+  narrative_image_asset_reverse_references :
+    string -> string -> string -> (Model.narrative_image_asset_reverse_references, error) result Lwt.t;
+  narrative_media_asset_reverse_references :
+    string -> string -> string -> (Model.narrative_media_asset_reverse_references, error) result Lwt.t;
   movements : string -> (Model.movement list, error) result Lwt.t;
   movement : string -> string -> (Model.movement_detail, error) result Lwt.t;
-  movement_section :
+  section :
     string ->
     string ->
     string ->
-    (Model.movement_section_detail, error) result Lwt.t;
+    (Model.section_detail, error) result Lwt.t;
   score_story :
     string ->
     string ->
@@ -51,21 +56,39 @@ type t = {
     (Model.story_detail, error) result Lwt.t;
   galleries : string -> (Model.gallery_summary list, error) result Lwt.t;
   gallery : string -> string -> (Model.gallery, error) result Lwt.t;
+  presentation_assets :
+    string -> (Model.presentation_asset list, error) result Lwt.t;
+  presentation_asset :
+    string ->
+    string ->
+    string ->
+    (Model.presentation_asset_detail, error) result Lwt.t;
   search : string -> string -> (Model.search_result list, error) result Lwt.t;
 }
 
-let unique_story_art_references references =
+let unique_story_narrative_image_references references =
   let seen = Hashtbl.create (List.length references) in
   List.filter
-    (fun (reference : Model.story_art_reference) ->
-      let key = (reference.category, reference.art_id) in
+    (fun (reference : Model.story_narrative_image_reference) ->
+      let key = (reference.category, reference.asset_id) in
       if Hashtbl.mem seen key then false
       else (
         Hashtbl.add seen key ();
         true))
     references
 
-let representative_story_art_reference = function
+let unique_story_narrative_media_references references =
+  let seen = Hashtbl.create (List.length references) in
+  List.filter
+    (fun (reference : Model.story_narrative_media_reference) ->
+      let key = (reference.kind, reference.asset_id) in
+      if Hashtbl.mem seen key then false
+      else (
+        Hashtbl.add seen key ();
+        true))
+    references
+
+let representative_story_narrative_image_reference = function
   | reference :: _ -> Some reference
   | [] -> None
 
@@ -79,12 +102,12 @@ let unique_strings values =
         true))
     values
 
-let character_prefix art_id =
-  match String.index_opt art_id '#' with
-  | Some position -> String.sub art_id 0 position
-  | None -> art_id
+let character_prefix asset_id =
+  match String.index_opt asset_id '#' with
+  | Some position -> String.sub asset_id 0 position
+  | None -> asset_id
 
-let archive_kind_of_route = function
+let archive_category_of_route = function
   | "events" -> Some "events"
   | "operator-record" -> Some "operator_record"
   | "integrated-strategies" -> Some "integrated_strategies"
@@ -92,13 +115,13 @@ let archive_kind_of_route = function
   | "others" -> Some "others"
   | _ -> None
 
-let archive_route_of_kind = function
+let archive_route_of_category = function
   | "events" -> "events"
   | "operator_record" -> "operator-record"
   | "integrated_strategies" -> "integrated-strategies"
   | "reclamation_algorithm" -> "reclamation-algorithm"
   | "others" -> "others"
-  | value -> invalid_arg ("unknown archive kind: " ^ value)
+  | value -> invalid_arg ("unknown Archive Category: " ^ value)
 
 module Query = struct
   open Caqti_type.Std
@@ -113,7 +136,7 @@ module Query = struct
     (unit ->* t2 string string)
       "SELECT locale, movement_id FROM movements ORDER BY locale, position"
 
-  let sitemap_movement_sections =
+  let sitemap_sections =
     (unit ->* t2 string (t2 string string))
       {|
         SELECT location.locale, location.movement_id, location.section_id
@@ -125,16 +148,16 @@ module Query = struct
   let sitemap_archive_groups =
     (unit ->* t2 string (t2 string string))
       {|
-        SELECT locale, archive_kind, archive_id
+        SELECT locale, archive_category, archive_id
         FROM archive_groups
         ORDER BY locale, position
       |}
 
   let sitemap_galleries =
     (unit ->* t2 string string)
-      "SELECT locale, gallery_id FROM gallery_groups ORDER BY locale, position"
+      "SELECT locale, gallery_id FROM galleries ORDER BY locale, position"
 
-  let art =
+  let narrative_image_asset =
     let row =
       t2 string
         (t2 string
@@ -144,17 +167,17 @@ module Query = struct
     in
     (t2 string string ->* row)
       {|
-        SELECT art.category, art.object_key, art.byte_size, art.width,
-               art.height, reference.source_category, reference.source_art_id
-        FROM arts AS art
-        LEFT JOIN art_source_refs AS reference
-          ON reference.category = art.category
-         AND reference.art_id = art.art_id
-        WHERE art.category = ? AND art.art_id = ?
+        SELECT narrative_image_asset.category, narrative_image_asset.object_key, narrative_image_asset.size, narrative_image_asset.width,
+               narrative_image_asset.height, reference.material_category, reference.material_asset_id
+        FROM narrative_image_assets AS narrative_image_asset
+        LEFT JOIN narrative_asset_material_references AS reference
+          ON reference.category = narrative_image_asset.category
+         AND reference.asset_id = narrative_image_asset.asset_id
+        WHERE narrative_image_asset.category = ? AND narrative_image_asset.asset_id = ?
         ORDER BY reference.position
       |}
 
-  let source_art =
+  let material_asset =
     let row =
       t2 string
         (t2 string
@@ -165,75 +188,104 @@ module Query = struct
     in
     (t2 string string ->? row)
       {|
-        SELECT kind, category, character_id, role, variant, object_key,
-               byte_size, width, height
-        FROM source_arts
-        WHERE category = ? AND source_art_id = ?
+        SELECT material_type, category, character_id, role, variant, object_key,
+               size, width, height
+        FROM material_assets
+        WHERE category = ? AND asset_id = ?
       |}
 
-  let media =
+  let material_asset_uses =
+    (t2 string string ->* t2 string string)
+      {|
+        SELECT category, asset_id
+        FROM narrative_asset_material_references
+        WHERE material_category = ? AND material_asset_id = ?
+        ORDER BY category, asset_id
+      |}
+
+  let narrative_media_asset =
     (t2 string string ->? string)
       {|
         SELECT json_object(
-          'id', media_id,
-          'kind', media_kind,
+          'id', asset_id,
+          'kind', category,
           'objectKey', object_key,
-          'contentType', content_type,
-          'byteSize', byte_size,
+          'contentType', mime,
+          'byteSize', size,
           'duration', COALESCE(
             duration,
             CAST(frame_count AS REAL) * frame_rate_denominator /
               frame_rate_numerator
           ),
+          'sampleRate', sample_rate,
           'width', width,
           'height', height,
           'frameRate', CAST(frame_rate_numerator AS REAL) /
             frame_rate_denominator,
           'frameCount', frame_count
         )
-        FROM media_assets
-        WHERE media_kind = ? AND media_id = ?
+        FROM narrative_media_assets
+        WHERE category = ? AND asset_id = ?
       |}
 
-  let unreferenced_arts =
-    (unit ->* t2 string (t2 string string))
+  let orphan_narrative_image_assets =
+    (string ->* t2 string (t2 string (t2 string (t2 int64 (t2 int int)))))
       {|
-        SELECT art.category, art.art_id, art.object_key
-        FROM arts AS art
+        WITH scope(locale) AS (VALUES (?))
+        SELECT narrative_image_asset.category, narrative_image_asset.asset_id, narrative_image_asset.object_key,
+               narrative_image_asset.size, narrative_image_asset.width, narrative_image_asset.height
+        FROM narrative_image_assets AS narrative_image_asset
         WHERE NOT EXISTS (
           SELECT 1
-          FROM story_art_references AS reference
-          WHERE reference.locale IN ('CN', 'EN', 'JP', 'KR', 'TW')
-            AND reference.art_id = art.art_id
-            AND reference.category = art.category
+          FROM story_narrative_image_references AS reference
+          WHERE reference.asset_id = narrative_image_asset.asset_id
+            AND reference.category = narrative_image_asset.category
+            AND reference.locale = (SELECT locale FROM scope)
         )
           AND NOT EXISTS (
             SELECT 1
-            FROM gallery_display_artworks AS artwork
-            WHERE artwork.category = art.category
-              AND artwork.art_id = art.art_id
+            FROM gallery_narrative_asset_references AS group_reference
+            WHERE group_reference.category = narrative_image_asset.category
+              AND group_reference.asset_id = narrative_image_asset.asset_id
+              AND group_reference.locale = (SELECT locale FROM scope)
           )
-          AND NOT EXISTS (
-            SELECT 1
-            FROM art_source_refs AS reference
-            WHERE reference.source_category = art.category
-              AND reference.source_art_id = art.art_id
-          )
-        ORDER BY CASE art.category
-                   WHEN 'image' THEN 0
+        ORDER BY CASE narrative_image_asset.category
+                   WHEN 'illustration' THEN 0
                    WHEN 'background' THEN 1
                    WHEN 'item' THEN 2
                    WHEN 'character' THEN 3
                    ELSE 4
                  END,
-                 art.art_id
+                 narrative_image_asset.asset_id
       |}
 
-  let art_context_exists =
-    (t2 string string ->? int)
-      "SELECT 1 FROM arts WHERE category = ? AND art_id = ?"
+  let orphan_narrative_media_assets =
+    (string ->* t2 string (t2 string (t2 string (t2 int64 string))))
+      {|
+        WITH scope(locale) AS (VALUES (?))
+        SELECT media.category, media.asset_id, media.mime,
+               media.size, media.object_key
+        FROM narrative_media_assets AS media
+        WHERE NOT EXISTS (
+          SELECT 1
+          FROM story_narrative_media_references AS reference
+          WHERE reference.asset_id = media.asset_id
+            AND reference.locale = (SELECT locale FROM scope)
+            AND reference.category = media.category
+        )
+        ORDER BY CASE media.category WHEN 'video' THEN 0 ELSE 1 END,
+                 media.asset_id
+      |}
 
-  let art_context_occurrences =
+  let narrative_image_asset_reverse_references_exists =
+    (t2 string string ->? int)
+      "SELECT 1 FROM narrative_image_assets WHERE category = ? AND asset_id = ?"
+
+  let narrative_media_asset_reverse_references_exists =
+    (t2 string string ->? int)
+      "SELECT 1 FROM narrative_media_assets WHERE category = ? AND asset_id = ?"
+
+  let narrative_image_asset_reverse_references_occurrences =
     (t2 string (t2 string string) ->* string)
       {|
         SELECT json_object(
@@ -242,7 +294,7 @@ module Query = struct
           'movementName', movement.name,
           'sectionID', section.section_id,
           'sectionName', section.name,
-          'archiveKind', archive.archive_kind,
+          'archiveCategory', archive.archive_category,
           'groupID', archive.archive_id,
           'groupName', archive.name,
           'storyID', story.story_id,
@@ -251,14 +303,14 @@ module Query = struct
           'storyTagText', story.tag_text,
           'names', reference.names_json
         )
-        FROM story_art_references AS reference
+        FROM story_narrative_image_references AS reference
         JOIN stories AS story
           ON story.locale = reference.locale
          AND story.story_id = reference.story_id
         JOIN story_collections AS collection
           ON collection.locale = story.locale
          AND collection.collection_id = story.collection_id
-        LEFT JOIN movement_sections AS section
+        LEFT JOIN sections AS section
           ON section.locale = collection.locale
          AND section.collection_id = collection.collection_id
         LEFT JOIN movement_locations AS location
@@ -272,40 +324,174 @@ module Query = struct
           ON archive.locale = collection.locale
          AND archive.collection_id = collection.collection_id
         WHERE reference.locale = ? AND reference.category = ?
-          AND reference.art_id = ?
+          AND reference.asset_id = ?
         ORDER BY COALESCE(movement.position, archive.position), story.position,
                  reference.position
       |}
 
-  let art_context_siblings =
+  let narrative_image_asset_reverse_references_character_variants =
     (t2 string (t2 string (t2 string (t2 string string))) ->* string)
       {|
         SELECT json_object(
-          'artID', art.art_id,
-          'objectKey', art.object_key,
+          'artworkID', narrative_image_asset.asset_id,
+          'objectKey', narrative_image_asset.object_key,
           'names', reference.names_json
         )
-        FROM arts AS art
-        LEFT JOIN story_art_references AS reference
+        FROM narrative_image_assets AS narrative_image_asset
+        LEFT JOIN story_narrative_image_references AS reference
           ON reference.locale = ?
-         AND reference.category = art.category
-         AND reference.art_id = art.art_id
-        WHERE art.category = 'character' AND art.art_id <> ?
+         AND reference.category = narrative_image_asset.category
+         AND reference.asset_id = narrative_image_asset.asset_id
+        WHERE narrative_image_asset.category = 'character' AND narrative_image_asset.asset_id <> ?
           AND (
-            art.art_id = ?
-            OR substr(art.art_id, 1, length(?) + 1) = ? || '#'
+            narrative_image_asset.asset_id = ?
+            OR substr(narrative_image_asset.asset_id, 1, length(?) + 1) = ? || '#'
           )
-        ORDER BY art.art_id, reference.story_id, reference.position
+        ORDER BY narrative_image_asset.asset_id, reference.story_id, reference.position
       |}
 
-  let art_context_textures =
+  let narrative_image_asset_reverse_references_textures =
     (t2 string string ->* t2 string string)
       {|
-        SELECT art_id, object_key
-        FROM arts
-        WHERE category = 'image'
-          AND substr(art_id, 1, length(?) + 1) = ? || '/'
-        ORDER BY art_id
+        SELECT asset_id, object_key
+        FROM narrative_image_assets
+        WHERE category = 'illustration'
+          AND substr(asset_id, 1, length(?) + 1) = ? || '/'
+        ORDER BY asset_id
+      |}
+
+  let narrative_image_asset_reverse_references_galleries =
+    (t2 string (t2 string string) ->* string)
+      {|
+        SELECT json_object(
+          'galleryID', gallery.gallery_id,
+          'galleryName', gallery.name,
+          'galleryDescription', gallery.description,
+          'groupID', gallery_group.group_id,
+          'groupName', gallery_group.name,
+          'groupDescription', gallery_group.description,
+          'cgID', narrative_image_asset.cg_id
+        )
+        FROM gallery_narrative_asset_references AS narrative_image_asset
+        JOIN gallery_groups AS gallery_group
+          ON gallery_group.locale = narrative_image_asset.locale
+         AND gallery_group.gallery_id = narrative_image_asset.gallery_id
+         AND gallery_group.group_id = narrative_image_asset.group_id
+        JOIN galleries AS gallery
+          ON gallery.locale = gallery_group.locale
+         AND gallery.gallery_id = gallery_group.gallery_id
+        WHERE narrative_image_asset.locale = ? AND narrative_image_asset.category = ? AND narrative_image_asset.asset_id = ?
+        ORDER BY gallery.position, gallery_group.position, narrative_image_asset.position
+      |}
+
+  let narrative_media_asset_reverse_references_occurrences =
+    (t2 string (t2 string string) ->* string)
+      {|
+        SELECT json_object(
+          'parentKind', collection.collection_kind,
+          'movementID', movement.movement_id,
+          'movementName', movement.name,
+          'sectionID', section.section_id,
+          'sectionName', section.name,
+          'archiveCategory', archive.archive_category,
+          'groupID', archive.archive_id,
+          'groupName', archive.name,
+          'storyID', story.story_id,
+          'storyName', story.name,
+          'storyCode', story.code,
+          'storyTagText', story.tag_text
+        )
+        FROM story_narrative_media_references AS reference
+        JOIN stories AS story
+          ON story.locale = reference.locale
+         AND story.story_id = reference.story_id
+        JOIN story_collections AS collection
+          ON collection.locale = story.locale
+         AND collection.collection_id = story.collection_id
+        LEFT JOIN sections AS section
+          ON section.locale = collection.locale
+         AND section.collection_id = collection.collection_id
+        LEFT JOIN movement_locations AS location
+          ON location.locale = section.locale
+         AND location.section_id = section.section_id
+         AND location.location_type = 'story_set'
+        LEFT JOIN movements AS movement
+          ON movement.locale = location.locale
+         AND movement.movement_id = location.movement_id
+        LEFT JOIN archive_groups AS archive
+          ON archive.locale = collection.locale
+         AND archive.collection_id = collection.collection_id
+        WHERE reference.locale = ?
+          AND reference.category = ?
+          AND reference.asset_id = ?
+        ORDER BY COALESCE(movement.position, archive.position), story.position,
+                 reference.position
+      |}
+
+  let narrative_media_asset_reverse_references_sections =
+    (t2 string (t2 string string) ->* string)
+      {|
+        SELECT json_object(
+          'parentKind', 'section',
+          'movementID', movement.movement_id,
+          'movementName', movement.name,
+          'sectionID', section.section_id,
+          'sectionName', section.name
+        )
+        FROM sections AS section
+        JOIN movement_locations AS location
+          ON location.locale = section.locale
+         AND location.section_id = section.section_id
+         AND location.location_type = 'story_set'
+        JOIN movements AS movement
+          ON movement.locale = location.locale
+         AND movement.movement_id = location.movement_id
+        WHERE section.locale = ? AND ? = 'video'
+          AND EXISTS (
+            SELECT 1
+            FROM stories AS entry_story
+            JOIN story_narrative_media_references AS reference
+              ON reference.locale = entry_story.locale
+             AND reference.story_id = entry_story.story_id
+            WHERE entry_story.locale = section.locale
+              AND reference.category = 'video'
+              AND reference.asset_id = ?
+              AND (
+                entry_story.story_id =
+                  'others:obt:main:' || section.review_group_id || '_zone_enter'
+                OR entry_story.story_id =
+                  'others:activities:' || section.review_group_id ||
+                  ':level_' || section.review_group_id || '_entry'
+              )
+          )
+        ORDER BY movement.position, location.position
+      |}
+
+  let narrative_media_asset_reverse_references_archives =
+    (t2 string (t2 string string) ->* string)
+      {|
+        SELECT json_object(
+          'parentKind', 'archive_group',
+          'archiveCategory', archive.archive_category,
+          'groupID', archive.archive_id,
+          'groupName', archive.name
+        )
+        FROM archive_groups AS archive
+        WHERE archive.locale = ? AND ? = 'video'
+          AND EXISTS (
+            SELECT 1
+            FROM stories AS entry_story
+            JOIN story_narrative_media_references AS reference
+              ON reference.locale = entry_story.locale
+             AND reference.story_id = entry_story.story_id
+            WHERE entry_story.locale = archive.locale
+              AND entry_story.story_id =
+                'others:activities:' || archive.archive_id ||
+                ':level_' || archive.archive_id || '_entry'
+              AND reference.category = 'video'
+              AND reference.asset_id = ?
+          )
+        ORDER BY archive.position
       |}
 
   let movements =
@@ -327,22 +513,22 @@ module Query = struct
           'startTime', movement.start_time,
           'iconID', movement.icon_asset_id,
           'iconObjectKey', icon.object_key,
-          'iconByteSize', icon.byte_size,
+          'iconByteSize', icon.size,
           'iconWidth', icon.width,
           'iconHeight', icon.height,
           'logoID', movement.logo_asset_id,
           'logoObjectKey', logo.object_key,
-          'logoByteSize', logo.byte_size,
+          'logoByteSize', logo.size,
           'logoWidth', logo.width,
           'logoHeight', logo.height,
           'backgroundID', movement.background_asset_id,
           'backgroundObjectKey', background.object_key,
-          'backgroundByteSize', background.byte_size,
+          'backgroundByteSize', background.size,
           'backgroundWidth', background.width,
           'backgroundHeight', background.height,
           'videoID', video_location.video_id,
           'videoObjectKey', video.object_key,
-          'videoByteSize', video.byte_size,
+          'videoByteSize', video.size,
           'videoWidth', video.width,
           'videoHeight', video.height,
           'videoRateNumerator', video.frame_rate_numerator,
@@ -350,14 +536,14 @@ module Query = struct
           'videoFrameCount', video.frame_count
         )
         FROM movements AS movement
-        LEFT JOIN score_assets AS icon
-          ON icon.asset_kind = 'icon'
+        LEFT JOIN presentation_image_assets AS icon
+          ON icon.category = 'icon'
          AND icon.asset_id = movement.icon_asset_id
-        LEFT JOIN score_assets AS logo
-          ON logo.asset_kind = 'logo'
+        LEFT JOIN presentation_image_assets AS logo
+          ON logo.category = 'logo'
          AND logo.asset_id = movement.logo_asset_id
-        LEFT JOIN score_assets AS background
-          ON background.asset_kind = 'background'
+        LEFT JOIN presentation_image_assets AS background
+          ON background.category = 'background'
          AND background.asset_id = movement.background_asset_id
         LEFT JOIN movement_locations AS video_location
           ON video_location.locale = movement.locale
@@ -370,14 +556,14 @@ module Query = struct
              AND candidate.video_id IS NOT NULL
            ORDER BY CASE candidate.location_type
                       WHEN 'story_set' THEN 0
-                      WHEN 'mainline_split' THEN 1
+                      WHEN 'divider' THEN 1
                       ELSE 2
                     END,
                     candidate.position
            LIMIT 1
          )
-        LEFT JOIN score_videos AS video
-          ON video.video_id = video_location.video_id
+        LEFT JOIN presentation_video_assets AS video
+          ON video.category = 'video' AND video.asset_id = video_location.video_id
         WHERE movement.locale = ?
         ORDER BY movement.position
       |}
@@ -401,32 +587,32 @@ module Query = struct
           ),
           'keyVisualID', section.key_visual_asset_id,
           'keyVisualObjectKey', key_visual.object_key,
-          'keyVisualByteSize', key_visual.byte_size,
+          'keyVisualByteSize', key_visual.size,
           'keyVisualWidth', key_visual.width,
           'keyVisualHeight', key_visual.height,
           'titleID', section.title_asset_id,
           'titleObjectKey', title.object_key,
-          'titleByteSize', title.byte_size,
+          'titleByteSize', title.size,
           'titleWidth', title.width,
           'titleHeight', title.height,
           'backgroundID', section.background_asset_id,
           'backgroundObjectKey', background.object_key,
-          'backgroundByteSize', background.byte_size,
+          'backgroundByteSize', background.size,
           'backgroundWidth', background.width,
           'backgroundHeight', background.height,
           'decorationID', section.decoration_asset_id,
           'decorationObjectKey', decoration.object_key,
-          'decorationByteSize', decoration.byte_size,
+          'decorationByteSize', decoration.size,
           'decorationWidth', decoration.width,
           'decorationHeight', decoration.height,
           'retroBackgroundID', section.retro_background_asset_id,
           'retroBackgroundObjectKey', retro_background.object_key,
-          'retroBackgroundByteSize', retro_background.byte_size,
+          'retroBackgroundByteSize', retro_background.size,
           'retroBackgroundWidth', retro_background.width,
           'retroBackgroundHeight', retro_background.height,
           'videoID', location.video_id,
           'videoObjectKey', video.object_key,
-          'videoByteSize', video.byte_size,
+          'videoByteSize', video.size,
           'videoWidth', video.width,
           'videoHeight', video.height,
           'videoRateNumerator', video.frame_rate_numerator,
@@ -434,21 +620,22 @@ module Query = struct
           'videoFrameCount', video.frame_count,
           'openingMedia', COALESCE((
             SELECT json_group_array(json_object(
-              'id', reference.media_id,
-              'kind', reference.kind,
-              'contentType', asset.content_type,
-              'byteSize', asset.byte_size,
+              'id', reference.asset_id,
+              'kind', CASE WHEN reference.category = 'video'
+                           THEN 'video' ELSE reference.usage END,
+              'contentType', asset.mime,
+              'byteSize', asset.size,
               'objectKey', asset.object_key
             ))
             FROM stories AS entry_story
-            JOIN story_media_references AS reference
+            JOIN story_narrative_media_references AS reference
               ON reference.locale = entry_story.locale
              AND reference.story_id = entry_story.story_id
-            LEFT JOIN media_assets AS asset
-              ON asset.media_kind = 'video'
-             AND asset.media_id = reference.media_id
+            LEFT JOIN narrative_media_assets AS asset
+              ON asset.category = 'video'
+             AND asset.asset_id = reference.asset_id
             WHERE entry_story.locale = section.locale
-              AND reference.kind = 'video'
+              AND reference.category = 'video'
               AND (
                 entry_story.story_id =
                   'others:obt:main:' || section.review_group_id || '_zone_enter'
@@ -460,26 +647,26 @@ module Query = struct
           ), json('[]'))
         )
         FROM movement_locations AS location
-        JOIN movement_sections AS section
+        JOIN sections AS section
           ON section.locale = location.locale
          AND section.section_id = location.section_id
-        LEFT JOIN score_assets AS key_visual
-          ON key_visual.asset_kind = 'key_visual'
+        LEFT JOIN presentation_image_assets AS key_visual
+          ON key_visual.category = 'key-visual'
          AND key_visual.asset_id = section.key_visual_asset_id
-        LEFT JOIN score_assets AS title
-          ON title.asset_kind = 'title'
+        LEFT JOIN presentation_image_assets AS title
+          ON title.category = 'title'
          AND title.asset_id = section.title_asset_id
-        LEFT JOIN score_assets AS background
-          ON background.asset_kind = 'background'
+        LEFT JOIN presentation_image_assets AS background
+          ON background.category = 'background'
          AND background.asset_id = section.background_asset_id
-        LEFT JOIN score_assets AS decoration
-          ON decoration.asset_kind = 'decoration'
+        LEFT JOIN presentation_image_assets AS decoration
+          ON decoration.category = 'decoration'
          AND decoration.asset_id = section.decoration_asset_id
-        LEFT JOIN score_assets AS retro_background
-          ON retro_background.asset_kind = 'retro_background'
+        LEFT JOIN presentation_image_assets AS retro_background
+          ON retro_background.category = 'retro-background'
          AND retro_background.asset_id = section.retro_background_asset_id
-        LEFT JOIN score_videos AS video
-          ON video.video_id = location.video_id
+        LEFT JOIN presentation_video_assets AS video
+          ON video.category = 'video' AND video.asset_id = location.video_id
         WHERE location.locale = ? AND location.movement_id = ?
           AND location.location_type = 'story_set'
         ORDER BY location.position
@@ -504,32 +691,32 @@ module Query = struct
           ),
           'keyVisualID', section.key_visual_asset_id,
           'keyVisualObjectKey', key_visual.object_key,
-          'keyVisualByteSize', key_visual.byte_size,
+          'keyVisualByteSize', key_visual.size,
           'keyVisualWidth', key_visual.width,
           'keyVisualHeight', key_visual.height,
           'titleID', section.title_asset_id,
           'titleObjectKey', title.object_key,
-          'titleByteSize', title.byte_size,
+          'titleByteSize', title.size,
           'titleWidth', title.width,
           'titleHeight', title.height,
           'backgroundID', section.background_asset_id,
           'backgroundObjectKey', background.object_key,
-          'backgroundByteSize', background.byte_size,
+          'backgroundByteSize', background.size,
           'backgroundWidth', background.width,
           'backgroundHeight', background.height,
           'decorationID', section.decoration_asset_id,
           'decorationObjectKey', decoration.object_key,
-          'decorationByteSize', decoration.byte_size,
+          'decorationByteSize', decoration.size,
           'decorationWidth', decoration.width,
           'decorationHeight', decoration.height,
           'retroBackgroundID', section.retro_background_asset_id,
           'retroBackgroundObjectKey', retro_background.object_key,
-          'retroBackgroundByteSize', retro_background.byte_size,
+          'retroBackgroundByteSize', retro_background.size,
           'retroBackgroundWidth', retro_background.width,
           'retroBackgroundHeight', retro_background.height,
           'videoID', active_video_location.video_id,
           'videoObjectKey', video.object_key,
-          'videoByteSize', video.byte_size,
+          'videoByteSize', video.size,
           'videoWidth', video.width,
           'videoHeight', video.height,
           'videoRateNumerator', video.frame_rate_numerator,
@@ -537,21 +724,22 @@ module Query = struct
           'videoFrameCount', video.frame_count,
           'openingMedia', COALESCE((
             SELECT json_group_array(json_object(
-              'id', reference.media_id,
-              'kind', reference.kind,
-              'contentType', asset.content_type,
-              'byteSize', asset.byte_size,
+              'id', reference.asset_id,
+              'kind', CASE WHEN reference.category = 'video'
+                           THEN 'video' ELSE reference.usage END,
+              'contentType', asset.mime,
+              'byteSize', asset.size,
               'objectKey', asset.object_key
             ))
             FROM stories AS entry_story
-            JOIN story_media_references AS reference
+            JOIN story_narrative_media_references AS reference
               ON reference.locale = entry_story.locale
              AND reference.story_id = entry_story.story_id
-            LEFT JOIN media_assets AS asset
-              ON asset.media_kind = 'video'
-             AND asset.media_id = reference.media_id
+            LEFT JOIN narrative_media_assets AS asset
+              ON asset.category = 'video'
+             AND asset.asset_id = reference.asset_id
             WHERE entry_story.locale = section.locale
-              AND reference.kind = 'video'
+              AND reference.category = 'video'
               AND (
                 entry_story.story_id =
                   'others:obt:main:' || section.review_group_id || '_zone_enter'
@@ -563,23 +751,23 @@ module Query = struct
           ), json('[]'))
         )
         FROM movement_locations AS location
-        JOIN movement_sections AS section
+        JOIN sections AS section
           ON section.locale = location.locale
          AND section.section_id = location.section_id
-        LEFT JOIN score_assets AS key_visual
-          ON key_visual.asset_kind = 'key_visual'
+        LEFT JOIN presentation_image_assets AS key_visual
+          ON key_visual.category = 'key-visual'
          AND key_visual.asset_id = section.key_visual_asset_id
-        LEFT JOIN score_assets AS title
-          ON title.asset_kind = 'title'
+        LEFT JOIN presentation_image_assets AS title
+          ON title.category = 'title'
          AND title.asset_id = section.title_asset_id
-        LEFT JOIN score_assets AS background
-          ON background.asset_kind = 'background'
+        LEFT JOIN presentation_image_assets AS background
+          ON background.category = 'background'
          AND background.asset_id = section.background_asset_id
-        LEFT JOIN score_assets AS decoration
-          ON decoration.asset_kind = 'decoration'
+        LEFT JOIN presentation_image_assets AS decoration
+          ON decoration.category = 'decoration'
          AND decoration.asset_id = section.decoration_asset_id
-        LEFT JOIN score_assets AS retro_background
-          ON retro_background.asset_kind = 'retro_background'
+        LEFT JOIN presentation_image_assets AS retro_background
+          ON retro_background.category = 'retro-background'
          AND retro_background.asset_id = section.retro_background_asset_id
         LEFT JOIN movement_locations AS active_video_location
           ON active_video_location.locale = location.locale
@@ -589,33 +777,34 @@ module Query = struct
            FROM movement_locations AS candidate
            WHERE candidate.locale = location.locale
              AND candidate.movement_id = location.movement_id
-             AND candidate.location_type = 'mainline_split'
+             AND candidate.location_type = 'divider'
              AND candidate.video_id IS NOT NULL
              AND candidate.position <= location.position
            ORDER BY candidate.position DESC
            LIMIT 1
          )
-        LEFT JOIN score_videos AS video
-          ON video.video_id = active_video_location.video_id
+        LEFT JOIN presentation_video_assets AS video
+          ON video.category = 'video'
+         AND video.asset_id = active_video_location.video_id
         WHERE location.locale = ? AND location.movement_id = ?
           AND location.section_id = ? AND location.location_type = 'story_set'
       |}
 
-  let movement_splits =
+  let movement_dividers =
     (t2 string string ->* string)
       {|
         SELECT json_object(
           'id', location.location_id,
           'position', location.position,
-          'subName', location.split_sub_name,
-          'iconID', location.split_icon_asset_id,
+          'subName', location.divider_sub_name,
+          'iconID', location.divider_icon_asset_id,
           'iconObjectKey', icon.object_key,
-          'iconByteSize', icon.byte_size,
+          'iconByteSize', icon.size,
           'iconWidth', icon.width,
           'iconHeight', icon.height,
           'videoID', location.video_id,
           'videoObjectKey', video.object_key,
-          'videoByteSize', video.byte_size,
+          'videoByteSize', video.size,
           'videoWidth', video.width,
           'videoHeight', video.height,
           'videoRateNumerator', video.frame_rate_numerator,
@@ -623,13 +812,13 @@ module Query = struct
           'videoFrameCount', video.frame_count
         )
         FROM movement_locations AS location
-        LEFT JOIN score_assets AS icon
-          ON icon.asset_kind = 'split'
-         AND icon.asset_id = location.split_icon_asset_id
-        LEFT JOIN score_videos AS video
-          ON video.video_id = location.video_id
+        LEFT JOIN presentation_image_assets AS icon
+          ON icon.category = 'divider'
+         AND icon.asset_id = location.divider_icon_asset_id
+        LEFT JOIN presentation_video_assets AS video
+          ON video.category = 'video' AND video.asset_id = location.video_id
         WHERE location.locale = ? AND location.movement_id = ?
-          AND location.location_type = 'mainline_split'
+          AND location.location_type = 'divider'
         ORDER BY location.position
       |}
 
@@ -655,19 +844,20 @@ module Query = struct
           'media', COALESCE(
             (
               SELECT json_group_array(json_object(
-                'id', reference.media_id,
-                'kind', reference.kind,
-                'contentType', asset.content_type,
-                'byteSize', asset.byte_size,
+                'id', reference.asset_id,
+                'kind', CASE WHEN reference.category = 'video'
+                             THEN 'video' ELSE reference.usage END,
+                'contentType', asset.mime,
+                'byteSize', asset.size,
                 'objectKey', asset.object_key
               ))
-              FROM story_media_references AS reference
-              LEFT JOIN media_assets AS asset
-                ON asset.media_kind = CASE
-                  WHEN reference.kind = 'video' THEN 'video'
+              FROM story_narrative_media_references AS reference
+              LEFT JOIN narrative_media_assets AS asset
+                ON asset.category = CASE
+                  WHEN reference.category = 'video' THEN 'video'
                   ELSE 'audio'
                 END
-               AND asset.media_id = reference.media_id
+               AND asset.asset_id = reference.asset_id
               WHERE reference.locale = story.locale
                 AND reference.story_id = story.story_id
               ORDER BY reference.position
@@ -685,26 +875,51 @@ module Query = struct
     (t2 string string ->* string)
       {|
         SELECT json_object(
-          'storyID', story.story_id, 'artID', reference.art_id,
+          'storyID', story.story_id, 'artworkID', reference.asset_id,
           'kind', reference.kind, 'category', reference.category,
           'isAnimeKV', json(CASE
             WHEN reference.category = 'background' AND EXISTS (
               SELECT 1
-              FROM arts AS texture
-              WHERE texture.category = 'image'
-                AND substr(texture.art_id, 1, length(reference.art_id) + 1) =
-                    reference.art_id || '/'
+              FROM narrative_image_assets AS texture
+              WHERE texture.category = 'illustration'
+                AND substr(texture.asset_id, 1, length(reference.asset_id) + 1) =
+                    reference.asset_id || '/'
             ) THEN 'true' ELSE 'false' END),
           'title', reference.title, 'subtitle', reference.subtitle,
-          'names', json(reference.names_json), 'objectKey', art.object_key
+          'names', json(reference.names_json), 'objectKey', narrative_image_asset.object_key
         )
         FROM stories AS story
-        JOIN story_art_references AS reference
+        JOIN story_narrative_image_references AS reference
           ON reference.locale = story.locale
          AND reference.story_id = story.story_id
-        LEFT JOIN arts AS art
-          ON art.category = reference.category
-         AND art.art_id = reference.art_id
+        LEFT JOIN narrative_image_assets AS narrative_image_asset
+          ON narrative_image_asset.category = reference.category
+         AND narrative_image_asset.asset_id = reference.asset_id
+        WHERE story.locale = ? AND story.collection_id = ?
+        ORDER BY story.position, reference.position
+      |}
+
+  let collection_story_narrative_media_references =
+    (t2 string string ->* string)
+      {|
+        SELECT json_object(
+          'id', reference.asset_id,
+          'kind', CASE WHEN reference.category = 'video'
+                       THEN 'video' ELSE reference.usage END,
+          'contentType', asset.mime,
+          'byteSize', asset.size,
+          'objectKey', asset.object_key
+        )
+        FROM stories AS story
+        JOIN story_narrative_media_references AS reference
+          ON reference.locale = story.locale
+         AND reference.story_id = story.story_id
+        LEFT JOIN narrative_media_assets AS asset
+          ON asset.category = CASE
+            WHEN reference.category = 'video' THEN 'video'
+            ELSE 'audio'
+          END
+         AND asset.asset_id = reference.asset_id
         WHERE story.locale = ? AND story.collection_id = ?
         ORDER BY story.position, reference.position
       |}
@@ -713,23 +928,23 @@ module Query = struct
     (t2 string string ->* string)
       {|
         SELECT json_object(
-          'storyID', reference.story_id, 'artID', reference.art_id,
+          'storyID', reference.story_id, 'artworkID', reference.asset_id,
           'kind', reference.kind, 'category', reference.category,
           'isAnimeKV', json(CASE
             WHEN reference.category = 'background' AND EXISTS (
               SELECT 1
-              FROM arts AS texture
-              WHERE texture.category = 'image'
-                AND substr(texture.art_id, 1, length(reference.art_id) + 1) =
-                    reference.art_id || '/'
+              FROM narrative_image_assets AS texture
+              WHERE texture.category = 'illustration'
+                AND substr(texture.asset_id, 1, length(reference.asset_id) + 1) =
+                    reference.asset_id || '/'
             ) THEN 'true' ELSE 'false' END),
           'title', reference.title, 'subtitle', reference.subtitle,
-          'names', json(reference.names_json), 'objectKey', art.object_key
+          'names', json(reference.names_json), 'objectKey', narrative_image_asset.object_key
         )
-        FROM story_art_references AS reference
-        LEFT JOIN arts AS art
-          ON art.category = reference.category
-         AND art.art_id = reference.art_id
+        FROM story_narrative_image_references AS reference
+        LEFT JOIN narrative_image_assets AS narrative_image_asset
+          ON narrative_image_asset.category = reference.category
+         AND narrative_image_asset.asset_id = reference.asset_id
         WHERE reference.locale = ? AND reference.story_id = ?
         ORDER BY reference.position
       |}
@@ -737,17 +952,17 @@ module Query = struct
   let archive_index =
     (string ->* t2 string int)
       {|
-        WITH kinds(kind, position) AS (
+        WITH categories(category, position) AS (
           VALUES ('events', 0), ('operator_record', 1),
                  ('integrated_strategies', 2),
                  ('reclamation_algorithm', 3), ('others', 4)
         )
-        SELECT kinds.kind, COUNT(archive.archive_id)
-        FROM kinds
+        SELECT categories.category, COUNT(archive.archive_id)
+        FROM categories
         LEFT JOIN archive_groups AS archive
-          ON archive.locale = ? AND archive.archive_kind = kinds.kind
-        GROUP BY kinds.kind, kinds.position
-        ORDER BY kinds.position
+          ON archive.locale = ? AND archive.archive_category = categories.category
+        GROUP BY categories.category, categories.position
+        ORDER BY categories.position
       |}
 
   let archive_groups =
@@ -755,10 +970,10 @@ module Query = struct
       {|
         SELECT json_object(
           'id', archive_id, 'collectionID', collection_id, 'name', name,
-          'archiveKind', archive_kind, 'storyType', story_type
+          'archiveCategory', archive_category, 'storyType', story_type
         )
         FROM archive_groups
-        WHERE locale = ? AND archive_kind = ?
+        WHERE locale = ? AND archive_category = ?
         ORDER BY position
       |}
 
@@ -767,29 +982,29 @@ module Query = struct
       {|
         SELECT json_object(
           'groupID', archive.archive_id, 'storyID', story.story_id,
-          'artID', reference.art_id, 'kind', reference.kind,
+          'artworkID', reference.asset_id, 'kind', reference.kind,
           'category', reference.category, 'title', reference.title,
           'isAnimeKV', json(CASE
             WHEN reference.category = 'background' AND EXISTS (
               SELECT 1
-              FROM arts AS texture
-              WHERE texture.category = 'image'
-                AND substr(texture.art_id, 1, length(reference.art_id) + 1) =
-                    reference.art_id || '/'
+              FROM narrative_image_assets AS texture
+              WHERE texture.category = 'illustration'
+                AND substr(texture.asset_id, 1, length(reference.asset_id) + 1) =
+                    reference.asset_id || '/'
             ) THEN 'true' ELSE 'false' END),
           'subtitle', reference.subtitle, 'names', json(reference.names_json),
-          'objectKey', art.object_key
+          'objectKey', narrative_image_asset.object_key
         )
         FROM archive_groups AS archive
         JOIN stories AS story
           ON story.locale = archive.locale
          AND story.collection_id = archive.collection_id
-        JOIN story_art_references AS reference
+        JOIN story_narrative_image_references AS reference
           ON reference.locale = story.locale
          AND reference.story_id = story.story_id
-        LEFT JOIN arts AS art
-          ON art.category = reference.category AND art.art_id = reference.art_id
-        WHERE archive.locale = ? AND archive.archive_kind = ?
+        LEFT JOIN narrative_image_assets AS narrative_image_asset
+          ON narrative_image_asset.category = reference.category AND narrative_image_asset.asset_id = reference.asset_id
+        WHERE archive.locale = ? AND archive.archive_category = ?
         ORDER BY archive.position, story.position, reference.position
       |}
 
@@ -798,33 +1013,34 @@ module Query = struct
       {|
         SELECT json_object(
           'id', archive_id, 'collectionID', collection_id, 'name', name,
-          'archiveKind', archive_kind, 'storyType', story_type
+          'archiveCategory', archive_category, 'storyType', story_type
         )
         FROM archive_groups
-        WHERE locale = ? AND archive_kind = ? AND archive_id = ?
+        WHERE locale = ? AND archive_category = ? AND archive_id = ?
       |}
 
   let archive_entry_media =
     (t2 string (t2 string string) ->* string)
       {|
         SELECT json_object(
-          'id', reference.media_id,
-          'kind', reference.kind,
-          'contentType', asset.content_type,
-          'byteSize', asset.byte_size,
+          'id', reference.asset_id,
+          'kind', CASE WHEN reference.category = 'video'
+                       THEN 'video' ELSE reference.usage END,
+          'contentType', asset.mime,
+          'byteSize', asset.size,
           'objectKey', asset.object_key
         )
         FROM stories AS entry_story
-        JOIN story_media_references AS reference
+        JOIN story_narrative_media_references AS reference
           ON reference.locale = entry_story.locale
          AND reference.story_id = entry_story.story_id
-        LEFT JOIN media_assets AS asset
-          ON asset.media_kind = 'video'
-         AND asset.media_id = reference.media_id
+        LEFT JOIN narrative_media_assets AS asset
+          ON asset.category = 'video'
+         AND asset.asset_id = reference.asset_id
         WHERE entry_story.locale = ?
           AND entry_story.story_id =
             'others:activities:' || ? || ':level_' || ? || '_entry'
-          AND reference.kind = 'video'
+          AND reference.category = 'video'
         ORDER BY reference.position
       |}
 
@@ -837,14 +1053,14 @@ module Query = struct
           'parentKind', collection.collection_kind,
           'movementID', movement.movement_id, 'movementName', movement.name,
           'sectionID', section.section_id, 'sectionName', section.name,
-          'archiveKind', archive.archive_kind, 'groupID', archive.archive_id,
+          'archiveCategory', archive.archive_category, 'groupID', archive.archive_id,
           'groupName', archive.name
         )
-        FROM gallery_groups AS gallery
+        FROM galleries AS gallery
         JOIN story_collections AS collection
           ON collection.locale = gallery.locale
          AND collection.collection_id = gallery.collection_id
-        LEFT JOIN movement_sections AS section
+        LEFT JOIN sections AS section
           ON section.locale = collection.locale
          AND section.collection_id = collection.collection_id
         LEFT JOIN movement_locations AS location
@@ -870,14 +1086,14 @@ module Query = struct
           'parentKind', collection.collection_kind,
           'movementID', movement.movement_id, 'movementName', movement.name,
           'sectionID', section.section_id, 'sectionName', section.name,
-          'archiveKind', archive.archive_kind, 'groupID', archive.archive_id,
+          'archiveCategory', archive.archive_category, 'groupID', archive.archive_id,
           'groupName', archive.name
         )
-        FROM gallery_groups AS gallery
+        FROM galleries AS gallery
         JOIN story_collections AS collection
           ON collection.locale = gallery.locale
          AND collection.collection_id = gallery.collection_id
-        LEFT JOIN movement_sections AS section
+        LEFT JOIN sections AS section
           ON section.locale = collection.locale
          AND section.collection_id = collection.collection_id
         LEFT JOIN movement_locations AS location
@@ -896,67 +1112,223 @@ module Query = struct
   let gallery_by_collection =
     (t2 string string ->? string)
       {|
-        SELECT gallery_id FROM gallery_groups
+        SELECT gallery_id FROM galleries
         WHERE locale = ? AND collection_id = ?
         ORDER BY position LIMIT 1
       |}
 
-  let gallery_displays =
+  let gallery_groups =
     (t2 string string ->* string)
       {|
         SELECT json_object(
-          'id', display_id, 'position', position, 'name', name,
+          'id', group_id, 'position', position, 'name', name,
           'description', description, 'relatedStoryID', related_story_id,
           'relatedStageID', related_stage_id
         )
-        FROM gallery_displays
+        FROM gallery_groups
         WHERE locale = ? AND gallery_id = ?
         ORDER BY position
       |}
 
-  let gallery_artworks =
+  let gallery_references =
     (t2 string string ->* string)
       {|
         SELECT json_object(
-          'displayID', artwork.display_id, 'position', artwork.position,
-          'cgID', artwork.cg_id, 'artID', artwork.art_id,
-          'category', artwork.category, 'objectKey', art.object_key
+          'groupID', group_reference.group_id, 'position', group_reference.position,
+          'cgID', group_reference.cg_id, 'artworkID', group_reference.asset_id,
+          'category', group_reference.category, 'objectKey', narrative_image_asset.object_key
         )
-        FROM gallery_display_artworks AS artwork
-        LEFT JOIN arts AS art
-          ON art.category = artwork.category AND art.art_id = artwork.art_id
-        WHERE artwork.locale = ? AND artwork.gallery_id = ?
-        ORDER BY artwork.display_id, artwork.position
+        FROM gallery_narrative_asset_references AS group_reference
+        LEFT JOIN narrative_image_assets AS narrative_image_asset
+          ON narrative_image_asset.category = group_reference.category
+         AND narrative_image_asset.asset_id = group_reference.asset_id
+        WHERE group_reference.locale = ? AND group_reference.gallery_id = ?
+        ORDER BY group_reference.group_id, group_reference.position
       |}
 
   let gallery_previews =
     (t2 string string ->* t2 string (option string))
       {|
         WITH first_members AS (
-          SELECT artwork.locale, artwork.gallery_id, artwork.display_id,
-                 artwork.category, artwork.art_id,
+          SELECT narrative_image_asset.locale, narrative_image_asset.gallery_id, narrative_image_asset.group_id,
+                 narrative_image_asset.category, narrative_image_asset.asset_id,
                  ROW_NUMBER() OVER (
-                   PARTITION BY artwork.locale, artwork.gallery_id,
-                                artwork.display_id
-                   ORDER BY artwork.position
+                   PARTITION BY narrative_image_asset.locale, narrative_image_asset.gallery_id,
+                                narrative_image_asset.group_id
+                   ORDER BY narrative_image_asset.position
                  ) AS member_rank
-          FROM gallery_display_artworks AS artwork
-          WHERE artwork.locale = ?
+          FROM gallery_narrative_asset_references AS narrative_image_asset
+          WHERE narrative_image_asset.locale = ?
         )
-        SELECT gallery.gallery_id, art.object_key
-        FROM gallery_groups AS gallery
-        JOIN gallery_displays AS display
-          ON display.locale = gallery.locale
-         AND display.gallery_id = gallery.gallery_id
+        SELECT gallery.gallery_id, narrative_image_asset.object_key
+        FROM galleries AS gallery
+        JOIN gallery_groups AS gallery_group
+          ON gallery_group.locale = gallery.locale
+         AND gallery_group.gallery_id = gallery.gallery_id
         LEFT JOIN first_members AS member
-          ON member.locale = display.locale
-         AND member.gallery_id = display.gallery_id
-         AND member.display_id = display.display_id
+          ON member.locale = gallery_group.locale
+         AND member.gallery_id = gallery_group.gallery_id
+         AND member.group_id = gallery_group.group_id
          AND member.member_rank = 1
-        LEFT JOIN arts AS art
-          ON art.category = member.category AND art.art_id = member.art_id
+        LEFT JOIN narrative_image_assets AS narrative_image_asset
+          ON narrative_image_asset.category = member.category AND narrative_image_asset.asset_id = member.asset_id
         WHERE gallery.locale = ?
-        ORDER BY gallery.position, display.position
+        ORDER BY gallery.position, gallery_group.position
+      |}
+
+  let presentation_assets =
+    (t3 string string string ->* string)
+      {|
+        WITH scope(locale, category_filter, asset_id_filter) AS (VALUES (?, ?, ?)),
+        presentation_references(category, asset_id) AS (
+          SELECT 'icon', icon_asset_id FROM movements
+            WHERE locale = (SELECT locale FROM scope) AND icon_asset_id IS NOT NULL
+          UNION ALL SELECT 'logo', logo_asset_id FROM movements
+            WHERE locale = (SELECT locale FROM scope) AND logo_asset_id IS NOT NULL
+          UNION ALL SELECT 'background', background_asset_id FROM movements
+            WHERE locale = (SELECT locale FROM scope) AND background_asset_id IS NOT NULL
+          UNION ALL SELECT 'key-visual', key_visual_asset_id FROM sections
+            WHERE locale = (SELECT locale FROM scope) AND key_visual_asset_id IS NOT NULL
+          UNION ALL SELECT 'title', title_asset_id FROM sections
+            WHERE locale = (SELECT locale FROM scope) AND title_asset_id IS NOT NULL
+          UNION ALL SELECT 'background', background_asset_id FROM sections
+            WHERE locale = (SELECT locale FROM scope) AND background_asset_id IS NOT NULL
+          UNION ALL SELECT 'decoration', decoration_asset_id FROM sections
+            WHERE locale = (SELECT locale FROM scope) AND decoration_asset_id IS NOT NULL
+          UNION ALL SELECT 'retro-background', retro_background_asset_id FROM sections
+            WHERE locale = (SELECT locale FROM scope) AND retro_background_asset_id IS NOT NULL
+          UNION ALL SELECT 'divider', divider_icon_asset_id FROM movement_locations
+            WHERE locale = (SELECT locale FROM scope) AND divider_icon_asset_id IS NOT NULL
+          UNION ALL SELECT 'video', video_id FROM movement_locations
+            WHERE locale = (SELECT locale FROM scope) AND video_id IS NOT NULL
+        ), reference_counts AS (
+          SELECT category, asset_id, COUNT(*) AS reference_count
+          FROM presentation_references GROUP BY category, asset_id
+        ), assets AS (
+          SELECT category, asset_id, 'image' AS format, 'image/png' AS mime,
+                 size, object_key, width, height, NULL AS duration,
+                 NULL AS frame_rate, NULL AS frame_count
+          FROM presentation_image_assets
+          UNION ALL
+          SELECT category, asset_id, 'video', mime, size, object_key,
+                 width, height,
+                 CAST(frame_count AS REAL) * frame_rate_denominator /
+                   frame_rate_numerator,
+                 CAST(frame_rate_numerator AS REAL) / frame_rate_denominator,
+                 frame_count
+          FROM presentation_video_assets
+        )
+        SELECT json_object(
+          'id', assets.asset_id, 'category', assets.category,
+          'format', assets.format, 'mime', assets.mime, 'size', assets.size,
+          'objectKey', assets.object_key, 'width', assets.width,
+          'height', assets.height, 'duration', assets.duration,
+          'frameRate', assets.frame_rate, 'frameCount', assets.frame_count,
+          'referenceCount', COALESCE(reference_counts.reference_count, 0)
+        )
+        FROM assets
+        LEFT JOIN reference_counts USING (category, asset_id)
+        WHERE ((SELECT category_filter FROM scope) = ''
+               OR assets.category = (SELECT category_filter FROM scope))
+          AND ((SELECT asset_id_filter FROM scope) = ''
+               OR assets.asset_id = (SELECT asset_id_filter FROM scope))
+        ORDER BY assets.category, assets.asset_id
+      |}
+
+  let presentation_reverse_references =
+    (t2 string (t2 string string) ->* string)
+      {|
+        WITH presentation_references AS (
+          SELECT movement.locale, 'movement' AS owner_type,
+                 movement.movement_id AS owner_id, movement.movement_id,
+                 'icon' AS role, movement.name, movement.icon_asset_id AS asset_id
+          FROM movements AS movement
+          UNION ALL
+          SELECT movement.locale, 'movement', movement.movement_id,
+                 movement.movement_id, 'logo', movement.name,
+                 movement.logo_asset_id
+          FROM movements AS movement
+          UNION ALL
+          SELECT movement.locale, 'movement', movement.movement_id,
+                 movement.movement_id, 'background', movement.name,
+                 movement.background_asset_id
+          FROM movements AS movement
+          UNION ALL
+          SELECT section.locale, 'section', section.section_id,
+                 location.movement_id, 'key-visual', section.name,
+                 section.key_visual_asset_id
+          FROM sections AS section JOIN movement_locations AS location
+            ON location.locale = section.locale AND location.section_id = section.section_id
+           AND location.location_type = 'story_set'
+          UNION ALL
+          SELECT section.locale, 'section', section.section_id,
+                 location.movement_id, 'title', section.name, section.title_asset_id
+          FROM sections AS section JOIN movement_locations AS location
+            ON location.locale = section.locale AND location.section_id = section.section_id
+           AND location.location_type = 'story_set'
+          UNION ALL
+          SELECT section.locale, 'section', section.section_id,
+                 location.movement_id, 'background', section.name,
+                 section.background_asset_id
+          FROM sections AS section JOIN movement_locations AS location
+            ON location.locale = section.locale AND location.section_id = section.section_id
+           AND location.location_type = 'story_set'
+          UNION ALL
+          SELECT section.locale, 'section', section.section_id,
+                 location.movement_id, 'decoration', section.name,
+                 section.decoration_asset_id
+          FROM sections AS section JOIN movement_locations AS location
+            ON location.locale = section.locale AND location.section_id = section.section_id
+           AND location.location_type = 'story_set'
+          UNION ALL
+          SELECT section.locale, 'section', section.section_id,
+                 location.movement_id, 'retro-background', section.name,
+                 section.retro_background_asset_id
+          FROM sections AS section JOIN movement_locations AS location
+            ON location.locale = section.locale AND location.section_id = section.section_id
+           AND location.location_type = 'story_set'
+          UNION ALL
+          SELECT location.locale, 'movement-divider', location.location_id,
+                 location.movement_id, 'divider', location.divider_sub_name,
+                 location.divider_icon_asset_id
+          FROM movement_locations AS location WHERE location.location_type = 'divider'
+          UNION ALL
+          SELECT location.locale,
+                 CASE location.location_type
+                   WHEN 'divider' THEN 'movement-divider'
+                   WHEN 'story_set' THEN 'section'
+                   ELSE 'movement'
+                 END,
+                 CASE location.location_type
+                   WHEN 'divider' THEN location.location_id
+                   WHEN 'story_set' THEN location.section_id
+                   ELSE location.movement_id
+                 END,
+                 location.movement_id, 'video',
+                 CASE location.location_type
+                   WHEN 'divider' THEN location.divider_sub_name
+                   WHEN 'story_set' THEN section.name
+                   ELSE movement.name
+                 END,
+                 location.video_id
+          FROM movement_locations AS location
+          JOIN movements AS movement
+            ON movement.locale = location.locale
+           AND movement.movement_id = location.movement_id
+          LEFT JOIN sections AS section
+            ON section.locale = location.locale
+           AND section.section_id = location.section_id
+          WHERE location.video_id IS NOT NULL
+        )
+        SELECT json_object(
+          'ownerType', owner_type, 'ownerID', owner_id,
+          'movementID', movement_id,
+          'role', CASE WHEN role = 'divider' THEN 'icon' ELSE role END,
+          'name', COALESCE(name, '')
+        )
+        FROM presentation_references
+        WHERE locale = ? AND role = ? AND asset_id = ?
+        ORDER BY movement_id, owner_type, owner_id, role
       |}
 
   let search =
@@ -973,10 +1345,10 @@ module Query = struct
             input.query
           ) > 0
         ),
-        story_context_arts AS MATERIALIZED (
-          SELECT DISTINCT reference.locale, reference.category, reference.art_id
+        matching_story_narrative_image_assets AS MATERIALIZED (
+          SELECT DISTINCT reference.locale, reference.category, reference.asset_id
           FROM matching_stories AS story
-          JOIN story_art_references AS reference
+          JOIN story_narrative_image_references AS reference
             ON reference.locale = story.locale
            AND reference.story_id = story.story_id
         )
@@ -1007,13 +1379,13 @@ module Query = struct
               )
             )
             OR (
-              entry.kind = 'art'
+              entry.kind = 'narrative_asset'
               AND EXISTS (
                 SELECT 1
-                FROM story_context_arts AS context
-                WHERE context.locale = entry.locale
-                  AND context.category = entry.category
-                  AND context.art_id = entry.entry_id
+                FROM matching_story_narrative_image_assets AS narrative_image_asset
+                WHERE narrative_image_asset.locale = entry.locale
+                  AND narrative_image_asset.category = entry.category
+                  AND narrative_image_asset.asset_id = entry.entry_id
               )
             )
           )
@@ -1032,7 +1404,7 @@ module Query = struct
           END,
           CASE entry.kind
             WHEN 'story' THEN 0
-            WHEN 'art' THEN 1
+            WHEN 'narrative_asset' THEN 1
             WHEN 'gallery' THEN 2
             WHEN 'section' THEN 3
             WHEN 'archive_group' THEN 4
@@ -1103,7 +1475,36 @@ module Json = struct
   let list value key = value |> member key |> to_list
 end
 
-let decode_image_reference prefix value =
+let decode_presentation_asset raw =
+  let value = Json.parse raw in
+  Model.
+    {
+      id = Json.string value "id";
+      category = Json.string value "category";
+      format = Json.string value "format";
+      mime = Json.string value "mime";
+      size = Json.int64 value "size";
+      object_key = Json.string value "objectKey";
+      width = Json.int_opt value "width";
+      height = Json.int_opt value "height";
+      duration = Json.float_opt value "duration";
+      frame_rate = Json.float_opt value "frameRate";
+      frame_count = Json.int_opt value "frameCount";
+      reference_count = Json.int value "referenceCount";
+    }
+
+let decode_presentation_reverse_reference raw =
+  let value = Json.parse raw in
+  Model.
+    {
+      owner_type = Json.string value "ownerType";
+      owner_id = Json.string value "ownerID";
+      movement_id = Json.string value "movementID";
+      role = Json.string value "role";
+      name = Json.string value "name";
+    }
+
+let decode_image_reference category prefix value =
   match Json.string_opt value (prefix ^ "ID") with
   | None -> None
   | Some id ->
@@ -1115,13 +1516,13 @@ let decode_image_reference prefix value =
               Model.
                 {
                   object_key;
-                  byte_size =
+                  size =
                     Option.get (Json.int64_opt value (prefix ^ "ByteSize"));
                   width = Option.get (Json.int_opt value (prefix ^ "Width"));
                   height = Option.get (Json.int_opt value (prefix ^ "Height"));
                 }
       in
-      Some Model.{ id; image }
+      Some Model.{ id; category; image }
 
 let decode_video_reference value =
   match Json.string_opt value "videoID" with
@@ -1137,7 +1538,7 @@ let decode_video_reference value =
               Model.
                 {
                   object_key;
-                  byte_size = Json.int64 value "videoByteSize";
+                  size = Json.int64 value "videoByteSize";
                   width = Json.int value "videoWidth";
                   height = Json.int value "videoHeight";
                   frame_rate =
@@ -1145,7 +1546,7 @@ let decode_video_reference value =
                   frame_count = Json.int value "videoFrameCount";
                 }
       in
-      Some Model.{ id; video }
+      Some Model.{ id; category = "video"; video }
 
 let decode_movement raw =
   let value = Json.parse raw in
@@ -1157,19 +1558,19 @@ let decode_movement raw =
       position = Json.int value "position";
       section_count = Json.int value "sectionCount";
       start_time = Json.int64 value "startTime";
-      icon = decode_image_reference "icon" value;
-      logo = decode_image_reference "logo" value;
-      background = decode_image_reference "background" value;
+      icon = decode_image_reference "icon" "icon" value;
+      logo = decode_image_reference "logo" "logo" value;
+      background = decode_image_reference "background" "background" value;
       background_video = decode_video_reference value;
     }
 
-let decode_story_media_reference value =
+let decode_story_narrative_media_reference value =
   Model.
     {
-      media_id = Json.string value "id";
+      asset_id = Json.string value "id";
       kind = Json.string value "kind";
-      content_type = Json.string_opt value "contentType";
-      byte_size = Json.int64_opt value "byteSize";
+      mime = Json.string_opt value "contentType";
+      size = Json.int64_opt value "byteSize";
       object_key = Json.string_opt value "objectKey";
     }
 
@@ -1185,27 +1586,28 @@ let decode_section raw =
         position = Json.int value "position";
         sort_by_year = Json.int value "sortByYear";
         sort_within_year = Json.int value "sortWithinYear";
-        key_visual = decode_image_reference "keyVisual" value;
-        title_image = decode_image_reference "title" value;
-        background = decode_image_reference "background" value;
-        decoration = decode_image_reference "decoration" value;
-        retro_background = decode_image_reference "retroBackground" value;
+        key_visual = decode_image_reference "key-visual" "keyVisual" value;
+        title_image = decode_image_reference "title" "title" value;
+        background = decode_image_reference "background" "background" value;
+        decoration = decode_image_reference "decoration" "decoration" value;
+        retro_background =
+          decode_image_reference "retro-background" "retroBackground" value;
         story_count = Json.int value "storyCount";
         opening_media_references =
           Json.list value "openingMedia"
-          |> List.map decode_story_media_reference;
+          |> List.map decode_story_narrative_media_reference;
       }
   in
   (section, Json.string value "collectionID", decode_video_reference value)
 
-let decode_split raw =
+let decode_divider raw =
   let value = Json.parse raw in
   Model.
     {
       id = Json.string value "id";
       position = Json.int value "position";
       sub_name = Json.string value "subName";
-      icon = decode_image_reference "icon" value;
+      icon = decode_image_reference "divider" "icon" value;
       video = decode_video_reference value;
     }
 
@@ -1220,7 +1622,7 @@ let decode_story_value value =
       info = Json.string value "info";
       text = Json.string_opt value "text" |> Option.value ~default:"";
       media_references = [];
-      art_references = [];
+      narrative_image_asset_references = [];
     }
 
 let decode_story raw = decode_story_value (Json.parse raw)
@@ -1232,7 +1634,7 @@ let decode_story_detail raw =
     story with
     media_references =
       Json.list value "media"
-      |> List.map decode_story_media_reference;
+      |> List.map decode_story_narrative_media_reference;
   }
 
 let decode_story_reference raw =
@@ -1240,29 +1642,29 @@ let decode_story_reference raw =
   ( Json.string value "storyID",
     Model.
       {
-        art_id = Json.string value "artID";
+        asset_id = Json.string value "artworkID";
         kind = Json.string value "kind";
         category = Json.string value "category";
         is_anime_kv = Json.bool value "isAnimeKV";
         title = Json.string_opt value "title";
         subtitle = Json.string_opt value "subtitle";
         names = Json.names value "names";
-        composition_object_key = Json.string_opt value "objectKey";
+        asset_object_key = Json.string_opt value "objectKey";
       } )
 
 let preview_references references =
   let available =
     references
-    |> List.filter (fun (reference : Model.story_art_reference) ->
-        Option.is_some reference.composition_object_key
-        && (String.equal reference.category "image"
+    |> List.filter (fun (reference : Model.story_narrative_image_reference) ->
+        Option.is_some reference.asset_object_key
+        && (String.equal reference.category "illustration"
            || String.equal reference.category "background"))
-    |> unique_story_art_references
+    |> unique_story_narrative_image_references
   in
   let images =
     List.filter
-      (fun (reference : Model.story_art_reference) ->
-        String.equal reference.category "image")
+      (fun (reference : Model.story_narrative_image_reference) ->
+        String.equal reference.category "illustration")
       available
   in
   (match images with [] -> available | values -> values) |> List.take 3
@@ -1278,13 +1680,13 @@ let story_data story_raws reference_raws =
   let summaries =
     List.map
       (fun (story : Model.story) ->
-        let preview_art_references = for_story story.id |> preview_references in
+        let preview_narrative_image_asset_references = for_story story.id |> preview_references in
         Model.
           {
             story;
-            representative_art_reference =
-              representative_story_art_reference preview_art_references;
-            preview_art_references;
+            representative_narrative_image_asset_reference =
+              representative_story_narrative_image_reference preview_narrative_image_asset_references;
+            preview_narrative_image_asset_references;
           })
       stories
   in
@@ -1293,7 +1695,7 @@ let story_data story_raws reference_raws =
 
 let decode_parent value =
   match Json.string value "parentKind" with
-  | "movement_section" ->
+  | "section" ->
       Model.Score_parent
         {
           movement_id = Json.string value "movementID";
@@ -1304,8 +1706,8 @@ let decode_parent value =
   | "archive_group" ->
       Model.Archive_parent
         {
-          archive_kind =
-            Json.string value "archiveKind" |> archive_route_of_kind;
+          archive_category =
+            Json.string value "archiveCategory" |> archive_route_of_category;
           group_id = Json.string value "groupID";
           group_name = Json.string value "groupName";
         }
@@ -1331,15 +1733,15 @@ let decode_search_result raw =
 
 let decode_archive_group raw =
   let value = Json.parse raw in
-  let archive_kind = Json.string value "archiveKind" in
+  let archive_category = Json.string value "archiveCategory" in
   let group_type =
-    Json.string_opt value "storyType" |> Option.value ~default:archive_kind
+    Json.string_opt value "storyType" |> Option.value ~default:archive_category
   in
   ( Model.
       {
         id = Json.string value "id";
         name = Json.string value "name";
-        kind = archive_route_of_kind archive_kind;
+        category = archive_route_of_category archive_category;
         group_type;
       },
     Json.string value "collectionID" )
@@ -1360,22 +1762,22 @@ let decode_gallery_base raw =
     parent = decode_parent value;
   }
 
-let decode_gallery_artwork raw =
+let decode_gallery_reference raw =
   let value = Json.parse raw in
-  ( Json.string value "displayID",
+  ( Json.string value "groupID",
     Model.
       {
         position = Json.int value "position";
         cg_id = Json.string value "cgID";
-        art_id = Json.string value "artID";
+        asset_id = Json.string value "artworkID";
         category = Json.string value "category";
-        composition_object_key = Json.string_opt value "objectKey";
+        asset_object_key = Json.string_opt value "objectKey";
       } )
 
-let decode_gallery base_raw display_raws artwork_raws =
+let decode_gallery base_raw group_raws reference_raws =
   let base = decode_gallery_base base_raw in
-  let artworks = List.map decode_gallery_artwork artwork_raws in
-  let displays =
+  let references = List.map decode_gallery_reference reference_raws in
+  let groups =
     List.map
       (fun raw ->
         let value = Json.parse raw in
@@ -1388,12 +1790,12 @@ let decode_gallery base_raw display_raws artwork_raws =
             description = Json.string value "description";
             related_story_id = Json.string_opt value "relatedStoryID";
             related_stage_id = Json.string_opt value "relatedStageID";
-            artworks =
-              artworks
-              |> List.filter_map (fun (display_id, artwork) ->
-                  if String.equal id display_id then Some artwork else None);
+            references =
+              references
+              |> List.filter_map (fun (group_id, narrative_image_asset) ->
+                  if String.equal id group_id then Some narrative_image_asset else None);
           })
-      display_raws
+      group_raws
   in
   Model.
     {
@@ -1401,7 +1803,7 @@ let decode_gallery base_raw display_raws artwork_raws =
       name = base.name;
       description = base.description;
       parent = base.parent;
-      displays;
+      groups;
     }
 
 let decode_error label exception_ =
@@ -1446,10 +1848,10 @@ let sqlite_with_pool_observer ~on_acquire path =
             Db.collect_list Query.sitemap_movements () >>= function
             | Error error -> Lwt.return (Error error)
             | Ok movements ->
-                Db.collect_list Query.sitemap_movement_sections ()
+                Db.collect_list Query.sitemap_sections ()
                 >>= ( function
                 | Error error -> Lwt.return (Error error)
-                | Ok movement_sections ->
+                | Ok sections ->
                     Db.collect_list Query.sitemap_archive_groups ()
                     >>= ( function
                     | Error error -> Lwt.return (Error error)
@@ -1457,13 +1859,13 @@ let sqlite_with_pool_observer ~on_acquire path =
                         Db.collect_list Query.sitemap_galleries ()
                         >|= Result.map (fun galleries ->
                                 ( movements,
-                                  movement_sections,
+                                  sections,
                                   archive_groups,
                                   galleries )) ) ))
         >|= Result.map (fun (movements, sections, archives, galleries) ->
                 {
                   movements;
-                  movement_sections =
+                  sections =
                     List.map
                       (fun (locale, (movement_id, section_id)) ->
                         (locale, movement_id, section_id))
@@ -1475,20 +1877,23 @@ let sqlite_with_pool_observer ~on_acquire path =
                   galleries;
                 })
       in
-      let art category id =
-        use (fun (module Db) -> Db.collect_list Query.art (category, id))
+      let narrative_image_asset category id =
+        use (fun (module Db) -> Db.collect_list Query.narrative_image_asset (category, id))
         >|= function
         | Error error -> Error error
         | Ok [] -> Error `Not_found
         | Ok
-            ((category, (object_key, (byte_size, (width, (height, _))))) :: _ as
+            ((category, (object_key, (size, (width, (height, _))))) :: _ as
              rows) ->
-            let source_arts =
+            let material_assets =
               rows
               |> List.filter_map
-                   (fun (_, (_, (_, (_, (_, (source_category, source_id)))))) ->
-                     match (source_category, source_id) with
-                     | Some category, Some id -> Some Model.{ id; category }
+                   (fun (_, (_, (_, (_, (_, (material_category, source_id)))))) ->
+                     match (material_category, source_id) with
+                     | Some category, Some id ->
+                         Some
+                           (Model.{ namespace = "material"; id; category } :
+                              Model.asset_reference)
                      | _ -> None)
             in
             Ok
@@ -1496,24 +1901,30 @@ let sqlite_with_pool_observer ~on_acquire path =
                 {
                   id;
                   category;
-                  image = { object_key; byte_size; width; height };
-                  source_arts;
+                  image = { object_key; size; width; height };
+                  material_assets;
                 }
       in
-      let source_art category id =
+      let material_asset category id =
         use (fun (module Db) ->
-            Db.find_opt Query.source_art (category, id))
+            Db.find_opt Query.material_asset (category, id) >>= function
+            | Error error -> Lwt.return (Error error)
+            | Ok None -> Lwt.return (Ok None)
+            | Ok (Some material) ->
+                Db.collect_list Query.material_asset_uses (category, id)
+                >|= Result.map (fun narrative_image_asset_references -> Some (material, narrative_image_asset_references)))
         >|= function
         | Error error -> Error error
         | Ok None -> Error `Not_found
         | Ok
             (Some
-               ( kind,
-                 ( category,
-                   ( character_id,
-                     ( role,
-                       ( variant,
-                         (object_key, (byte_size, (width, height))) ) ) ) ) )) ->
+               ( ( kind,
+                   ( category,
+                     ( character_id,
+                       ( role,
+                         ( variant,
+                           (object_key, (size, (width, height))) ) ) ) ) ),
+                 narrative_image_asset_references )) ->
             Ok
               Model.
                 {
@@ -1523,66 +1934,98 @@ let sqlite_with_pool_observer ~on_acquire path =
                   character_id;
                   role;
                   variant;
-                  image = { object_key; byte_size; width; height };
+                  image = { object_key; size; width; height };
+                  narrative_image_asset_references =
+                    List.map
+                      (fun (category, id) ->
+                        (Model.{ namespace = "narrative"; category; id } :
+                           Model.asset_reference))
+                      narrative_image_asset_references;
                 }
       in
-      let media kind id =
-        use (fun (module Db) -> Db.find_opt Query.media (kind, id))
+      let narrative_media_asset kind id =
+        use (fun (module Db) ->
+            Db.find_opt Query.narrative_media_asset (kind, id))
         >|= function
         | Error error -> Error error
         | Ok None -> Error `Not_found
         | Ok (Some raw) ->
-            decode_result "media asset" (fun () ->
+            decode_result "Narrative Media Asset" (fun () ->
                 let value = Json.parse raw in
                 Model.
                   {
                     id = Json.string value "id";
                     kind = Json.string value "kind";
                     object_key = Json.string value "objectKey";
-                    content_type = Json.string value "contentType";
-                    byte_size = Json.int64 value "byteSize";
+                    mime = Json.string value "contentType";
+                    size = Json.int64 value "byteSize";
                     duration = Json.float_opt value "duration";
+                    sample_rate = Json.int_opt value "sampleRate";
                     width = Json.int_opt value "width";
                     height = Json.int_opt value "height";
                     frame_rate = Json.float_opt value "frameRate";
                     frame_count = Json.int_opt value "frameCount";
                   })
       in
-      let unreferenced_arts () =
-        use (fun (module Db) -> Db.collect_list Query.unreferenced_arts ())
+      let orphan_narrative_image_assets locale =
+        use (fun (module Db) -> Db.collect_list Query.orphan_narrative_image_assets locale)
         >|= Result.map (fun rows ->
                 List.map
-                  (fun (category, (id, composition_object_key)) ->
-                    Model.{ id; category; composition_object_key })
+                  (fun
+                    ( category,
+                      (id, (asset_object_key, (size, (width, height)))) ) ->
+                    Model.{ id; category; asset_object_key; size; width; height })
                   rows)
       in
-      let art_context locale category id =
+      let orphan_narrative_media_assets locale =
+        use (fun (module Db) -> Db.collect_list Query.orphan_narrative_media_assets locale)
+        >|= Result.map (fun rows ->
+                List.map
+                  (fun (kind, (id, (mime, (size, object_key)))) ->
+                    Model.{ id; kind; object_key; mime; size })
+                  rows)
+      in
+      let narrative_image_asset_reverse_references locale category id =
         use (fun (module Db) ->
-            Db.find_opt Query.art_context_exists (category, id) >>= function
+            Db.find_opt Query.narrative_image_asset_reverse_references_exists (category, id) >>= function
             | Error error -> Lwt.return (Error error)
             | Ok None -> Lwt.return (Ok None)
             | Ok (Some _) ->
-                Db.collect_list Query.art_context_occurrences
+                Db.collect_list Query.narrative_image_asset_reverse_references_occurrences
                   (locale, (category, id))
                 >>= ( function
                 | Error error -> Lwt.return (Error error)
                 | Ok occurrences ->
                     (if String.equal category "character" then
                        let prefix = character_prefix id in
-                       Db.collect_list Query.art_context_siblings
+                       Db.collect_list Query.narrative_image_asset_reverse_references_character_variants
                          (locale, (id, (prefix, (prefix, prefix))))
                      else Lwt.return (Ok []))
                     >>= ( function
                     | Error error -> Lwt.return (Error error)
-                    | Ok siblings ->
-                        Db.collect_list Query.art_context_textures (id, id)
-                        >|= Result.map (fun textures ->
-                                Some (occurrences, siblings, textures)) ) ))
+                    | Ok character_variants ->
+                        Db.collect_list Query.narrative_image_asset_reverse_references_textures (id, id)
+                        >>= ( function
+                        | Error error -> Lwt.return (Error error)
+                        | Ok textures ->
+                            Db.collect_list Query.narrative_image_asset_reverse_references_galleries
+                              (locale, (category, id))
+                            >|= Result.map (fun galleries ->
+                                    Some
+                                      ( occurrences,
+                                        character_variants,
+                                        textures,
+                                        galleries )) ) ) ))
         >|= function
         | Error error -> Error error
         | Ok None -> Error `Not_found
-        | Ok (Some (occurrence_raws, sibling_raws, texture_rows)) ->
-            decode_result "art context" (fun () ->
+        | Ok
+            (Some
+              ( occurrence_raws,
+                variant_raws,
+                texture_rows,
+                gallery_raws )) ->
+            decode_result "Narrative Image Asset Reverse References" (fun () ->
                 let occurrence_values = List.map Json.parse occurrence_raws in
                 let names =
                   occurrence_values
@@ -1608,16 +2051,16 @@ let sqlite_with_pool_observer ~on_acquire path =
                                    Json.string value "storyTagText";
                                }))
                 in
-                let rec decode_siblings values = function
+                let rec decode_character_variants values = function
                   | [] -> List.rev values
                   | raw :: rest ->
                       let value = Json.parse raw in
-                      let art_id = Json.string value "artID" in
+                      let asset_id = Json.string value "artworkID" in
                       let object_key = Json.string value "objectKey" in
                       let rec gather names = function
                         | next :: tail ->
                             let next_value = Json.parse next in
-                            if String.equal art_id (Json.string next_value "artID")
+                            if String.equal asset_id (Json.string next_value "artworkID")
                             then
                               gather
                                 (Json.names next_value "names" @ names)
@@ -1625,15 +2068,15 @@ let sqlite_with_pool_observer ~on_acquire path =
                             else (names, next :: tail)
                         | [] -> (names, [])
                       in
-                      let sibling_names, remaining =
+                      let variant_names, remaining =
                         gather (Json.names value "names") rest
                       in
-                      decode_siblings
+                      decode_character_variants
                         (Model.
                            {
-                             art_id;
-                             names = unique_strings sibling_names;
-                             composition_object_key = object_key;
+                             asset_id;
+                             names = unique_strings variant_names;
+                             asset_object_key = object_key;
                            }
                         :: values)
                         remaining
@@ -1641,14 +2084,84 @@ let sqlite_with_pool_observer ~on_acquire path =
                 Model.
                   {
                     names;
-                    siblings = decode_siblings [] sibling_raws;
+                    character_variants = decode_character_variants [] variant_raws;
                     textures =
                       List.map
-                        (fun (art_id, composition_object_key) ->
+                        (fun (asset_id, asset_object_key) ->
                           Model.
-                            { art_id; names = []; composition_object_key })
+                            { asset_id; names = []; asset_object_key })
                         texture_rows;
                     occurrences;
+                    galleries =
+                      List.map
+                        (fun raw ->
+                          let value = Json.parse raw in
+                          Model.
+                            {
+                              gallery_id = Json.string value "galleryID";
+                              gallery_name = Json.string value "galleryName";
+                              gallery_description =
+                                Json.string value "galleryDescription";
+                              group_id = Json.string value "groupID";
+                              group_name = Json.string value "groupName";
+                              group_description =
+                                Json.string value "groupDescription";
+                              cg_id = Json.string value "cgID";
+                            })
+                        gallery_raws;
+                  })
+      in
+      let narrative_media_asset_reverse_references locale kind id =
+        use (fun (module Db) ->
+            Db.find_opt Query.narrative_media_asset_reverse_references_exists (kind, id) >>= function
+            | Error error -> Lwt.return (Error error)
+            | Ok None -> Lwt.return (Ok None)
+            | Ok (Some _) ->
+                Db.collect_list Query.narrative_media_asset_reverse_references_occurrences
+                  (locale, (kind, id))
+                >>= function
+                | Error error -> Lwt.return (Error error)
+                | Ok occurrences ->
+                    Db.collect_list Query.narrative_media_asset_reverse_references_sections
+                      (locale, (kind, id))
+                    >>= function
+                    | Error error -> Lwt.return (Error error)
+                    | Ok sections ->
+                        Db.collect_list Query.narrative_media_asset_reverse_references_archives
+                          (locale, (kind, id))
+                        >|= Result.map (fun archives ->
+                                Some (occurrences, sections @ archives)))
+        >|= function
+        | Error error -> Error error
+        | Ok None -> Error `Not_found
+        | Ok (Some (occurrence_raws, collection_raws)) ->
+            decode_result "Media Reverse References" (fun () ->
+                let seen_stories = Hashtbl.create (List.length occurrence_raws) in
+                let occurrences =
+                  occurrence_raws
+                  |> List.filter_map (fun raw ->
+                         let value = Json.parse raw in
+                         let story_id = Json.string value "storyID" in
+                         if Hashtbl.mem seen_stories story_id then None
+                         else (
+                           Hashtbl.add seen_stories story_id ();
+                           Some
+                             Model.
+                               {
+                                 parent = decode_parent value;
+                                 story_id;
+                                 story_name = Json.string value "storyName";
+                                 story_code = Json.string value "storyCode";
+                                 story_tag_text =
+                                   Json.string value "storyTagText";
+                               }))
+                in
+                Model.
+                  {
+                    occurrences;
+                    collections =
+                      List.map (fun raw -> decode_parent (Json.parse raw))
+                        collection_raws;
                   })
       in
       let movements locale =
@@ -1673,27 +2186,27 @@ let sqlite_with_pool_observer ~on_acquire path =
                     >>= ( function
                     | Error error -> Lwt.return (Error error)
                     | Ok sections ->
-                        Db.collect_list Query.movement_splits (locale, id)
-                        >|= Result.map (fun splits -> (sections, splits)) ))
+                        Db.collect_list Query.movement_dividers (locale, id)
+                        >|= Result.map (fun dividers -> (sections, dividers)) ))
                 >|= function
                 | Error error -> Error error
-                | Ok (section_raws, split_raws) ->
+                | Ok (section_raws, divider_raws) ->
                     decode_result "movement" (fun () ->
                         let section_items =
                           section_raws
                           |> List.map (fun raw ->
                                  let section, _, _ = decode_section raw in
-                                 Model.Movement_section
+                                 Model.Section
                                    { position = section.position; section })
                         in
-                        let split_items =
-                          split_raws
+                        let divider_items =
+                          divider_raws
                           |> List.map (fun raw ->
-                                 Model.Movement_split (decode_split raw))
+                                 Model.Divider (decode_divider raw))
                         in
                         let position = function
-                          | Model.Movement_split split -> split.position
-                          | Model.Movement_section { position; _ } -> position
+                          | Model.Divider divider -> divider.position
+                          | Model.Section { position; _ } -> position
                         in
                         Model.
                           {
@@ -1702,7 +2215,7 @@ let sqlite_with_pool_observer ~on_acquire path =
                               List.sort
                                 (fun left right ->
                                   Int.compare (position left) (position right))
-                                (section_items @ split_items);
+                                (section_items @ divider_items);
                           }))
       in
       let gallery locale id =
@@ -1711,19 +2224,18 @@ let sqlite_with_pool_observer ~on_acquire path =
             | Error error -> Lwt.return (Error error)
             | Ok None -> Lwt.return (Ok None)
             | Ok (Some base) ->
-                Db.collect_list Query.gallery_displays (locale, id)
+                Db.collect_list Query.gallery_groups (locale, id)
                 >>= ( function
                 | Error error -> Lwt.return (Error error)
-                | Ok displays ->
-                    Db.collect_list Query.gallery_artworks (locale, id)
-                    >|= Result.map (fun artworks ->
-                            Some (base, displays, artworks)) ))
+                | Ok groups ->
+                    Db.collect_list Query.gallery_references (locale, id)
+                    >|= Result.map (fun references -> Some (base, groups, references)) ))
         >|= function
         | Error error -> Error error
         | Ok None -> Error `Not_found
-        | Ok (Some (base, displays, artworks)) ->
+        | Ok (Some (base, groups, references)) ->
             decode_result "gallery" (fun () ->
-                decode_gallery base displays artworks)
+                decode_gallery base groups references)
       in
       let search locale query =
         let query = String.trim query in
@@ -1734,6 +2246,40 @@ let sqlite_with_pool_observer ~on_acquire path =
           >|= function
           | Error error -> Error error
           | Ok raws -> decode_result "search results" (fun () -> List.map decode_search_result raws)
+      in
+      let presentation_assets locale =
+        use (fun (module Db) ->
+            Db.collect_list Query.presentation_assets (locale, "", ""))
+        >|= function
+        | Error error -> Error error
+        | Ok raws ->
+            decode_result "presentation assets" (fun () ->
+                List.map decode_presentation_asset raws)
+      in
+      let presentation_asset locale category id =
+        use (fun (module Db) ->
+            Db.collect_list Query.presentation_assets (locale, category, id))
+        >>= function
+        | Error error -> Lwt.return (Error error)
+        | Ok [] -> Lwt.return (Error `Not_found)
+        | Ok (raw :: _) ->
+            (match decode_result "presentation asset" (fun () -> decode_presentation_asset raw) with
+            | Error error -> Lwt.return (Error error)
+            | Ok asset ->
+                use (fun (module Db) ->
+                    Db.collect_list Query.presentation_reverse_references
+                      (locale, (category, id)))
+                >|= function
+                | Error error -> Error error
+                | Ok raws ->
+                    decode_result "presentation reverse references" (fun () ->
+                        Model.
+                          {
+                            asset;
+                            reverse_references =
+                              List.map
+                                decode_presentation_reverse_reference raws;
+                          }))
       in
       let gallery_by_collection locale collection_id =
         use (fun (module Db) ->
@@ -1758,7 +2304,7 @@ let sqlite_with_pool_observer ~on_acquire path =
                 List.map
                   (fun raw ->
                     let base = decode_gallery_base raw in
-                    let preview_composition_object_keys =
+                    let preview_asset_object_keys =
                       preview_rows
                       |> List.filter_map (fun (gallery_id, object_key) ->
                              if String.equal base.id gallery_id then object_key
@@ -1773,13 +2319,13 @@ let sqlite_with_pool_observer ~on_acquire path =
                             name = base.name;
                             description = base.description;
                             parent = base.parent;
-                            displays = [];
+                            groups = [];
                           };
-                        preview_composition_object_keys;
+                        preview_asset_object_keys;
                       })
                   base_raws)
       in
-      let movement_section locale movement_id section_id =
+      let section locale movement_id section_id =
         use (fun (module Db) ->
             Db.find_opt Query.section (locale, (movement_id, section_id))
             >>= function
@@ -1788,29 +2334,41 @@ let sqlite_with_pool_observer ~on_acquire path =
             | Ok (Some section_raw) ->
                 let _, collection_id, _ = decode_section section_raw in
                 Db.collect_list Query.collection_stories (locale, collection_id)
-                >>= ( function
+                >>= function
                 | Error error -> Lwt.return (Error error)
                 | Ok stories ->
                     Db.collect_list Query.collection_story_references
                       (locale, collection_id)
-                    >|= Result.map (fun references ->
-                            Some
-                              ( section_raw,
-                                collection_id,
-                                stories,
-                                references )) ))
+                    >>= function
+                    | Error error -> Lwt.return (Error error)
+                    | Ok references ->
+                        Db.collect_list Query.collection_story_narrative_media_references
+                          (locale, collection_id)
+                        >|= Result.map (fun media ->
+                                Some
+                                  ( section_raw,
+                                    collection_id,
+                                    stories,
+                                    references,
+                                    media )))
         >>= function
         | Error error -> Lwt.return (Error error)
         | Ok None -> Lwt.return (Error `Not_found)
-        | Ok (Some (section_raw, collection_id, story_raws, reference_raws)) ->
+        | Ok
+            (Some
+              ( section_raw,
+                collection_id,
+                story_raws,
+                reference_raws,
+                media_raws )) ->
             gallery_by_collection locale collection_id >|= ( function
             | Error error -> Error error
             | Ok gallery ->
-                decode_result "movement section" (fun () ->
+                decode_result "Section" (fun () ->
                     let section, _, active_background_video =
                       decode_section section_raw
                     in
-                    let _, stories, art_references =
+                    let _, stories, narrative_image_asset_references =
                       story_data story_raws reference_raws
                     in
                     Model.
@@ -1818,8 +2376,13 @@ let sqlite_with_pool_observer ~on_acquire path =
                         section;
                         active_background_video;
                         stories;
-                        art_references =
-                          unique_story_art_references art_references;
+                        media_references =
+                          media_raws
+                          |> List.map (fun raw ->
+                                 decode_story_narrative_media_reference (Json.parse raw))
+                          |> unique_story_narrative_media_references;
+                        narrative_image_asset_references =
+                          unique_story_narrative_image_references narrative_image_asset_references;
                         gallery;
                       }) )
       in
@@ -1848,7 +2411,7 @@ let sqlite_with_pool_observer ~on_acquire path =
                 Some
                   Model.
                     {
-                      story = { story with art_references = references };
+                      story = { story with narrative_image_asset_references = references };
                       parent;
                     })
             |> (function
@@ -1892,25 +2455,25 @@ let sqlite_with_pool_observer ~on_acquire path =
         use (fun (module Db) -> Db.collect_list Query.archive_index locale)
         >|= Result.map (fun rows ->
                 List.map
-                  (fun (kind, group_count) ->
+                  (fun (category, group_count) ->
                     Model.
                       {
-                        kind = archive_route_of_kind kind;
+                        category = archive_route_of_category category;
                         group_count;
                       })
                   rows)
       in
-      let archive_groups locale route_kind =
-        match archive_kind_of_route route_kind with
+      let archive_groups locale route_category =
+        match archive_category_of_route route_category with
         | None -> Lwt.return (Error `Not_found)
-        | Some archive_kind ->
+        | Some archive_category ->
             use (fun (module Db) ->
-                Db.collect_list Query.archive_groups (locale, archive_kind)
+                Db.collect_list Query.archive_groups (locale, archive_category)
                 >>= function
                 | Error error -> Lwt.return (Error error)
                 | Ok groups ->
                     Db.collect_list Query.archive_group_references
-                      (locale, archive_kind)
+                      (locale, archive_category)
                     >|= Result.map (fun references -> (groups, references)))
             >|= function
             | Error error -> Error error
@@ -1926,7 +2489,7 @@ let sqlite_with_pool_observer ~on_acquire path =
                     List.map
                       (fun raw ->
                         let group, _ = decode_archive_group raw in
-                        let preview_art_references =
+                        let preview_narrative_image_asset_references =
                           references
                           |> List.filter_map (fun (group_id, reference) ->
                                  if String.equal group.id group_id then
@@ -1937,19 +2500,19 @@ let sqlite_with_pool_observer ~on_acquire path =
                         Model.
                           {
                             group;
-                            representative_art_reference =
-                              representative_story_art_reference
-                                preview_art_references;
-                            preview_art_references;
+                            representative_narrative_image_asset_reference =
+                              representative_story_narrative_image_reference
+                                preview_narrative_image_asset_references;
+                            preview_narrative_image_asset_references;
                           })
                       group_raws)
       in
-      let archive_group locale route_kind id =
-        match archive_kind_of_route route_kind with
+      let archive_group locale route_category id =
+        match archive_category_of_route route_category with
         | None -> Lwt.return (Error `Not_found)
-        | Some archive_kind ->
+        | Some archive_category ->
             use (fun (module Db) ->
-                Db.find_opt Query.archive_group (locale, (archive_kind, id))
+                Db.find_opt Query.archive_group (locale, (archive_category, id))
                 >>= function
                 | Error error -> Lwt.return (Error error)
                 | Ok None -> Lwt.return (Ok None)
@@ -1957,23 +2520,29 @@ let sqlite_with_pool_observer ~on_acquire path =
                     let _, collection_id = decode_archive_group group_raw in
                     Db.collect_list Query.collection_stories
                       (locale, collection_id)
-                    >>= ( function
+                    >>= function
                     | Error error -> Lwt.return (Error error)
                     | Ok stories ->
                         Db.collect_list Query.collection_story_references
                           (locale, collection_id)
-                        >>= ( function
+                        >>= function
                         | Error error -> Lwt.return (Error error)
                         | Ok references ->
-                            Db.collect_list Query.archive_entry_media
-                              (locale, (id, id))
-                            >|= Result.map (fun media ->
-                                    Some
-                                      ( group_raw,
-                                        collection_id,
-                                        stories,
-                                        references,
-                                        media )) ) ))
+                            Db.collect_list Query.collection_story_narrative_media_references
+                              (locale, collection_id)
+                            >>= function
+                            | Error error -> Lwt.return (Error error)
+                            | Ok media ->
+                                Db.collect_list Query.archive_entry_media
+                                  (locale, (id, id))
+                                >|= Result.map (fun opening_media ->
+                                        Some
+                                          ( group_raw,
+                                            collection_id,
+                                            stories,
+                                            references,
+                                            media,
+                                            opening_media )) )
             >>= ( function
             | Error error -> Lwt.return (Error error)
             | Ok None -> Lwt.return (Error `Not_found)
@@ -1983,45 +2552,51 @@ let sqlite_with_pool_observer ~on_acquire path =
                     collection_id,
                     story_raws,
                     reference_raws,
-                    media_raws )) ->
+                    media_raws,
+                    opening_media_raws )) ->
                 gallery_by_collection locale collection_id >|= ( function
                 | Error error -> Error error
                 | Ok gallery ->
                     decode_result "archive group" (fun () ->
                         let group, _ = decode_archive_group group_raw in
-                        let _, stories, art_references =
+                        let _, stories, narrative_image_asset_references =
                           story_data story_raws reference_raws
                         in
-                        let art_references =
-                          unique_story_art_references art_references
+                        let narrative_image_asset_references =
+                          unique_story_narrative_image_references narrative_image_asset_references
                         in
-                        let preview_art_references =
-                          preview_references art_references
+                        let preview_narrative_image_asset_references =
+                          preview_references narrative_image_asset_references
                         in
                         Model.
                           {
                             group;
                             stories;
-                            representative_art_reference =
-                              representative_story_art_reference
-                                preview_art_references;
-                            preview_art_references;
-                            art_references;
+                            representative_narrative_image_asset_reference =
+                              representative_story_narrative_image_reference
+                                preview_narrative_image_asset_references;
+                            preview_narrative_image_asset_references;
+                            media_references =
+                              media_raws
+                              |> List.map (fun raw ->
+                                     decode_story_narrative_media_reference (Json.parse raw))
+                              |> unique_story_narrative_media_references;
+                            narrative_image_asset_references;
                             opening_media_references =
                               List.map
                                 (fun raw ->
-                                  decode_story_media_reference (Json.parse raw))
-                                media_raws;
+                                  decode_story_narrative_media_reference (Json.parse raw))
+                                opening_media_raws;
                             gallery;
                           }) ) )
       in
-      let archive_story locale route_kind group_id story_id =
-        match archive_kind_of_route route_kind with
+      let archive_story locale route_category group_id story_id =
+        match archive_category_of_route route_category with
         | None -> Lwt.return (Error `Not_found)
-        | Some archive_kind ->
+        | Some archive_category ->
             use (fun (module Db) ->
                 Db.find_opt Query.archive_group
-                  (locale, (archive_kind, group_id)))
+                  (locale, (archive_category, group_id)))
             >>= ( function
             | Error error -> Lwt.return (Error error)
             | Ok None -> Lwt.return (Error `Not_found)
@@ -2030,7 +2605,7 @@ let sqlite_with_pool_observer ~on_acquire path =
                 let parent =
                   Model.Archive_parent
                     {
-                      archive_kind = group.kind;
+                      archive_category = group.category;
                       group_id = group.id;
                       group_name = group.name;
                     }
@@ -2043,14 +2618,16 @@ let sqlite_with_pool_observer ~on_acquire path =
           check;
           health;
           sitemap_data;
-          art;
-          source_art;
-          media;
-          unreferenced_arts;
-          art_context;
+          narrative_image_asset;
+          material_asset;
+          narrative_media_asset;
+          orphan_narrative_image_assets;
+          orphan_narrative_media_assets;
+          narrative_image_asset_reverse_references;
+          narrative_media_asset_reverse_references;
           movements;
           movement;
-          movement_section;
+          section;
           score_story;
           archive_index;
           archive_groups;
@@ -2058,6 +2635,8 @@ let sqlite_with_pool_observer ~on_acquire path =
           archive_story;
           galleries;
           gallery;
+          presentation_assets;
+          presentation_asset;
           search;
         }
 
@@ -2225,29 +2804,36 @@ let start_live ~fetch ~cache_dir ~download_timeout_seconds =
             health = (fun () -> with_current (fun value -> value.health ()));
             sitemap_data =
               (fun () -> with_current (fun value -> value.sitemap_data ()));
-            art =
+            narrative_image_asset =
               (fun category id ->
-                with_current (fun value -> value.art category id));
-            source_art =
+                with_current (fun value -> value.narrative_image_asset category id));
+            material_asset =
               (fun category id ->
-                with_current (fun value -> value.source_art category id));
-            media =
+                with_current (fun value -> value.material_asset category id));
+            narrative_media_asset =
               (fun kind id ->
-                with_current (fun value -> value.media kind id));
-            unreferenced_arts =
-              (fun () -> with_current (fun value -> value.unreferenced_arts ()));
-            art_context =
+                with_current (fun value -> value.narrative_media_asset kind id));
+            orphan_narrative_image_assets =
+              (fun locale ->
+                with_current (fun value -> value.orphan_narrative_image_assets locale));
+            orphan_narrative_media_assets =
+              (fun locale ->
+                with_current (fun value -> value.orphan_narrative_media_assets locale));
+            narrative_image_asset_reverse_references =
               (fun locale category id ->
-                with_current (fun value -> value.art_context locale category id));
+                with_current (fun value -> value.narrative_image_asset_reverse_references locale category id));
+            narrative_media_asset_reverse_references =
+              (fun locale kind id ->
+                with_current (fun value -> value.narrative_media_asset_reverse_references locale kind id));
             movements =
               (fun locale -> with_current (fun value -> value.movements locale));
             movement =
               (fun locale id ->
                 with_current (fun value -> value.movement locale id));
-            movement_section =
+            section =
               (fun locale movement_id section_id ->
                 with_current (fun value ->
-                    value.movement_section locale movement_id section_id));
+                    value.section locale movement_id section_id));
             score_story =
               (fun locale movement_id section_id story_id ->
                 with_current (fun value ->
@@ -2256,20 +2842,27 @@ let start_live ~fetch ~cache_dir ~download_timeout_seconds =
               (fun locale ->
                 with_current (fun value -> value.archive_index locale));
             archive_groups =
-              (fun locale kind ->
-                with_current (fun value -> value.archive_groups locale kind));
+              (fun locale category ->
+                with_current (fun value -> value.archive_groups locale category));
             archive_group =
-              (fun locale kind id ->
-                with_current (fun value -> value.archive_group locale kind id));
+              (fun locale category id ->
+                with_current (fun value -> value.archive_group locale category id));
             archive_story =
-              (fun locale kind group_id story_id ->
+              (fun locale category group_id story_id ->
                 with_current (fun value ->
-                    value.archive_story locale kind group_id story_id));
+                    value.archive_story locale category group_id story_id));
             galleries =
               (fun locale -> with_current (fun value -> value.galleries locale));
             gallery =
               (fun locale id ->
                 with_current (fun value -> value.gallery locale id));
+            presentation_assets =
+              (fun locale ->
+                with_current (fun value -> value.presentation_assets locale));
+            presentation_asset =
+              (fun locale category id ->
+                with_current (fun value ->
+                    value.presentation_asset locale category id));
             search =
               (fun locale query ->
                 with_current (fun value -> value.search locale query));
@@ -2349,38 +2942,49 @@ end
 let close (database : t) = database.close ()
 let health (database : t) = database.health ()
 let sitemap_data (database : t) = database.sitemap_data ()
-let art (database : t) category id = database.art category id
+let narrative_image_asset (database : t) category id = database.narrative_image_asset category id
 
-let source_art (database : t) category id =
-  database.source_art category id
+let material_asset (database : t) category id =
+  database.material_asset category id
 
-let media (database : t) kind id = database.media kind id
+let narrative_media_asset (database : t) kind id =
+  database.narrative_media_asset kind id
 
-let unreferenced_arts (database : t) = database.unreferenced_arts ()
+let orphan_narrative_image_assets (database : t) locale = database.orphan_narrative_image_assets locale
 
-let art_context (database : t) locale category id =
-  database.art_context locale category id
+let orphan_narrative_media_assets (database : t) locale = database.orphan_narrative_media_assets locale
+
+let narrative_image_asset_reverse_references (database : t) locale category id =
+  database.narrative_image_asset_reverse_references locale category id
+
+let narrative_media_asset_reverse_references (database : t) locale kind id =
+  database.narrative_media_asset_reverse_references locale kind id
 
 let movements (database : t) locale = database.movements locale
 let movement (database : t) locale id = database.movement locale id
 
-let movement_section (database : t) locale movement_id section_id =
-  database.movement_section locale movement_id section_id
+let section (database : t) locale movement_id section_id =
+  database.section locale movement_id section_id
 
 let score_story (database : t) locale movement_id section_id story_id =
   database.score_story locale movement_id section_id story_id
 
 let archive_index (database : t) locale = database.archive_index locale
 
-let archive_groups (database : t) locale kind =
-  database.archive_groups locale kind
+let archive_groups (database : t) locale category =
+  database.archive_groups locale category
 
-let archive_group (database : t) locale kind id =
-  database.archive_group locale kind id
+let archive_group (database : t) locale category id =
+  database.archive_group locale category id
 
-let archive_story (database : t) locale kind group_id story_id =
-  database.archive_story locale kind group_id story_id
+let archive_story (database : t) locale category group_id story_id =
+  database.archive_story locale category group_id story_id
 
 let galleries (database : t) locale = database.galleries locale
 let gallery (database : t) locale id = database.gallery locale id
+let presentation_assets (database : t) locale = database.presentation_assets locale
+
+let presentation_asset (database : t) locale category id =
+  database.presentation_asset locale category id
+
 let search (database : t) locale query = database.search locale query

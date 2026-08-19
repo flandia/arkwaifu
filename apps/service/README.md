@@ -56,11 +56,11 @@ Archives published before thumbnail support need one backfill before the fronten
 
 ```console
 Push-Location apps/updateloop
-uv run updateloop run art --complete
+uv run updateloop run artwork --complete
 Pop-Location
 ```
 
-Future art updates publish thumbnails for changed compositions. Thumbnail keys follow `ART/<resVersion>/thumbnail/<category>/<name>.webp`.
+Future artwork versions publish thumbnails for changed Narrative Image Assets. Thumbnail keys follow `ART/<resVersion>/thumbnail/<category>/<name>.webp`.
 
 ## Build and test the service
 

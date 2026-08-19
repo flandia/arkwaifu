@@ -2,30 +2,34 @@
 
 type image_metadata = {
   object_key : string;
-  byte_size : int64;
+  size : int64;
   width : int;
   height : int;
 }
 
 type video_metadata = {
   object_key : string;
-  byte_size : int64;
+  size : int64;
   width : int;
   height : int;
   frame_rate : float;
   frame_count : int;
 }
 
-type art_source_reference = { id : string; category : string }
+type asset_reference = {
+  namespace : string;
+  id : string;
+  category : string;
+}
 
-type art = {
+type narrative_image_asset = {
   id : string;
   category : string;
   image : image_metadata;
-  source_arts : art_source_reference list;
+  material_assets : asset_reference list;
 }
 
-type source_art = {
+type material_asset = {
   id : string;
   category : string;
   kind : string;
@@ -33,40 +37,53 @@ type source_art = {
   role : string option;
   variant : string option;
   image : image_metadata;
+  narrative_image_asset_references : asset_reference list;
 }
 
-type unreferenced_art = {
+type orphan_narrative_image_asset = {
   id : string;
   category : string;
-  composition_object_key : string;
+  asset_object_key : string;
+  size : int64;
+  width : int;
+  height : int;
 }
 
-type story_art_reference = {
-  art_id : string;
+type orphan_narrative_media_asset = {
+  id : string;
+  kind : string;
+  object_key : string;
+  mime : string;
+  size : int64;
+}
+
+type story_narrative_image_reference = {
+  asset_id : string;
   kind : string;
   category : string;
   is_anime_kv : bool;
   title : string option;
   subtitle : string option;
   names : string list;
-  composition_object_key : string option;
+  asset_object_key : string option;
 }
 
-type story_media_reference = {
-  media_id : string;
+type story_narrative_media_reference = {
+  asset_id : string;
   kind : string;
-  content_type : string option;
-  byte_size : int64 option;
+  mime : string option;
+  size : int64 option;
   object_key : string option;
 }
 
-type media_asset = {
+type narrative_media_asset = {
   id : string;
   kind : string;
   object_key : string;
-  content_type : string;
-  byte_size : int64;
+  mime : string;
+  size : int64;
   duration : float option;
+  sample_rate : int option;
   width : int option;
   height : int option;
   frame_rate : float option;
@@ -81,7 +98,7 @@ type collection_parent =
       section_name : string;
     }
   | Archive_parent of {
-      archive_kind : string;
+      archive_category : string;
       group_id : string;
       group_name : string;
     }
@@ -94,44 +111,46 @@ type story = {
   name : string;
   info : string;
   text : string;
-  media_references : story_media_reference list;
-  art_references : story_art_reference list;
+  media_references : story_narrative_media_reference list;
+  narrative_image_asset_references : story_narrative_image_reference list;
 }
 
 type story_summary = {
   story : story;
-  representative_art_reference : story_art_reference option;
-  preview_art_references : story_art_reference list;
+  representative_narrative_image_asset_reference : story_narrative_image_reference option;
+  preview_narrative_image_asset_references : story_narrative_image_reference list;
 }
 
 type story_detail = { story : story; parent : collection_parent }
 
 type score_image_reference = {
   id : string;
+  category : string;
   image : image_metadata option;
 }
 
 type score_video_reference = {
   id : string;
+  category : string;
   video : video_metadata option;
 }
 
-type gallery_artwork = {
+type gallery_reference = {
   position : int;
   cg_id : string;
-  art_id : string;
+  asset_id : string;
   category : string;
-  composition_object_key : string option;
+  asset_object_key : string option;
 }
 
-type gallery_display = {
+type gallery_group = {
   id : string;
   position : int;
   name : string;
   description : string;
   related_story_id : string option;
   related_stage_id : string option;
-  artworks : gallery_artwork list;
+  references : gallery_reference list;
 }
 
 type gallery = {
@@ -139,12 +158,12 @@ type gallery = {
   name : string;
   description : string;
   parent : collection_parent;
-  displays : gallery_display list;
+  groups : gallery_group list;
 }
 
 type gallery_summary = {
   gallery : gallery;
-  preview_composition_object_keys : string list;
+  preview_asset_object_keys : string list;
 }
 
 type movement = {
@@ -160,7 +179,7 @@ type movement = {
   background_video : score_video_reference option;
 }
 
-type movement_section = {
+type section = {
   id : string;
   name : string;
   description : string;
@@ -174,10 +193,10 @@ type movement_section = {
   decoration : score_image_reference option;
   retro_background : score_image_reference option;
   story_count : int;
-  opening_media_references : story_media_reference list;
+  opening_media_references : story_narrative_media_reference list;
 }
 
-type movement_split = {
+type movement_divider = {
   id : string;
   position : int;
   sub_name : string;
@@ -186,51 +205,53 @@ type movement_split = {
 }
 
 type movement_item =
-  | Movement_split of movement_split
-  | Movement_section of { position : int; section : movement_section }
+  | Divider of movement_divider
+  | Section of { position : int; section : section }
 
 type movement_detail = { movement : movement; items : movement_item list }
 
-type movement_section_detail = {
-  section : movement_section;
+type section_detail = {
+  section : section;
   active_background_video : score_video_reference option;
   stories : story_summary list;
-  art_references : story_art_reference list;
+  media_references : story_narrative_media_reference list;
+  narrative_image_asset_references : story_narrative_image_reference list;
   gallery : gallery option;
 }
 
-type archive_index_entry = { kind : string; group_count : int }
+type archive_index_entry = { category : string; group_count : int }
 
 type archive_group = {
   id : string;
   name : string;
-  kind : string;
+  category : string;
   group_type : string;
 }
 
 type archive_group_summary = {
   group : archive_group;
-  representative_art_reference : story_art_reference option;
-  preview_art_references : story_art_reference list;
+  representative_narrative_image_asset_reference : story_narrative_image_reference option;
+  preview_narrative_image_asset_references : story_narrative_image_reference list;
 }
 
 type archive_group_detail = {
   group : archive_group;
   stories : story_summary list;
-  representative_art_reference : story_art_reference option;
-  preview_art_references : story_art_reference list;
-  art_references : story_art_reference list;
-  opening_media_references : story_media_reference list;
+  representative_narrative_image_asset_reference : story_narrative_image_reference option;
+  preview_narrative_image_asset_references : story_narrative_image_reference list;
+  media_references : story_narrative_media_reference list;
+  narrative_image_asset_references : story_narrative_image_reference list;
+  opening_media_references : story_narrative_media_reference list;
   gallery : gallery option;
 }
 
-type art_sibling = {
-  art_id : string;
+type related_narrative_image_asset = {
+  asset_id : string;
   names : string list;
-  composition_object_key : string;
+  asset_object_key : string;
 }
 
-type art_occurrence = {
+type narrative_image_occurrence = {
   parent : collection_parent;
   story_id : string;
   story_name : string;
@@ -238,11 +259,27 @@ type art_occurrence = {
   story_tag_text : string;
 }
 
-type art_context = {
+type narrative_asset_gallery_reference = {
+  gallery_id : string;
+  gallery_name : string;
+  gallery_description : string;
+  group_id : string;
+  group_name : string;
+  group_description : string;
+  cg_id : string;
+}
+
+type narrative_media_asset_reverse_references = {
+  occurrences : narrative_image_occurrence list;
+  collections : collection_parent list;
+}
+
+type narrative_image_asset_reverse_references = {
   names : string list;
-  siblings : art_sibling list;
-  textures : art_sibling list;
-  occurrences : art_occurrence list;
+  character_variants : related_narrative_image_asset list;
+  textures : related_narrative_image_asset list;
+  occurrences : narrative_image_occurrence list;
+  galleries : narrative_asset_gallery_reference list;
 }
 
 type search_result = {
@@ -255,20 +292,51 @@ type search_result = {
   parent : collection_parent option;
 }
 
+type presentation_asset = {
+  id : string;
+  category : string;
+  format : string;
+  mime : string;
+  size : int64;
+  object_key : string;
+  width : int option;
+  height : int option;
+  duration : float option;
+  frame_rate : float option;
+  frame_count : int option;
+  reference_count : int;
+}
+
+type presentation_reverse_reference = {
+  owner_type : string;
+  owner_id : string;
+  movement_id : string;
+  role : string;
+  name : string;
+}
+
+type presentation_asset_detail = {
+  asset : presentation_asset;
+  reverse_references : presentation_reverse_reference list;
+}
+
 val content_url : object_base_url:string -> string -> string
-val art_json : object_base_url:string -> art -> Yojson.Safe.t
-val source_art_json : object_base_url:string -> source_art -> Yojson.Safe.t
-val unreferenced_art_json :
-  object_base_url:string -> unreferenced_art -> Yojson.Safe.t
+val narrative_image_asset_json : object_base_url:string -> narrative_image_asset -> Yojson.Safe.t
+val material_asset_json : object_base_url:string -> material_asset -> Yojson.Safe.t
+val orphan_narrative_image_asset_json :
+  object_base_url:string -> orphan_narrative_image_asset -> Yojson.Safe.t
+val orphan_narrative_media_asset_json :
+  object_base_url:string -> orphan_narrative_media_asset -> Yojson.Safe.t
 val story_summary_json :
   object_base_url:string -> story_summary -> Yojson.Safe.t
 val story_detail_json : object_base_url:string -> story_detail -> Yojson.Safe.t
-val media_asset_json : object_base_url:string -> media_asset -> Yojson.Safe.t
+val narrative_media_asset_json : object_base_url:string -> narrative_media_asset -> Yojson.Safe.t
+val narrative_media_asset_reverse_references_json : narrative_media_asset_reverse_references -> Yojson.Safe.t
 val movement_json : object_base_url:string -> movement -> Yojson.Safe.t
 val movement_detail_json :
   object_base_url:string -> movement_detail -> Yojson.Safe.t
-val movement_section_detail_json :
-  object_base_url:string -> movement_section_detail -> Yojson.Safe.t
+val section_detail_json :
+  object_base_url:string -> section_detail -> Yojson.Safe.t
 val archive_index_entry_json : archive_index_entry -> Yojson.Safe.t
 val archive_group_summary_json :
   object_base_url:string -> archive_group_summary -> Yojson.Safe.t
@@ -277,5 +345,9 @@ val archive_group_detail_json :
 val gallery_summary_json :
   object_base_url:string -> gallery_summary -> Yojson.Safe.t
 val gallery_json : object_base_url:string -> gallery -> Yojson.Safe.t
-val art_context_json : object_base_url:string -> art_context -> Yojson.Safe.t
+val narrative_image_asset_reverse_references_json : object_base_url:string -> narrative_image_asset_reverse_references -> Yojson.Safe.t
 val search_result_json : object_base_url:string -> search_result -> Yojson.Safe.t
+val presentation_asset_summary_json :
+  object_base_url:string -> presentation_asset -> Yojson.Safe.t
+val presentation_asset_detail_json :
+  object_base_url:string -> presentation_asset_detail -> Yojson.Safe.t

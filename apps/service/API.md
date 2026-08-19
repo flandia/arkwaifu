@@ -1,15 +1,17 @@
 # Use the Arkwaifu HTTP API
 
-The service exposes read-only JSON metadata for composed artwork, Scores,
-Archives, and galleries. `CN`, `EN`, `JP`, `KR`, and `TW` are the supported
-locales; locale path parameters are case-insensitive. Percent-encode every
-identifier used as one path segment. In particular, a composite artwork ID may
-contain `/` and must be sent as `%2F`.
+The service exposes read-only JSON metadata for narrative, material, and
+presentation assets, plus the Score, Archive, and Gallery hierarchies. `CN`,
+`EN`, `JP`, `KR`, and `TW` are supported locales. Locale path parameters are
+case-insensitive.
 
-All routes accept `GET`. `OPTIONS` returns HTTP 204. Responses include public
-cross-origin resource sharing headers. A missing record, invalid locale, or
-invalid Archive kind returns HTTP 404 with `{"error":"not_found"}`. A database
-or metadata failure returns HTTP 503 with
+Percent-encode every identifier as one complete path segment. For example,
+`cg/part#1$2` is sent as `cg%2Fpart%231%242`; the service decodes it exactly
+once and preserves the original ID.
+
+All routes accept `GET`. `OPTIONS` returns HTTP 204. Public CORS headers are
+included. Missing records and invalid route values return HTTP 404 with
+`{"error":"not_found"}`. Database or metadata failures return HTTP 503 with
 `{"error":"service_unavailable"}`.
 
 ## Routes
@@ -18,322 +20,180 @@ or metadata failure returns HTTP 503 with
 | --- | --- |
 | `GET /health` | `{"status":"ok"}` |
 | `GET /sitemap.txt` | UTF-8 text sitemap |
-| `GET /api/arts/:category/:id` | Composed artwork |
-| `GET /api/source-arts/:category/:id` | Category-qualified source artwork |
-| `GET /api/media/:kind/:id` | Audio or video resource details |
-| `GET /api/unreferenced-arts` | Unreferenced artwork array |
-| `GET /api/:locale/search?q=...` | Up to 100 ranked metadata search results |
-| `GET /api/:locale/arts/:category/:id/context` | Localized artwork context |
+| `GET /api/assets/narrative/:asset-category/:asset-id` | One narrative image, video, or audio asset |
+| `GET /api/assets/material/:asset-category/:asset-id` | One material image asset |
+| `GET /api/:locale/assets/narrative/:asset-category/:asset-id/reverse-references` | Localized narrative reverse references |
+| `GET /api/:locale/assets/presentation` | Presentation Asset Catalog |
+| `GET /api/:locale/assets/presentation/:asset-category/:asset-id` | Presentation asset detail and reverse references |
+| `GET /api/:locale/orphans` | All orphan narrative assets for one locale |
+| `GET /api/:locale/search?q=...` | Up to 100 ranked metadata results |
 | `GET /api/:locale/scores` | Movement summaries |
-| `GET /api/:locale/scores/:movementID` | Movement and ordered items |
-| `GET /api/:locale/scores/:movementID/:sectionID` | Movement Section detail |
-| `GET /api/:locale/scores/:movementID/:sectionID/:storyID` | Score Story detail |
-| `GET /api/:locale/archives` | Archive kind counts |
-| `GET /api/:locale/archives/:kind` | Archive Group summaries |
-| `GET /api/:locale/archives/:kind/:groupID` | Archive Group detail |
-| `GET /api/:locale/archives/:kind/:groupID/:storyID` | Archive Story detail |
-| `GET /api/:locale/galleries` | Gallery summaries across the hierarchy |
-| `GET /api/:locale/galleries/:id` | Gallery display hierarchy |
+| `GET /api/:locale/scores/:movement-id` | Movement and ordered items |
+| `GET /api/:locale/scores/:movement-id/:section-id` | Section detail |
+| `GET /api/:locale/scores/:movement-id/:section-id/:story-id` | Score Story detail |
+| `GET /api/:locale/archives` | Archive Category counts |
+| `GET /api/:locale/archives/:archive-category` | Archive Group summaries |
+| `GET /api/:locale/archives/:archive-category/:group-id` | Archive Group detail |
+| `GET /api/:locale/archives/:archive-category/:group-id/:story-id` | Archive Story detail |
+| `GET /api/:locale/galleries` | Gallery summaries |
+| `GET /api/:locale/galleries/:gallery-id` | Gallery detail |
 
-Archive `:kind` is one of `events`, `operator-record`,
-`integrated-strategies`, `reclamation-algorithm`, or `others`. There are no
-legacy story-group or shallow Movement/Section/Group endpoints.
+Archive categories are `events`, `operator-record`, `integrated-strategies`,
+`reclamation-algorithm`, and `others`. The old Artwork, Source Layer, media,
+and unreferenced routes do not exist.
 
-## Common metadata
+## Asset model
 
-Image metadata is:
-
-```json
-{"byteSize":123,"width":800,"height":600,"contentUrl":"https://…"}
-```
-
-Video metadata adds `frameRate` and `frameCount`:
+Every complete asset record has the same identity and file fields:
 
 ```json
 {
-  "byteSize":12345,
-  "width":1920,
-  "height":1080,
-  "frameRate":29.97002997002997,
-  "frameCount":900,
-  "contentUrl":"https://…"
+  "namespace": "narrative",
+  "category": "character",
+  "id": "char_220_grani#5$1",
+  "format": "image",
+  "mime": "image/png",
+  "size": 1048576,
+  "url": "https://objects.example/ART/v1/composition/character/char.png"
 }
 ```
 
-A declared Score image reference is either `null`, when the locale metadata has
-no identifier, or `{"id":"…","image":ImageMetadata|null}`. Video references
-use `{"id":"…","video":VideoMetadata|null}`. The nested null distinguishes a
-declared upstream identifier whose object has not yet been published from an
-identifier that was never declared.
+The identity is `(namespace, category, id)`. `format` is `image`, `video`, or
+`audio`; it is not part of the identity. Images add `width` and `height`.
+Videos add dimensions, `duration`, `frameRate`, and `frameCount`. Audio adds
+`duration` and `sampleRate`. Unavailable optional format metadata is `null`.
 
-Artwork references have this shape:
+A common Asset Reference contains identity only:
 
 ```json
-{
-  "artID":"…",
-  "kind":"picture",
-  "category":"image",
-  "title":null,
-  "subtitle":null,
-  "names":[],
-  "thumbnailContentUrl":"https://…"
-}
+{"namespace":"narrative","category":"illustration","id":"cg/part"}
 ```
 
-`thumbnailContentUrl` is null when the logical reference has no corresponding
-composition. Preview lists use available `image` references when present and
-otherwise available `background` references. They preserve source order,
-deduplicate `(category, artID)`, and contain at most three entries.
+Array order carries reference order. Database positions are not public fields.
 
-## Artwork and source artwork
+## Narrative and material assets
 
-A composed artwork returns:
+Narrative image categories are `illustration`, `background`, `item`, and
+`character`. A narrative image adds `previewUrl` and ordered material
+references:
 
 ```json
 {
+  "namespace":"narrative",
+  "category":"illustration",
   "id":"cg/part",
-  "category":"image",
-  "thumbnailContentUrl":"https://…",
-  "image":{"byteSize":123,"width":800,"height":600,"contentUrl":"https://…"},
-  "sourceArts":[{"category":"image","id":"panel/source"}]
+  "format":"image",
+  "mime":"image/png",
+  "size":123,
+  "url":"https://…",
+  "width":800,
+  "height":600,
+  "previewUrl":"https://…",
+  "materials":[
+    {"namespace":"material","category":"illustration","id":"panel_source"}
+  ]
 }
 ```
 
-Source identities are category-qualified. Source `kind` is `character` or
-`composite_panel`:
+A Material Asset has the same common image fields, `materialType` (`character`
+or `panel`), optional `characterID`, `role`, and `variant`, plus
+`reverseReferences` to final narrative images.
+
+Narrative media categories are `video` and `audio`; their category and format
+are equal. Reverse references return `occurrences` for Stories and
+`collections` for Sections or Archive Groups that directly use the media.
+Narrative image reverse references return localized `names`,
+`characterVariants`, `textures`, Story `occurrences`, and Gallery Group
+`galleries`.
+
+`GET /api/:locale/orphans` returns one discriminated array containing all six
+narrative categories. Orphan status is calculated independently for the
+requested locale and is not an error state. Every returned item keeps the
+common identity and file fields.
+
+## Story references and parents
+
+A Story image reference wraps its Asset Reference and adds contextual fields:
 
 ```json
 {
-  "id":"panel/source",
-  "category":"image",
-  "kind":"composite_panel",
-  "characterID":null,
-  "role":null,
-  "variant":null,
-  "image":{"byteSize":50,"width":400,"height":300,"contentUrl":"https://…"}
+  "asset":{"namespace":"narrative","category":"character","id":"amiya"},
+  "kind":"character",
+  "names":["阿米娅"],
+  "previewUrl":"https://…"
 }
 ```
 
-Character sources populate `characterID`, `role`, and `variant`; composite
-panels leave all three null. Unreferenced artwork objects contain `id`,
-`category`, and `thumbnailContentUrl`.
+`isAnimeKV`, `title`, `subtitle`, `names`, and `previewUrl` are omitted when
+they have no value.
 
-Artwork context contains `names`, character `siblings`, bundle `textures`, and
-`occurrences`. `textures` contains `image` artwork whose identifier begins with
-the selected artwork identifier followed by `/`; each item has the same compact
-shape as a sibling (`artID`, `names`, and `thumbnailContentUrl`).
-Every occurrence carries the same discriminated `parent` described below plus
-`storyID`, `storyName`, `storyCode`, and `storyTagText`.
+A Story media reference contains `asset` and, for audio, `usage` (`sound` or
+`music`). Published-file metadata adds `mime`, `size`, and `url`; fields without
+values are omitted. The reference remains present when its asset file has not
+been published.
 
-Search returns at most 100 unified results; the cap is fixed and cannot be
-changed by callers. A blank or missing `q` returns an empty JSON array, and
-queries are not rejected based on length. Each result has `kind`, `id`,
-`category` (or `null`),
-`title`, `subtitle` (or `null`), `thumbnailContentUrl` (or `null`), and
-`parent` (or `null`). Result kinds are `story`, `movement`, `section`,
-`archive_group`, `gallery`, and `art`. Story, section, archive-group, and
-gallery results include the structured hierarchy parent used by the frontend
-to construct an existing route. Search matches localized metadata and uses
-deterministic exact, prefix, and substring ranking.
+Stories and galleries identify their hierarchy owner with either a Score or
+Archive parent:
 
-## Parents and Stories
+```json
+{"kind":"score","movementID":"movement-a","movementName":"为了明日","sectionID":"section-a","sectionName":"方舟"}
+```
 
-Stories and galleries identify their hierarchy owner with one of:
+```json
+{"kind":"archive","archiveCategory":"events","groupID":"event-a","groupName":"孤星"}
+```
+
+Story summaries expose `representativeAssetReference` and
+`previewAssetReferences`. Story details expose `parent`, source `text`, ordered
+`media`, and ordered `imageReferences`.
+
+## Presentation Asset Catalog
+
+`GET /api/:locale/assets/presentation` returns every presentation image and
+video. Optional query parameters are:
+
+- `category`: one presentation category such as `key-visual` or `video`
+- `format`: `image` or `video`
+- `orphaned`: `true` for zero references or `false` for referenced assets
+
+Each summary contains the common identity and file metadata, dimensions or
+duration, `previewUrl`, and `referenceCount`. Detail adds `url`, video frame
+metadata, and `reverseReferences`:
 
 ```json
 {
-  "kind":"score",
+  "ownerType":"section",
+  "ownerID":"section-a",
   "movementID":"movement-a",
-  "movementName":"为了明日",
-  "sectionID":"section-a",
-  "sectionName":"方舟"
+  "role":"key-visual",
+  "name":"方舟"
 }
 ```
 
-```json
-{
-  "kind":"archive",
-  "archiveKind":"events",
-  "groupID":"event-a",
-  "groupName":"孤星"
-}
-```
+`ownerType` is `movement`, `section`, or `movement-divider`. The role uses
+kebab-case, including `key-visual` and `retro-background`.
 
-A Story summary contains `id`, `tag`, `tagText`, `code`, `name`, `info`,
-`representativeArtReference`, and `previewArtReferences`. Summaries do not load
-the full story text or media references. A Story detail replaces the two
-preview fields with `parent`, the complete ordered `artReferences` array, and
-the source story text:
+## Scores, Archives, Galleries, and search
 
-Each artwork reference includes `isAnimeKV`. It is `true` for the background
-poster representing an extracted Anime KV bundle and `false` for ordinary
-artwork and the bundle's individual texture images.
+Movement detail adds ordered Section and Movement Divider items. Section
+detail adds its active presentation video, Story summaries, aggregate `media`
+and `imageReferences`, and an optional Gallery. Archive Group detail exposes
+the same Story and asset aggregates.
 
-```json
-{
-  "id":"score-story",
-  "text":"The source story text…",
-  "media":[
-    {
-      "id":"m_story",
-      "kind":"sound",
-      "contentType":"audio/wav",
-      "byteSize":321,
-      "contentUrl":"https://…/MEDIA/cn/audio/m_story.wav"
-    },
-    {
-      "id":"missing-video",
-      "kind":"video",
-      "contentType":null,
-      "byteSize":null,
-      "contentUrl":null
-    }
-  ]
-}
-```
+Gallery summaries contain `previewUrls`. Gallery detail contains ordered
+Groups, and each Group contains ordered `references`. A Gallery Reference has
+`cgID`, a nested narrative image `asset`, and nullable `previewUrl`.
 
-`media.kind` is `sound`, `music`, or `video`. A media reference remains in
-source order even when its corresponding `media_assets` row is unavailable;
-unresolved asset fields are `null`. The deep route verifies that the Story
-belongs to the Movement Section or Archive Group in its path.
-
-Available references link to the independent media resource endpoint. Its
-`:kind` is `audio` or `video`; the response contains `id`, `kind`,
-`contentType`, `byteSize`, `duration`, `width`, `height`, `frameRate`,
-`frameCount`, and `contentUrl`. Audio-only video fields are `null`. When a video
-has no stored duration, the service derives it from frame count and frame rate.
-
-## Scores
-
-The `/scores` response is an ordered array of Movements:
-
-```json
-{
-  "id":"movement-a",
-  "name":"为了明日",
-  "type":"continue",
-  "position":0,
-  "sectionCount":1,
-  "startTime":1700000000,
-  "icon":{"id":"icon-main","image":null},
-  "logo":null,
-  "background":null,
-  "backgroundVideo":null
-}
-```
-
-Movement `type` is `continue` or `discrete`; `sectionCount` is its number of
-canonical Story Sections. Movement detail adds `items`. The
-service stores the complete upstream placement graph but presents only
-canonical `story_set` sections and `mainline_split` items, ordered by placement
-position:
-
-```json
-[
-  {
-    "kind":"split",
-    "id":"split-a",
-    "position":0,
-    "subName":"序曲",
-    "icon":null,
-    "video":null
-  },
-  {
-    "kind":"section",
-    "position":1,
-    "section":{
-      "id":"section-a",
-      "name":"方舟",
-      "description":"…",
-      "type":"main_theme",
-      "position":1,
-      "sortByYear":0,
-      "sortWithinYear":0,
-      "storyCount":10,
-      "openingMedia":[],
-      "keyVisual":null,
-      "titleImage":null,
-      "background":null,
-      "decoration":null,
-      "retroBackground":null
-    }
-  }
-]
-```
-
-Section `type` is `main_theme`, `side_story`, or `vignette`. `openingMedia`
-contains opening videos associated through the section's upstream review-group
-metadata. It is intentionally separate from media directly referenced by a
-Story.
-Section detail adds
-`activeBackgroundVideo`, `stories`, aggregate `artReferences`, and
-`gallery: GalleryDetail|null`. Its active video is the latest preceding
-`mainline_split` video in the same Movement.
-
-## Archives
-
-The Archive index returns all five kinds, including zero counts:
-
-```json
-[{"kind":"events","groupCount":12}]
-```
-
-An Archive Group summary contains `id`, `name`, route `kind`, semantic `type`,
-`representativeArtReference`, and `previewArtReferences`. Event `type` is
-`side_story` or `vignette`; other values are `operator_record`,
-`integrated_strategies`, `reclamation_algorithm`, or `others`. Group detail adds
-`stories`, aggregate `artReferences`, inferred entry-video `openingMedia`, and
-`gallery: GalleryDetail|null`.
-
-## Galleries
-
-Gallery summary objects contain `id`, `name`, `description`, discriminated
-`parent`, and `previewThumbnailContentUrls`. Previews select the first artwork
-from each distinct display in display order, skip unresolved compositions, and
-stop after three displays. A later sibling in the same display is never used as
-another summary preview.
-
-Gallery detail owns the complete sibling hierarchy:
-
-```json
-{
-  "id":"score-gallery",
-  "name":"方舟画集",
-  "description":"…",
-  "parent":{"kind":"score","movementID":"…","movementName":"…","sectionID":"…","sectionName":"…"},
-  "displays":[
-    {
-      "id":"display-one",
-      "position":0,
-      "name":"牺牲火炬",
-      "description":"…",
-      "relatedStoryID":"score-story",
-      "relatedStageID":"0-1",
-      "artworks":[
-        {
-          "position":0,
-          "cgID":"upstream-first",
-          "artID":"display-first",
-          "category":"image",
-          "thumbnailContentUrl":"https://…"
-        }
-      ]
-    }
-  ]
-}
-```
-
-`cgID` is the upstream gallery member identifier. `artID` is the stable
-composition identifier and may contain `/`. An unresolved member remains in
-the display with a null thumbnail URL. There is no gallery-display endpoint;
-clients select a display from this deep response.
+Search results have `kind`, `id`, nullable `category`, `title`, nullable
+`subtitle`, nullable `previewUrl`, and nullable `parent`. Kinds are `story`,
+`movement`, `section`, `archive_group`, `gallery`, and `narrative_asset`.
 
 ## Sitemap and object URLs
 
-`GET /sitemap.txt` contains canonical `https://arkwaifu.cc` locale, Score,
-Archive, and gallery URLs. It contains no legacy `/stories` URLs. A successful
-database refresh affects the next sitemap request.
+`GET /sitemap.txt` includes canonical locale, Score, Archive, Gallery,
+Presentation Asset Catalog, Orphan Narrative Asset, and About pages. It omits
+individual assets, Stories, and query URLs.
 
 Returned object URLs use the configured public origin. When the optional China
-origin is configured, an exact `X-Forwarded-Host: api.cn.arkwaifu.cc` selects
-that origin. Clients should use returned URLs rather than rebuilding them.
+origin is configured, exact `X-Forwarded-Host: api.cn.arkwaifu.cc` selects that
+origin. Clients should use returned URLs instead of rebuilding them.
