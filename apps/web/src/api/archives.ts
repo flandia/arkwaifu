@@ -2,48 +2,48 @@ import { cachedRequest, fetchJson, pathSegment } from "./client";
 import type {
   ArchiveGroupDetail,
   ArchiveGroupSummary,
-  ArchiveKind,
-  ArchiveKindSummary,
+  ArchiveCategory,
+  ArchiveCategorySummary,
   Locale,
   StoryDetail,
 } from "./types";
 
-/** Fetches the non-Score Archive kinds and their group counts. */
-export function getArchiveKinds(locale: Locale): Promise<ArchiveKindSummary[]> {
-  return cachedRequest(`archive-kinds:${locale}`, () => fetchJson(`/api/${locale}/archives`));
+/** Fetches the Archive Categories and their Story Group counts. */
+export function getArchiveCategories(locale: Locale): Promise<ArchiveCategorySummary[]> {
+  return cachedRequest(`archive-categories:${locale}`, () => fetchJson(`/api/${locale}/archives`));
 }
 
-/** Fetches the groups owned by one Archive kind. */
+/** Fetches the Story Groups owned by one Archive Category. */
 export function getArchiveGroups(
   locale: Locale,
-  kind: ArchiveKind,
+  category: ArchiveCategory,
 ): Promise<ArchiveGroupSummary[]> {
-  return cachedRequest(`archive-groups:${locale}:${kind}`, () =>
-    fetchJson(`/api/${locale}/archives/${pathSegment(kind)}`),
+  return cachedRequest(`archive-groups:${locale}:${category}`, () =>
+    fetchJson(`/api/${locale}/archives/${pathSegment(category)}`),
   );
 }
 
 /** Fetches one Archive group with its stories, artwork, and gallery. */
 export function getArchiveGroup(
   locale: Locale,
-  kind: ArchiveKind,
+  category: ArchiveCategory,
   groupID: string,
 ): Promise<ArchiveGroupDetail> {
-  return cachedRequest(`archive-group:${locale}:${kind}:${groupID}`, () =>
-    fetchJson(`/api/${locale}/archives/${pathSegment(kind)}/${pathSegment(groupID)}`),
+  return cachedRequest(`archive-group:${locale}:${category}:${groupID}`, () =>
+    fetchJson(`/api/${locale}/archives/${pathSegment(category)}/${pathSegment(groupID)}`),
   );
 }
 
 /** Fetches one story owned by an Archive group. */
 export function getArchiveStory(
   locale: Locale,
-  kind: ArchiveKind,
+  category: ArchiveCategory,
   groupID: string,
   storyID: string,
 ): Promise<StoryDetail> {
-  return cachedRequest(`archive-story:${locale}:${kind}:${groupID}:${storyID}`, () =>
+  return cachedRequest(`archive-story:${locale}:${category}:${groupID}:${storyID}`, () =>
     fetchJson(
-      `/api/${locale}/archives/${pathSegment(kind)}/${pathSegment(groupID)}/${pathSegment(storyID)}`,
+      `/api/${locale}/archives/${pathSegment(category)}/${pathSegment(groupID)}/${pathSegment(storyID)}`,
     ),
   );
 }

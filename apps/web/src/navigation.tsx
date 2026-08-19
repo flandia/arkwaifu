@@ -10,31 +10,37 @@ import {
 import type { TFunction } from "i18next";
 import { Link, useNavigate, type LinkProps } from "react-router";
 import { ApiError } from "./api/client";
-import type { ArchiveKind, ArtCategory, Locale, StoryParent } from "./api/types";
+import type {
+  ArchiveCategory,
+  Locale,
+  NarrativeImageCategory,
+  PresentationAssetCategory,
+  StoryParent,
+} from "./api/types";
 import { i18n, useUi } from "./i18n";
 import { cn } from "./shared/ui/cn";
 
 export type NavigationKind = "lateral" | "forward" | "back";
 
-export const archiveKinds = {
+export const archiveCategories = {
   events: {
-    labelKey: "archive.kinds.events",
+    labelKey: "archive.categories.events",
     index: "A1",
   },
   "operator-record": {
-    labelKey: "archive.kinds.operatorRecord",
+    labelKey: "archive.categories.operatorRecord",
     index: "A2",
   },
   "integrated-strategies": {
-    labelKey: "archive.kinds.integratedStrategies",
+    labelKey: "archive.categories.integratedStrategies",
     index: "A3",
   },
   "reclamation-algorithm": {
-    labelKey: "archive.kinds.reclamationAlgorithm",
+    labelKey: "archive.categories.reclamationAlgorithm",
     index: "A4",
   },
   others: {
-    labelKey: "archive.kinds.others",
+    labelKey: "archive.categories.others",
     index: "A5",
   },
 } as const;
@@ -58,33 +64,33 @@ export function localeLanguageTag(locale: Locale): string {
   }[locale];
 }
 
-export function isArchiveKind(value: string | undefined): value is ArchiveKind {
-  return value !== undefined && Object.hasOwn(archiveKinds, value);
+export function isArchiveCategory(value: string | undefined): value is ArchiveCategory {
+  return value !== undefined && Object.hasOwn(archiveCategories, value);
 }
 
-export function requiredArchiveKind(value: string | undefined): ArchiveKind {
-  if (!isArchiveKind(value)) throw new ApiError(i18n.t("errors.missingArchiveKind"), 404);
+export function requiredArchiveCategory(value: string | undefined): ArchiveCategory {
+  if (!isArchiveCategory(value)) throw new ApiError(i18n.t("errors.missingArchiveCategory"), 404);
   return value;
 }
 
-export function archiveKindLabel(kind: ArchiveKind, t: TFunction): string {
-  return t(archiveKinds[kind].labelKey);
+export function archiveCategoryLabel(category: ArchiveCategory, t: TFunction): string {
+  return t(archiveCategories[category].labelKey);
 }
 
-export function useArchiveKinds() {
+export function useArchiveCategories() {
   const { t } = useUi();
   return Object.fromEntries(
-    Object.entries(archiveKinds).map(([kind, details]) => [
-      kind,
+    Object.entries(archiveCategories).map(([category, details]) => [
+      category,
       { ...details, title: t(details.labelKey) },
     ]),
-  ) as Record<ArchiveKind, (typeof archiveKinds)[ArchiveKind] & { title: string }>;
+  ) as Record<ArchiveCategory, (typeof archiveCategories)[ArchiveCategory] & { title: string }>;
 }
 
 export function storyParentPath(locale: Locale, parent: StoryParent): string {
   return parent.kind === "score"
     ? `/${locale}/scores/${encodeURIComponent(parent.movementID)}/${encodeURIComponent(parent.sectionID)}`
-    : `/${locale}/archives/${parent.archiveKind}/${encodeURIComponent(parent.groupID)}`;
+    : `/${locale}/archives/${parent.archiveCategory}/${encodeURIComponent(parent.groupID)}`;
 }
 
 export function storyPath(locale: Locale, parent: StoryParent, storyID: string): string {
@@ -96,19 +102,60 @@ export function isPathAtOrBelow(pathname: string, parentPath: string): boolean {
 }
 
 const categoryKeys = {
-  image: { singular: "art.category.image", plural: "art.categories.image" },
-  background: { singular: "art.category.background", plural: "art.categories.background" },
-  item: { singular: "art.category.item", plural: "art.categories.item" },
-  character: { singular: "art.category.character", plural: "art.categories.character" },
+  illustration: { singular: "artwork.category.image", plural: "artwork.categories.image" },
+  background: { singular: "artwork.category.background", plural: "artwork.categories.background" },
+  item: { singular: "artwork.category.item", plural: "artwork.categories.item" },
+  character: { singular: "artwork.category.character", plural: "artwork.categories.character" },
 } as const;
 
-export function categoryLabel(category: ArtCategory, t: TFunction, plural = false): string {
+const presentationAssetCategories: ReadonlySet<PresentationAssetCategory> = new Set([
+  "icon",
+  "logo",
+  "background",
+  "key-visual",
+  "title",
+  "decoration",
+  "retro-background",
+  "divider",
+  "video",
+]);
+
+export function isNarrativeImageCategory(
+  value: string | undefined,
+): value is NarrativeImageCategory {
+  return value !== undefined && Object.hasOwn(categoryKeys, value);
+}
+
+export function requiredNarrativeImageCategory(value: string | undefined): NarrativeImageCategory {
+  if (!isNarrativeImageCategory(value))
+    throw new ApiError(i18n.t("errors.missingNarrativeImageCategory"), 404);
+  return value;
+}
+
+export function isPresentationAssetCategory(
+  value: string | undefined,
+): value is PresentationAssetCategory {
+  return value !== undefined && presentationAssetCategories.has(value as PresentationAssetCategory);
+}
+
+export function requiredPresentationAssetCategory(
+  value: string | undefined,
+): PresentationAssetCategory {
+  if (!isPresentationAssetCategory(value)) throw new ApiError(i18n.t("errors.notFound"), 404);
+  return value;
+}
+
+export function categoryLabel(
+  category: NarrativeImageCategory,
+  t: TFunction,
+  plural = false,
+): string {
   return t(categoryKeys[category][plural ? "plural" : "singular"]);
 }
 
 export function useCategoryLabel() {
   const { t } = useUi();
-  return (category: ArtCategory, plural = false) => categoryLabel(category, t, plural);
+  return (category: NarrativeImageCategory, plural = false) => categoryLabel(category, t, plural);
 }
 
 interface TransitionLinkProps extends LinkProps {
@@ -118,6 +165,7 @@ interface TransitionLinkProps extends LinkProps {
 function handlesClientNavigation(event: MouseEvent<HTMLAnchorElement>, target?: string): boolean {
   return (
     event.button === 0 &&
+    !event.currentTarget.hasAttribute("download") &&
     !event.metaKey &&
     !event.ctrlKey &&
     !event.shiftKey &&

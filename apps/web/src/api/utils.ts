@@ -1,38 +1,44 @@
-import type { ArtCategory, StoryArtReference, StoryMediaReference } from "./types";
+import type {
+  NarrativeImageCategory,
+  StoryNarrativeAssetReference,
+  StoryMediaReference,
+} from "./types";
 
-/** Keeps the first reference for each category and artwork identifier pair. */
-export function uniqueStoryArtReferences(references: StoryArtReference[]): StoryArtReference[] {
+type AssetReferenceHolder = { asset: { category: string; id: string } };
+
+function uniqueAssetReferences<T extends AssetReferenceHolder>(references: T[]): T[] {
   const seen = new Set<string>();
   return references.filter((reference) => {
-    const key = `${reference.category}:${reference.artID}`;
+    const key = `${reference.asset.category}:${reference.asset.id}`;
     if (seen.has(key)) return false;
     seen.add(key);
     return true;
   });
+}
+
+/** Keeps the first reference for each Narrative Image identity. */
+export function uniqueStoryNarrativeAssetReferences(
+  references: StoryNarrativeAssetReference[],
+): StoryNarrativeAssetReference[] {
+  return uniqueAssetReferences(references);
 }
 
 /** Keeps the first reference for each media kind and source identifier pair. */
 export function uniqueStoryMediaReferences(
   references: StoryMediaReference[],
 ): StoryMediaReference[] {
-  const seen = new Set<string>();
-  return references.filter((reference) => {
-    const key = `${reference.kind}:${reference.id}`;
-    if (seen.has(key)) return false;
-    seen.add(key);
-    return true;
-  });
+  return uniqueAssetReferences(references);
 }
 
-/** Returns a stable Cascading Style Sheets (CSS) view-transition name for one artwork. */
-export function artTransitionName(category: ArtCategory, artID: string): string {
+/** Returns a stable Cascading Style Sheets (CSS) view-transition name for one image asset. */
+export function assetTransitionName(category: NarrativeImageCategory, assetID: string): string {
   let hash = 2166136261;
-  const value = `${category}:${artID}`;
+  const value = `${category}:${assetID}`;
   for (let index = 0; index < value.length; index += 1) {
     hash ^= value.charCodeAt(index);
     hash = Math.imul(hash, 16777619);
   }
-  return `art-${(hash >>> 0).toString(36)}`;
+  return `asset-${(hash >>> 0).toString(36)}`;
 }
 
 /** Formats a byte count with binary units and locale-aware digits. */

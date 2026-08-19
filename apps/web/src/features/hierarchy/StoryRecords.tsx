@@ -5,14 +5,12 @@ import { CardBackdrop } from "../../shared/ui/CardBackdrop";
 import { Eyebrow, SectionHeading } from "../../shared/ui/Typography";
 
 function previewUrls(story: StorySummary): string[] {
-  const references = story.previewArtReferences.length
-    ? story.previewArtReferences
-    : story.representativeArtReference
-      ? [story.representativeArtReference]
+  const references = story.previewAssetReferences.length
+    ? story.previewAssetReferences
+    : story.representativeAssetReference
+      ? [story.representativeAssetReference]
       : [];
-  return references.flatMap((reference) =>
-    reference.thumbnailContentUrl ? [reference.thumbnailContentUrl] : [],
-  );
+  return references.flatMap((reference) => (reference.previewUrl ? [reference.previewUrl] : []));
 }
 
 export function StoryRecordCard({

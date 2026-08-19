@@ -4,28 +4,28 @@ import { ApiError } from "../../api/client";
 import { getArchiveGroup } from "../../api/archives";
 import { useUi } from "../../i18n";
 import {
-  archiveKindLabel,
+  archiveCategoryLabel,
   localeLanguageTag,
-  requiredArchiveKind,
+  requiredArchiveCategory,
   requiredLocale,
 } from "../../navigation";
 import { ArchivePage, BackLink, PageHeader } from "../../shared/Page";
 import { ArtworkCollection } from "../artwork/ArtworkCollection";
-import { GalleryDisplays } from "../galleries/GalleryDisplays";
-import { OpeningMediaCollection } from "../hierarchy/MediaCollection";
+import { GalleryGroups } from "../galleries/GalleryGroups";
+import { OpeningMediaCollection, StoryMediaCollection } from "../hierarchy/MediaCollection";
 import { StoryRecords } from "../hierarchy/StoryRecords";
 
 export function ArchiveGroupPage() {
   const { t } = useUi();
   const params = useParams();
   const locale = requiredLocale(params.locale);
-  const kind = requiredArchiveKind(params.kind);
-  const group = use(getArchiveGroup(locale, kind, params.groupID ?? ""));
-  if (group.kind !== kind) throw new ApiError(t("errors.wrongArchiveKind"), 404);
+  const category = requiredArchiveCategory(params["archive-category"]);
+  const group = use(getArchiveGroup(locale, category, params["group-id"] ?? ""));
+  if (group.archiveCategory !== category) throw new ApiError(t("errors.wrongArchiveCategory"), 404);
   const language = localeLanguageTag(locale);
   const location = useLocation();
-  const basePath = `/${locale}/archives/${kind}/${encodeURIComponent(group.id)}`;
-  const image = group.representativeArtReference?.thumbnailContentUrl ?? undefined;
+  const basePath = `/${locale}/archives/${category}/${encodeURIComponent(group.id)}`;
+  const image = group.representativeAssetReference?.previewUrl ?? undefined;
 
   return (
     <ArchivePage
@@ -33,11 +33,11 @@ export function ArchiveGroupPage() {
       image={image}
       title={group.name || t("archive.untitledGroup")}
     >
-      <BackLink to={`/${locale}/archives/${kind}`}>
-        {t("archive.backToKind", { name: archiveKindLabel(kind, t) })}
+      <BackLink to={`/${locale}/archives/${category}`}>
+        {t("archive.backToCategory", { name: archiveCategoryLabel(category, t) })}
       </BackLink>
       <PageHeader
-        eyebrow={archiveKindLabel(kind, t)}
+        eyebrow={archiveCategoryLabel(category, t)}
         meta={
           <>
             <code translate="no">{group.id}</code>
@@ -48,15 +48,20 @@ export function ArchiveGroupPage() {
         titleLanguage={language}
       />
       <StoryRecords basePath={basePath} locale={locale} stories={group.stories} />
-      {group.gallery ? <GalleryDisplays gallery={group.gallery} locale={locale} /> : null}
+      {group.gallery ? <GalleryGroups gallery={group.gallery} locale={locale} /> : null}
       <OpeningMediaCollection
         from={`${location.pathname}${location.search}`}
         locale={locale}
         media={group.openingMedia}
       />
+      <StoryMediaCollection
+        from={`${location.pathname}${location.search}`}
+        locale={locale}
+        media={group.media}
+      />
       <ArtworkCollection
-        artworks={group.artReferences}
-        eyebrow={t("art.archiveReferences")}
+        artworks={group.imageReferences}
+        eyebrow={t("artwork.archiveReferences")}
         from={`${location.pathname}${location.search}`}
         language={language}
         locale={locale}

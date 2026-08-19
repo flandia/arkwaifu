@@ -1,6 +1,6 @@
 import { useLocation } from "react-router";
 import type { Locale, StoryDetail } from "../../api/types";
-import { uniqueStoryArtReferences } from "../../api/utils";
+import { uniqueStoryNarrativeAssetReferences } from "../../api/utils";
 import { useUi } from "../../i18n";
 import { localeLanguageTag } from "../../navigation";
 import { ArchivePage, BackLink, PageHeader } from "../../shared/Page";
@@ -20,16 +20,13 @@ export function OwnedStoryDetail({
   const { t } = useUi();
   const location = useLocation();
   const language = localeLanguageTag(locale);
-  const artReferences = uniqueStoryArtReferences(story.artReferences);
+  const artworkReferences = uniqueStoryNarrativeAssetReferences(story.imageReferences);
   const title = story.name || story.code || t("story.untitled");
 
   return (
     <ArchivePage
       description={story.info || t("story.description")}
-      image={
-        artReferences.find((reference) => reference.thumbnailContentUrl)?.thumbnailContentUrl ??
-        undefined
-      }
+      image={artworkReferences.find((reference) => reference.previewUrl)?.previewUrl ?? undefined}
       title={title}
     >
       <BackLink to={backTo}>{t("story.back")}</BackLink>
@@ -41,14 +38,14 @@ export function OwnedStoryDetail({
           <>
             <code translate="no">{story.code || story.id}</code>
             <span>{story.tagText || story.tag}</span>
-            <span>{t("story.artCount", { count: artReferences.length })}</span>
+            <span>{t("story.artworkCount", { count: artworkReferences.length })}</span>
           </>
         }
         title={title}
         titleLanguage={language}
       />
       <ArtworkCollection
-        artworks={artReferences}
+        artworks={artworkReferences}
         from={`${location.pathname}${location.search}`}
         language={language}
         locale={locale}

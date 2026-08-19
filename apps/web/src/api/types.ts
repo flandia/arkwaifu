@@ -10,87 +10,166 @@ export const localeNames = {
 /** A locale with story and gallery metadata. */
 export type Locale = keyof typeof localeNames;
 
-/** A storage and routing category for composed artwork. */
-export type ArtCategory = "image" | "background" | "item" | "character";
+export type AssetNamespace = "narrative" | "material" | "presentation";
+export type AssetFormat = "image" | "video" | "audio";
+export type NarrativeImageCategory = "illustration" | "background" | "item" | "character";
+export type NarrativeMediaCategory = "audio" | "video";
+export type PresentationImageCategory =
+  | "icon"
+  | "logo"
+  | "background"
+  | "key-visual"
+  | "title"
+  | "decoration"
+  | "retro-background"
+  | "divider";
+export type PresentationAssetCategory = PresentationImageCategory | "video";
+
+export interface AssetReference {
+  namespace: AssetNamespace;
+  category: string;
+  id: string;
+}
 
 /** Dimensions, size, and direct object-storage URL for an image. */
 export interface ImageMetadata {
-  byteSize: number;
+  mime: "image/png";
+  size: number;
   width: number;
   height: number;
-  contentUrl: string;
+  url: string;
 }
 
 /** Dimensions and playback metadata for one retained Score video. */
 export interface VideoMetadata {
-  byteSize: number;
+  mime: string;
+  size: number;
   width: number;
   height: number;
   frameRate: number;
   frameCount: number;
-  contentUrl: string;
+  url: string;
 }
 
 /** One declared Score image; image is null when the referenced asset is unavailable. */
 export interface ScoreImage {
+  namespace: "presentation";
+  category: PresentationImageCategory;
   id: string;
   image: ImageMetadata | null;
 }
 
 /** One declared Score video; video is null when the referenced asset is unavailable. */
 export interface ScoreVideo {
+  namespace: "presentation";
+  category: "video";
   id: string;
   video: VideoMetadata | null;
 }
 
-/** A category-qualified source used by one composed artwork. */
-export interface SourceArtReference {
-  category: ArtCategory;
+/** A category-qualified Material Asset used by one Narrative Image Asset. */
+export type MaterialReference = AssetReference & {
+  namespace: "material";
+  category: NarrativeImageCategory;
+};
+
+export interface NarrativeAssetBase {
+  namespace: "narrative";
+  category: NarrativeImageCategory | NarrativeMediaCategory;
   id: string;
+  format: AssetFormat;
+  mime: string;
+  size: number;
+  url: string;
 }
 
-/** Complete metadata for one composed artwork. */
-export interface ArtDetail {
-  id: string;
-  category: ArtCategory;
-  thumbnailContentUrl: string;
-  image: ImageMetadata;
-  sourceArts: SourceArtReference[];
+/** Complete metadata for one Narrative Image Asset. */
+export interface NarrativeImageAsset extends NarrativeAssetBase {
+  category: NarrativeImageCategory;
+  format: "image";
+  mime: "image/png";
+  size: number;
+  url: string;
+  width: number;
+  height: number;
+  previewUrl: string;
+  materials: MaterialReference[];
 }
 
-/** Compact metadata for artwork referenced by neither a story nor a gallery. */
-export interface UnreferencedArt {
+/** Compact metadata for a Narrative Image Asset referenced by neither a story nor a gallery. */
+export interface OrphanNarrativeImageAsset {
+  namespace: "narrative";
   id: string;
-  category: ArtCategory;
-  thumbnailContentUrl: string;
+  category: NarrativeImageCategory;
+  format: "image";
+  mime: "image/png";
+  size: number;
+  url: string;
+  width: number;
+  height: number;
+  previewUrl: string;
 }
 
-/** One retained source image used by a character or CG composition. */
-export interface SourceArt {
+/** Compact metadata for a Narrative Media Asset referenced by no story collection. */
+export interface OrphanNarrativeMediaAsset {
+  namespace: "narrative";
   id: string;
-  category: ArtCategory;
-  kind: "character" | "composite_panel";
+  category: NarrativeMediaCategory;
+  format: NarrativeMediaCategory;
+  mime: string;
+  size: number;
+  url: string;
+}
+
+/** Every story resource absent from the story, collection, and gallery indexes. */
+export type OrphanNarrativeAsset = OrphanNarrativeImageAsset | OrphanNarrativeMediaAsset;
+export type OrphanNarrativeAssets = OrphanNarrativeAsset[];
+
+/** One retained Material Asset used by a character or Gallery Reference. */
+export interface MaterialAsset {
+  namespace: "material";
+  id: string;
+  category: NarrativeImageCategory;
+  format: "image";
+  mime: "image/png";
+  size: number;
+  url: string;
+  width: number;
+  height: number;
+  materialType: "character" | "panel";
   characterID: string | null;
   role: "body" | "face" | "whole_body" | null;
   variant: string | null;
-  image: ImageMetadata;
+  reverseReferences: NarrativeImageReference[];
 }
 
-/** Related character artwork that shares the selected artwork's base identifier. */
-export interface ArtSibling {
-  artID: string;
+/** A category-qualified Narrative Asset Reference. */
+export type NarrativeAssetReference = AssetReference & {
+  namespace: "narrative";
+  category: NarrativeImageCategory | NarrativeMediaCategory;
+};
+export type NarrativeImageReference = NarrativeAssetReference & {
+  category: NarrativeImageCategory;
+};
+export type NarrativeMediaReference = NarrativeAssetReference & {
+  category: NarrativeMediaCategory;
+};
+
+/** A related Narrative Image Asset sharing the selected asset's base identifier. */
+export interface RelatedNarrativeImageAsset {
+  assetID: string;
   names: string[];
-  thumbnailContentUrl: string;
+  previewUrl: string;
 }
 
-export type ArchiveKind =
+export type ArchiveCategory =
   | "events"
   | "operator-record"
   | "integrated-strategies"
   | "reclamation-algorithm"
   | "others";
 
-/** Stable public ownership for stories, galleries, and artwork occurrences. */
+/** Stable public ownership for stories, galleries, and asset occurrences. */
 export type StoryParent =
   | {
       kind: "score";
@@ -101,13 +180,13 @@ export type StoryParent =
     }
   | {
       kind: "archive";
-      archiveKind: ArchiveKind;
+      archiveCategory: ArchiveCategory;
       groupID: string;
       groupName: string;
     };
 
-/** A story occurrence of the selected artwork. */
-export interface ArtOccurrence {
+/** A Story that directly references one selected resource. */
+export interface StoryOccurrence {
   parent: StoryParent;
   storyID: string;
   storyName: string;
@@ -115,49 +194,89 @@ export interface ArtOccurrence {
   storyTagText: string;
 }
 
-/** Localized names, related artwork, and story occurrences for one artwork. */
-export interface ArtContext {
-  names: string[];
-  siblings: ArtSibling[];
-  textures: ArtSibling[];
-  occurrences: ArtOccurrence[];
+export type NarrativeImageOccurrence = StoryOccurrence;
+export type NarrativeMediaOccurrence = StoryOccurrence;
+
+/** A Gallery Group that directly contains the selected Artwork. */
+export interface NarrativeAssetGalleryReference {
+  galleryID: string;
+  galleryName: string;
+  galleryDescription: string;
+  groupID: string;
+  groupName: string;
+  groupDescription: string;
+  cgID: string;
 }
 
-/** A story artwork reference whose artwork may not be available yet. */
-export interface StoryArtReference {
-  artID: string;
-  kind: "picture" | "character";
-  category: ArtCategory;
-  isAnimeKV: boolean;
-  title: string | null;
-  subtitle: string | null;
+/** Localized names, related artwork, and story occurrences for one artwork. */
+export interface NarrativeImageReverseReferences {
   names: string[];
-  thumbnailContentUrl: string | null;
+  characterVariants: RelatedNarrativeImageAsset[];
+  textures: RelatedNarrativeImageAsset[];
+  occurrences: NarrativeImageOccurrence[];
+  galleries: NarrativeAssetGalleryReference[];
+}
+
+/** A Story Reference whose Narrative Image Asset may not be available yet. */
+export interface StoryNarrativeAssetReference {
+  asset: NarrativeImageReference;
+  kind: "picture" | "character";
+  isAnimeKV?: true;
+  title?: string;
+  subtitle?: string;
+  names?: string[];
+  previewUrl?: string;
 }
 
 /** One story sound, music track, or video reference. */
 export interface StoryMediaReference {
-  id: string;
-  kind: "sound" | "music" | "video";
-  contentType: string | null;
-  byteSize: number | null;
-  contentUrl: string | null;
+  asset: NarrativeMediaReference;
+  usage?: "sound" | "music";
+  mime?: string;
+  size?: number;
+  url?: string;
 }
 
-export type MediaKind = "audio" | "video";
-
-/** One independently addressable audio or video archive resource. */
-export interface MediaDetail {
-  id: string;
-  kind: MediaKind;
-  contentType: string;
-  byteSize: number;
+/** One independently addressable video archive resource. */
+export interface NarrativeVideoAsset extends NarrativeAssetBase {
+  category: "video";
+  format: "video";
+  mime: string;
+  size: number;
   duration: number | null;
-  width: number | null;
-  height: number | null;
+  sampleRate: null;
+  width: number;
+  height: number;
   frameRate: number | null;
   frameCount: number | null;
-  contentUrl: string;
+  url: string;
+}
+
+/** One independently addressable audio archive resource. */
+export interface NarrativeAudioAsset extends NarrativeAssetBase {
+  category: "audio";
+  format: "audio";
+  mime: string;
+  size: number;
+  duration: number | null;
+  sampleRate: number | null;
+  width: null;
+  height: null;
+  frameRate: null;
+  frameCount: null;
+  url: string;
+}
+
+/** One independently addressable audio or video archive resource. */
+export type NarrativeMediaAsset = NarrativeVideoAsset | NarrativeAudioAsset;
+
+/** The six-category Narrative Asset discriminated union. */
+export type NarrativeAsset = NarrativeImageAsset | NarrativeVideoAsset | NarrativeAudioAsset;
+
+/** Locale-specific reverse references for one audio or video resource. */
+export interface MediaReverseReferences {
+  occurrences: NarrativeMediaOccurrence[];
+  collections: StoryParent[];
 }
 
 interface StoryMetadata {
@@ -169,28 +288,28 @@ interface StoryMetadata {
   info: string;
 }
 
-/** One story prepared for an owning Score section or Archive group. */
+/** One story prepared for an owning Section or Archive Group. */
 export interface StorySummary extends StoryMetadata {
-  previewArtReferences: StoryArtReference[];
-  representativeArtReference: StoryArtReference | null;
+  previewAssetReferences: StoryNarrativeAssetReference[];
+  representativeAssetReference: StoryNarrativeAssetReference | null;
 }
 
-/** One story with its owning hierarchy and complete artwork list. */
+/** One story with its owning hierarchy and complete Narrative Image Asset list. */
 export interface StoryDetail extends StoryMetadata {
   parent: StoryParent;
   text: string;
   media: StoryMediaReference[];
-  artReferences: StoryArtReference[];
+  imageReferences: StoryNarrativeAssetReference[];
 }
 
-export type ScoreSectionType = "main_theme" | "side_story" | "vignette";
+export type SectionType = "main_theme" | "side_story" | "vignette";
 
 /** One localized section in a Score Movement. */
-export interface ScoreSectionSummary {
+export interface SectionSummary {
   id: string;
   name: string;
   description: string;
-  type: ScoreSectionType;
+  type: SectionType;
   position: number;
   sortByYear: number;
   sortWithinYear: number;
@@ -203,16 +322,17 @@ export interface ScoreSectionSummary {
   openingMedia: StoryMediaReference[];
 }
 
-/** One section with its stories and aggregate artwork. */
-export interface ScoreSectionDetail extends ScoreSectionSummary {
+/** One section with its stories and aggregate media and artwork. */
+export interface SectionDetail extends SectionSummary {
   activeBackgroundVideo: ScoreVideo | null;
   stories: StorySummary[];
-  artReferences: StoryArtReference[];
+  media: StoryMediaReference[];
+  imageReferences: StoryNarrativeAssetReference[];
   gallery: GalleryDetail | null;
 }
 
-export interface ScoreSplit {
-  kind: "split";
+export interface MovementDivider {
+  kind: "divider";
   id: string;
   position: number;
   subName: string;
@@ -220,10 +340,10 @@ export interface ScoreSplit {
   video: ScoreVideo | null;
 }
 
-export interface ScoreSectionItem {
+export interface SectionItem {
   kind: "section";
   position: number;
-  section: ScoreSectionSummary;
+  section: SectionSummary;
 }
 
 /** One top-level Arknights Movement from the upstream `storylines` catalog. */
@@ -241,19 +361,19 @@ export interface MovementSummary {
 }
 
 export interface MovementDetail extends MovementSummary {
-  items: Array<ScoreSplit | ScoreSectionItem>;
+  items: Array<MovementDivider | SectionItem>;
 }
 
-export interface ArchiveKindSummary {
-  kind: ArchiveKind;
+export interface ArchiveCategorySummary {
+  archiveCategory: ArchiveCategory;
   groupCount: number;
 }
 
-/** One non-Score story group owned by an Archive kind. */
+/** One non-Score Story Group owned by an Archive Category. */
 export interface ArchiveGroupSummary {
   id: string;
   name: string;
-  kind: ArchiveKind;
+  archiveCategory: ArchiveCategory;
   type:
     | "side_story"
     | "vignette"
@@ -261,13 +381,14 @@ export interface ArchiveGroupSummary {
     | "integrated_strategies"
     | "reclamation_algorithm"
     | "others";
-  representativeArtReference: StoryArtReference | null;
-  previewArtReferences: StoryArtReference[];
+  representativeAssetReference: StoryNarrativeAssetReference | null;
+  previewAssetReferences: StoryNarrativeAssetReference[];
 }
 
 export interface ArchiveGroupDetail extends ArchiveGroupSummary {
   stories: StorySummary[];
-  artReferences: StoryArtReference[];
+  media: StoryMediaReference[];
+  imageReferences: StoryNarrativeAssetReference[];
   openingMedia: StoryMediaReference[];
   gallery: GalleryDetail | null;
 }
@@ -281,32 +402,30 @@ interface GalleryMetadata {
 
 /** One gallery prepared for the global index. */
 export interface GallerySummary extends GalleryMetadata {
-  previewThumbnailContentUrls: string[];
+  previewUrls: string[];
 }
 
-/** One ordered logical artwork in a gallery display. */
-export interface GalleryDisplayArtwork {
-  position: number;
+/** One ordered Gallery Reference in a Gallery Group. */
+export interface GalleryReference {
   cgID: string;
-  artID: string;
-  category: ArtCategory;
-  thumbnailContentUrl: string | null;
+  asset: NarrativeImageReference;
+  previewUrl: string | null;
 }
 
-/** One gallery display and its ordered sibling artworks. */
-export interface GalleryDisplay {
+/** One Gallery Group and its ordered Gallery References. */
+export interface GalleryGroup {
   id: string;
   position: number;
   name: string;
   description: string;
   relatedStoryID: string | null;
   relatedStageID: string | null;
-  artworks: GalleryDisplayArtwork[];
+  references: GalleryReference[];
 }
 
-/** One gallery with its complete display hierarchy. */
+/** One Gallery with its complete Gallery Group hierarchy. */
 export interface GalleryDetail extends GalleryMetadata {
-  displays: GalleryDisplay[];
+  groups: GalleryGroup[];
 }
 
 export type SearchResultKind =
@@ -315,15 +434,51 @@ export type SearchResultKind =
   | "section"
   | "archive_group"
   | "gallery"
-  | "art";
+  | "narrative_asset";
 
 /** One ranked result from the locale-scoped metadata search. */
 export interface SearchResult {
   kind: SearchResultKind;
   id: string;
-  category: ArtCategory | null;
+  category: NarrativeImageCategory | null;
   title: string;
   subtitle: string | null;
-  thumbnailContentUrl: string | null;
+  previewUrl: string | null;
   parent: StoryParent | null;
+}
+
+export interface PresentationAssetSummary extends AssetReference {
+  namespace: "presentation";
+  category: PresentationAssetCategory;
+  format: "image" | "video";
+  mime: string;
+  size: number;
+  width: number | null;
+  height: number | null;
+  duration: number | null;
+  referenceCount: number;
+  previewUrl: string | null;
+}
+
+export interface PresentationReverseReference {
+  ownerType: "movement" | "section" | "movement-divider";
+  ownerID: string;
+  movementID: string;
+  role:
+    | "icon"
+    | "logo"
+    | "background"
+    | "key-visual"
+    | "title"
+    | "decoration"
+    | "retro-background"
+    | "video";
+  name: string;
+}
+
+export interface PresentationAssetDetail extends Omit<PresentationAssetSummary, "previewUrl"> {
+  url: string;
+  frameRate: number | null;
+  frameCount: number | null;
+  reverseReferences: PresentationReverseReference[];
 }

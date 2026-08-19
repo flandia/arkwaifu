@@ -5,7 +5,7 @@ import { getSearchResults } from "../api/search";
 import type { Locale, SearchResult } from "../api/types";
 import { useUi } from "../i18n";
 import {
-  archiveKindLabel,
+  archiveCategoryLabel,
   categoryLabel,
   localeLanguageTag,
   requiredLocale,
@@ -33,23 +33,23 @@ function resultPath(locale: Locale, result: SearchResult): string | null {
       return result.parent?.kind === "score" ? storyParentPath(locale, result.parent) : null;
     case "archive_group":
       return result.parent?.kind === "archive"
-        ? `/${locale}/archives/${result.parent.archiveKind}/${encodeURIComponent(result.id)}`
+        ? `/${locale}/archives/${result.parent.archiveCategory}/${encodeURIComponent(result.id)}`
         : null;
     case "gallery":
       return `/${locale}/galleries/${encodeURIComponent(result.id)}`;
-    case "art":
+    case "narrative_asset":
       return result.category
-        ? `/${locale}/art/${result.category}/${encodeURIComponent(result.id)}`
+        ? `/${locale}/assets/narrative/${result.category}/${encodeURIComponent(result.id)}`
         : null;
   }
 }
 
 function resultKindLabel(result: SearchResult, t: TFunction): string {
-  if (result.kind === "art" && result.category) {
-    return `${t("search.kind.art")} · ${categoryLabel(result.category, t)}`;
+  if (result.kind === "narrative_asset" && result.category) {
+    return `${t("search.kind.narrative_asset")} · ${categoryLabel(result.category, t)}`;
   }
   if (result.kind === "archive_group" && result.parent?.kind === "archive") {
-    return `${t("search.kind.archive_group")} · ${archiveKindLabel(result.parent.archiveKind, t)}`;
+    return `${t("search.kind.archive_group")} · ${archiveCategoryLabel(result.parent.archiveCategory, t)}`;
   }
   return t(`search.kind.${result.kind}`);
 }
@@ -75,13 +75,13 @@ function SearchResultCard({
         transition="forward"
       >
         <div className="relative min-h-48 overflow-hidden border-r-2 border-ink bg-brand">
-          {result.thumbnailContentUrl ? (
+          {result.previewUrl ? (
             <img
               alt=""
               className="absolute inset-0 size-full object-cover transition-transform duration-300 group-hover:scale-105 motion-reduce:transition-none motion-reduce:group-hover:scale-100"
               height="320"
               loading="lazy"
-              src={result.thumbnailContentUrl}
+              src={result.previewUrl}
               width="320"
             />
           ) : (

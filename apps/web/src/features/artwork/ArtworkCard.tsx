@@ -1,13 +1,13 @@
 import { useState, ViewTransition } from "react";
-import type { ArtCategory, ArtDetail, Locale } from "../../api/types";
-import { artTransitionName } from "../../api/utils";
+import type { NarrativeImageCategory, NarrativeImageAsset, Locale } from "../../api/types";
+import { assetTransitionName } from "../../api/utils";
 import { useUi } from "../../i18n";
 import { TransitionLink, useCategoryLabel } from "../../navigation";
 import { cn } from "../../shared/ui/cn";
 import { Eyebrow } from "../../shared/ui/Typography";
 
-const ratioClasses: Record<ArtCategory, string> = {
-  image: "aspect-video",
+const ratioClasses: Record<NarrativeImageCategory, string> = {
+  illustration: "aspect-video",
   background: "aspect-video",
   item: "aspect-[16/10]",
   character: "aspect-[4/5]",
@@ -18,7 +18,7 @@ function ImageFallback() {
   return (
     <div className="grid size-full min-h-[inherit] place-items-center bg-paper">
       <span className="border-2 border-ink bg-surface p-2 font-mono text-[0.67rem] font-extrabold tracking-wider uppercase">
-        {t("art.imageUnavailable")}
+        {t("artwork.imageUnavailable")}
       </span>
     </div>
   );
@@ -57,12 +57,12 @@ function ArchiveImage({
 }
 
 export function ArtworkImage({
-  art,
+  artwork,
   alt,
   className,
   priority = false,
 }: {
-  art: ArtDetail;
+  artwork: NarrativeImageAsset;
   alt: string;
   className?: string;
   priority?: boolean;
@@ -71,17 +71,17 @@ export function ArtworkImage({
     <ArchiveImage
       alt={alt}
       className={className}
-      height={art.image.height}
+      height={artwork.height}
       priority={priority}
-      src={art.image.contentUrl}
-      width={art.image.width}
+      src={artwork.url}
+      width={artwork.width}
     />
   );
 }
 
 export interface ArtworkCardProps {
   badge?: string;
-  category: ArtCategory;
+  category: NarrativeImageCategory;
   id: string;
   locale: Locale;
   title: string;
@@ -116,7 +116,7 @@ export function ArtworkCard({
   ) : (
     <ImageFallback />
   );
-  const destination = `/${locale}/art/${category}/${encodeURIComponent(id)}`;
+  const destination = `/${locale}/assets/narrative/${category}/${encodeURIComponent(id)}`;
 
   return (
     <article className="flex min-w-0 flex-col border-2 border-ink bg-surface text-ink [contain-intrinsic-size:auto_30rem] [content-visibility:auto]">
@@ -131,7 +131,7 @@ export function ArtworkCard({
         transition="forward"
       >
         {shared ? (
-          <ViewTransition default="none" name={artTransitionName(category, id)} share="morph">
+          <ViewTransition default="none" name={assetTransitionName(category, id)} share="morph">
             {media}
           </ViewTransition>
         ) : (

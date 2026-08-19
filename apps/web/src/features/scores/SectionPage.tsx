@@ -1,31 +1,31 @@
 import { use, useEffect, useRef, useState } from "react";
 import { useLocation, useParams } from "react-router";
 import { ApiError } from "../../api/client";
-import { getMovement, getScoreSection } from "../../api/scores";
+import { getMovement, getSection } from "../../api/scores";
 import { useUi } from "../../i18n";
 import { localeLanguageTag, requiredLocale } from "../../navigation";
 import { ArchivePage, BackLink } from "../../shared/Page";
 import { Eyebrow } from "../../shared/ui/Typography";
 import { ArtworkCollection } from "../artwork/ArtworkCollection";
-import { GalleryDisplays } from "../galleries/GalleryDisplays";
-import { OpeningMediaCollection } from "../hierarchy/MediaCollection";
+import { GalleryGroups } from "../galleries/GalleryGroups";
+import { OpeningMediaCollection, StoryMediaCollection } from "../hierarchy/MediaCollection";
 import { ScoreImageAsset } from "../hierarchy/ScoreVisual";
 import { StoryRecords } from "../hierarchy/StoryRecords";
 
-export function ScoreSectionPage() {
+export function SectionPage() {
   const { t } = useUi();
   const params = useParams();
   const locale = requiredLocale(params.locale);
-  const movementID = params.movementID ?? "";
-  const sectionID = params.sectionID ?? "";
+  const movementID = params["movement-id"] ?? "";
+  const sectionID = params["section-id"] ?? "";
   const movementRequest = getMovement(locale, movementID);
-  const sectionRequest = getScoreSection(locale, movementID, sectionID);
+  const sectionRequest = getSection(locale, movementID, sectionID);
   const movement = use(movementRequest);
   const section = use(sectionRequest);
   const canonical = movement.items.find(
     (item) => item.kind === "section" && item.section.id === section.id,
   );
-  if (!canonical) throw new ApiError(t("errors.wrongScoreSection"), 404);
+  if (!canonical) throw new ApiError(t("errors.wrongSection"), 404);
   const language = localeLanguageTag(locale);
   const location = useLocation();
   const basePath = `/${locale}/scores/${encodeURIComponent(movement.id)}/${encodeURIComponent(section.id)}`;
@@ -54,7 +54,7 @@ export function ScoreSectionPage() {
   return (
     <ArchivePage
       description={section.description || t("score.sectionDescription")}
-      image={heroBackground?.image?.contentUrl ?? section.keyVisual?.image?.contentUrl ?? undefined}
+      image={heroBackground?.image?.url ?? section.keyVisual?.image?.url ?? undefined}
       theme={heroPassed ? "light" : "dark"}
       title={section.name || t("score.untitledSection")}
     >
@@ -117,7 +117,7 @@ export function ScoreSectionPage() {
           tone={heroPassed ? "light" : "dark"}
         />
         {section.gallery ? (
-          <GalleryDisplays
+          <GalleryGroups
             gallery={section.gallery}
             locale={locale}
             tone={heroPassed ? "light" : "dark"}
@@ -129,9 +129,15 @@ export function ScoreSectionPage() {
           media={section.openingMedia}
           tone={heroPassed ? "light" : "dark"}
         />
+        <StoryMediaCollection
+          from={`${location.pathname}${location.search}`}
+          locale={locale}
+          media={section.media}
+          tone={heroPassed ? "light" : "dark"}
+        />
         <ArtworkCollection
-          artworks={section.artReferences}
-          eyebrow={t("art.sectionReferences")}
+          artworks={section.imageReferences}
+          eyebrow={t("artwork.sectionReferences")}
           from={`${location.pathname}${location.search}`}
           language={language}
           locale={locale}

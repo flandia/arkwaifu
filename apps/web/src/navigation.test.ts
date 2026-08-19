@@ -14,19 +14,29 @@ describe("archive navigation", () => {
     expect(isPathAtOrBelow("/CN/scores/ssline_10", "/CN/scores/ssline_1")).toBe(false);
   });
 
-  it("recognizes every public Archive kind and rejects removed story-section slugs", async () => {
-    const { archiveKinds, isArchiveKind } = await import("./navigation");
+  it("recognizes every public Archive Category and rejects removed story-section slugs", async () => {
+    const { archiveCategories, isArchiveCategory } = await import("./navigation");
 
-    expect(Object.keys(archiveKinds)).toEqual([
+    expect(Object.keys(archiveCategories)).toEqual([
       "events",
       "operator-record",
       "integrated-strategies",
       "reclamation-algorithm",
       "others",
     ]);
-    expect(Object.keys(archiveKinds).every(isArchiveKind)).toBe(true);
-    expect(isArchiveKind("main")).toBe(false);
-    expect(isArchiveKind("vignettes")).toBe(false);
+    expect(Object.keys(archiveCategories).every(isArchiveCategory)).toBe(true);
+    expect(isArchiveCategory("main")).toBe(false);
+    expect(isArchiveCategory("vignettes")).toBe(false);
+  });
+
+  it("validates asset categories at the route boundary", async () => {
+    const { isNarrativeImageCategory, isPresentationAssetCategory } = await import("./navigation");
+
+    expect(isNarrativeImageCategory("character")).toBe(true);
+    expect(isNarrativeImageCategory("video")).toBe(false);
+    expect(isPresentationAssetCategory("key-visual")).toBe(true);
+    expect(isPresentationAssetCategory("video")).toBe(true);
+    expect(isPresentationAssetCategory("character")).toBe(false);
   });
 
   it("builds hierarchy-owned Score and Archive story paths", async () => {
@@ -40,7 +50,7 @@ describe("archive navigation", () => {
     };
     const archiveParent = {
       kind: "archive" as const,
-      archiveKind: "operator-record" as const,
+      archiveCategory: "operator-record" as const,
       groupID: "char/220",
       groupName: "Grani",
     };

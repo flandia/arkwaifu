@@ -1,14 +1,14 @@
 import { Suspense, use, useEffect, useRef, useState } from "react";
 import { useParams } from "react-router";
-import { getMovementReadingIndex, getMovements, type MovementReadingIndex } from "../../api/scores";
-import type { Locale, MovementSummary } from "../../api/types";
+import { getMovement, getMovements } from "../../api/scores";
+import type { Locale, MovementDetail, MovementSummary } from "../../api/types";
 import { useUi } from "../../i18n";
 import { localeLanguageTag, requiredLocale, TransitionLink } from "../../navigation";
 import { CollectionControls, useCollectionIndex } from "../../shared/CollectionIndex";
 import { ArchivePage, EmptyState, PageHeader } from "../../shared/Page";
 import { Eyebrow } from "../../shared/ui/Typography";
 import { ScoreArchiveMark, ScoreImageAsset } from "../hierarchy/ScoreVisual";
-import { StoryRecordGrid } from "../hierarchy/StoryRecords";
+import { SectionCard } from "./ScoreCards";
 
 function movementSearchValues(movement: MovementSummary): string[] {
   return [movement.name, movement.id];
@@ -53,84 +53,47 @@ function MovementHeading({ locale, movement }: { locale: Locale; movement: Movem
   );
 }
 
-function MovementStoryIndex({ entry, locale }: { entry: MovementReadingIndex; locale: Locale }) {
-  const { t } = useUi();
-  const { movement, sections } = entry;
-  const language = localeLanguageTag(locale);
-  const movementPath = `/${locale}/scores/${encodeURIComponent(movement.id)}`;
+function SectionIndex({ locale, movement }: { locale: Locale; movement: MovementDetail }) {
+  const sections = movement.items.flatMap((item) =>
+    item.kind === "section" ? [item.section] : [],
+  );
 
   return (
     <>
       <MovementHeading locale={locale} movement={movement} />
-
-      <div className="grid gap-16">
-        {sections.map((section) => {
-          const sectionPath = `${movementPath}/${encodeURIComponent(section.id)}`;
-          return (
-            <section
-              aria-labelledby={`score-index-${movement.id}-${section.id}`}
-              className="min-w-0 [contain-intrinsic-block-size:auto_48rem] [content-visibility:auto]"
+      {sections.length ? (
+        <ol className="m-0 grid list-none gap-7 p-0 md:grid-cols-2 xl:grid-cols-3">
+          {sections.map((section) => (
+            <SectionCard
               key={section.id}
-            >
-              <div className="mb-5 flex flex-wrap items-end justify-between gap-4 border-b-2 border-ink pb-4">
-                <div>
-                  <Eyebrow>{t(`score.sectionTypes.${section.type}`)}</Eyebrow>
-                  <TransitionLink
-                    className="no-underline hover:text-brand"
-                    to={sectionPath}
-                    transition="forward"
-                  >
-                    <h3
-                      className="m-0 text-[clamp(1.7rem,4vw,3.5rem)] leading-none font-black"
-                      id={`score-index-${movement.id}-${section.id}`}
-                      lang={language}
-                    >
-                      {section.name || t("score.untitledSection")}
-                    </h3>
-                  </TransitionLink>
-                </div>
-                <span className="font-mono text-xs font-bold text-muted">
-                  {t("story.count", { count: section.stories.length })}
-                </span>
-              </div>
-              <StoryRecordGrid basePath={sectionPath} locale={locale} stories={section.stories} />
-            </section>
-          );
-        })}
-      </div>
+              locale={locale}
+              movementID={movement.id}
+              section={section}
+            />
+          ))}
+        </ol>
+      ) : null}
     </>
   );
 }
 
-function ResolvedMovementStoryIndex({
-  locale,
-  movement,
-}: {
-  locale: Locale;
-  movement: MovementSummary;
-}) {
-  const entry = use(getMovementReadingIndex(locale, movement.id));
-  return <MovementStoryIndex entry={entry} locale={locale} />;
+function ResolvedSectionIndex({ locale, movement }: { locale: Locale; movement: MovementSummary }) {
+  const detail = use(getMovement(locale, movement.id));
+  return <SectionIndex locale={locale} movement={detail} />;
 }
 
-function MovementStoryPlaceholder({
-  locale,
-  movement,
-}: {
-  locale: Locale;
-  movement: MovementSummary;
-}) {
+function SectionPlaceholder({ locale, movement }: { locale: Locale; movement: MovementSummary }) {
   return (
     <>
       <MovementHeading locale={locale} movement={movement} />
-      <div className="grid min-h-[90rem] animate-pulse place-items-center border-2 border-ink/20 bg-paper text-xs font-black tracking-[0.2em] text-muted uppercase">
+      <div className="grid min-h-96 animate-pulse place-items-center border-2 border-ink/20 bg-paper text-xs font-black tracking-[0.2em] text-muted uppercase">
         {movement.id}
       </div>
     </>
   );
 }
 
-function LazyMovementStoryIndex({
+function LazySectionIndex({
   eager,
   locale,
   movement,
@@ -163,15 +126,15 @@ function LazyMovementStoryIndex({
 
   return (
     <article
-      className="min-w-0 [contain-intrinsic-block-size:auto_90rem] [content-visibility:auto]"
+      className="min-w-0 [contain-intrinsic-block-size:auto_48rem] [content-visibility:auto]"
       ref={articleRef}
     >
       {active ? (
-        <Suspense fallback={<MovementStoryPlaceholder locale={locale} movement={movement} />}>
-          <ResolvedMovementStoryIndex locale={locale} movement={movement} />
+        <Suspense fallback={<SectionPlaceholder locale={locale} movement={movement} />}>
+          <ResolvedSectionIndex locale={locale} movement={movement} />
         </Suspense>
       ) : (
-        <MovementStoryPlaceholder locale={locale} movement={movement} />
+        <SectionPlaceholder locale={locale} movement={movement} />
       )}
     </article>
   );
@@ -205,7 +168,7 @@ export function ScoreIndexPage() {
       {index.visible.length ? (
         <section className="grid gap-28" aria-label={t("score.movements")}>
           {index.visible.map((movement, position) => (
-            <LazyMovementStoryIndex
+            <LazySectionIndex
               eager={position === 0}
               key={movement.id}
               locale={locale}

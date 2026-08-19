@@ -2,36 +2,46 @@ import { afterEach, describe, expect, it, mock, spyOn } from "bun:test";
 import {
   getArchiveGroup,
   getArchiveGroups,
-  getArchiveKinds,
+  getArchiveCategories,
   getArchiveStory,
 } from "./api/archives";
-import { getArt, getArtContext, getArtWithSources } from "./api/artwork";
+import {
+  getNarrativeImageAsset,
+  getNarrativeImageAssetWithMaterials,
+  getNarrativeImageReverseReferences,
+} from "./api/images";
 import { ApiError, clearApiCache, resolveApiBaseUrl } from "./api/client";
 import { getGalleries, getGallery } from "./api/galleries";
-import { getMedia } from "./api/media";
+import { getNarrativeMediaAsset, getNarrativeMediaReverseReferences } from "./api/media";
+import { getPresentationAsset, getPresentationAssets } from "./api/presentation";
 import { getSearchResults } from "./api/search";
-import { getMovement, getMovements, getScoreSection, getScoreStory } from "./api/scores";
+import { getMovement, getMovements, getSection, getScoreStory } from "./api/scores";
 import type {
   ArchiveGroupDetail,
   ArchiveGroupSummary,
-  ArchiveKindSummary,
-  ArtContext,
-  ArtDetail,
+  ArchiveCategorySummary,
+  NarrativeImageReverseReferences,
+  NarrativeImageAsset,
   GalleryDetail,
   GallerySummary,
   MovementDetail,
   MovementSummary,
-  MediaDetail,
-  ScoreSectionDetail,
-  StoryArtReference,
+  MediaReverseReferences,
+  NarrativeMediaAsset,
+  SectionDetail,
+  StoryNarrativeAssetReference,
   StoryDetail,
   StorySummary,
+  OrphanNarrativeAssets,
+  MaterialAsset,
+  PresentationAssetDetail,
+  PresentationAssetSummary,
 } from "./api/types";
-import { getUnreferencedArts } from "./api/unreferenced";
+import { getOrphanNarrativeAssets } from "./api/orphans";
 import {
-  artTransitionName,
+  assetTransitionName,
   formatBytes,
-  uniqueStoryArtReferences,
+  uniqueStoryNarrativeAssetReferences,
   uniqueStoryMediaReferences,
 } from "./api/utils";
 
@@ -41,30 +51,31 @@ function apiUrl(path: string): string {
   return `${configuredApiBaseUrl}${path}`;
 }
 
-const reference: StoryArtReference = {
-  artID: "char_220_grani#5$1",
+const reference: StoryNarrativeAssetReference = {
+  asset: {
+    namespace: "narrative",
+    category: "character",
+    id: "char_220_grani#5$1",
+  },
   kind: "character",
-  category: "character",
-  isAnimeKV: false,
-  title: null,
-  subtitle: null,
   names: ["Grani"],
-  thumbnailContentUrl:
-    "https://objects.example/ART/art-v1/thumbnail/character/char_220_grani%25235%25241.webp",
+  previewUrl:
+    "https://objects.example/ARTWORK/artwork-v1/thumbnail/character/char_220_grani%25235%25241.webp",
 };
 
-const artResponse: ArtDetail = {
-  id: reference.artID,
-  category: reference.category,
-  thumbnailContentUrl:
-    "https://objects.example/ART/art-v1/thumbnail/character/char_220_grani%25235%25241.webp",
-  image: {
-    byteSize: 1536,
-    width: 100,
-    height: 200,
-    contentUrl: "https://objects.example/art.png",
-  },
-  sourceArts: [],
+const artworkResponse: NarrativeImageAsset = {
+  namespace: "narrative",
+  id: reference.asset.id,
+  category: reference.asset.category,
+  format: "image",
+  mime: "image/png",
+  size: 1536,
+  url: "https://objects.example/artwork.png",
+  width: 100,
+  height: 200,
+  previewUrl:
+    "https://objects.example/ARTWORK/artwork-v1/thumbnail/character/char_220_grani%25235%25241.webp",
+  materials: [],
 };
 
 const scoreParent = {
@@ -82,8 +93,8 @@ const storySummary: StorySummary = {
   code: "17-1",
   name: "Seeds",
   info: "A story summary.",
-  previewArtReferences: [reference],
-  representativeArtReference: reference,
+  previewAssetReferences: [reference],
+  representativeAssetReference: reference,
 };
 
 const storyDetail: StoryDetail = {
@@ -97,14 +108,14 @@ const storyDetail: StoryDetail = {
   text: "The source story text.",
   media: [
     {
-      id: "m_story",
-      kind: "sound",
-      contentType: "audio/wav",
-      byteSize: 321,
-      contentUrl: "https://objects.example/m_story.wav",
+      asset: { namespace: "narrative", category: "audio", id: "m_story" },
+      usage: "sound",
+      mime: "audio/wav",
+      size: 321,
+      url: "https://objects.example/m_story.wav",
     },
   ],
-  artReferences: [reference],
+  imageReferences: [reference],
 };
 
 const galleryDetail: GalleryDetail = {
@@ -112,41 +123,59 @@ const galleryDetail: GalleryDetail = {
   name: "Critical Phase Transition",
   description: "A gallery.",
   parent: scoreParent,
-  displays: [
+  groups: [
     {
       id: "sacrifice-torch",
       position: 0,
       name: "Sacrifice Torch",
-      description: "Four sibling artworks.",
+      description: "Four artworks.",
       relatedStoryID: storySummary.id,
       relatedStageID: null,
-      artworks: [
+      references: [
         {
-          position: 0,
           cgID: "cg_001",
-          artID: "cg_001_a/cg_001_b",
-          category: "image",
-          thumbnailContentUrl: "https://objects.example/cg.webp",
+          asset: {
+            namespace: "narrative",
+            category: "illustration",
+            id: "cg_001_a/cg_001_b",
+          },
+          previewUrl: "https://objects.example/cg.webp",
         },
       ],
     },
   ],
 };
 
-const mediaDetail: MediaDetail = {
+const mediaDetail: NarrativeMediaAsset = {
+  namespace: "narrative",
   id: "video/story.mp4",
-  kind: "video",
-  contentType: "video/webm",
-  byteSize: 654,
+  category: "video",
+  format: "video",
+  mime: "video/webm",
+  size: 654,
   duration: 8.25,
+  sampleRate: null,
   width: 1920,
   height: 1080,
   frameRate: 30000 / 1001,
   frameCount: 248,
-  contentUrl: "https://objects.example/MEDIA/cn/video/story.webm",
+  url: "https://objects.example/MEDIA/cn/video/story.webm",
 };
 
-const sectionDetail: ScoreSectionDetail = {
+const mediaContext: MediaReverseReferences = {
+  occurrences: [
+    {
+      parent: scoreParent,
+      storyID: storySummary.id,
+      storyName: storySummary.name,
+      storyCode: storySummary.code,
+      storyTagText: storySummary.tagText,
+    },
+  ],
+  collections: [scoreParent],
+};
+
+const sectionDetail: SectionDetail = {
   id: scoreParent.sectionID,
   name: scoreParent.sectionName,
   description: "A section.",
@@ -163,7 +192,8 @@ const sectionDetail: ScoreSectionDetail = {
   openingMedia: storyDetail.media,
   activeBackgroundVideo: null,
   stories: [storySummary],
-  artReferences: [reference],
+  media: storyDetail.media,
+  imageReferences: [reference],
   gallery: galleryDetail,
 };
 
@@ -188,27 +218,29 @@ describe("archive helpers", () => {
     );
   });
 
-  it("deduplicates qualified art identities while preserving first occurrence", () => {
-    const sameIDOtherCategory = { ...reference, category: "image" as const };
-    expect(uniqueStoryArtReferences([reference, reference, sameIDOtherCategory])).toEqual([
-      reference,
-      sameIDOtherCategory,
-    ]);
+  it("deduplicates qualified artwork identities while preserving first occurrence", () => {
+    const sameIDOtherCategory = {
+      ...reference,
+      asset: { ...reference.asset, category: "illustration" as const },
+    };
+    expect(
+      uniqueStoryNarrativeAssetReferences([reference, reference, sameIDOtherCategory]),
+    ).toEqual([reference, sameIDOtherCategory]);
   });
 
   it("deduplicates media identities while preserving distinct kinds", () => {
     const sound = storyDetail.media[0]!;
-    const music = { ...sound, kind: "music" as const };
-    expect(uniqueStoryMediaReferences([sound, sound, music])).toEqual([sound, music]);
+    const music = { ...sound, usage: "music" as const };
+    expect(uniqueStoryMediaReferences([sound, sound, music])).toEqual([sound]);
   });
 
   it("creates stable CSS-safe transition names", () => {
-    expect(artTransitionName("character", reference.artID)).toMatch(/^art-[a-z0-9]+$/);
-    expect(artTransitionName("character", reference.artID)).toBe(
-      artTransitionName("character", reference.artID),
+    expect(assetTransitionName("character", reference.asset.id)).toMatch(/^asset-[a-z0-9]+$/);
+    expect(assetTransitionName("character", reference.asset.id)).toBe(
+      assetTransitionName("character", reference.asset.id),
     );
-    expect(artTransitionName("image", reference.artID)).not.toBe(
-      artTransitionName("character", reference.artID),
+    expect(assetTransitionName("illustration", reference.asset.id)).not.toBe(
+      assetTransitionName("character", reference.asset.id),
     );
   });
 
@@ -221,47 +253,63 @@ describe("archive helpers", () => {
 
 describe("archive API client", () => {
   it("loads independently addressable media resources", async () => {
-    const fetch = spyOn(globalThis, "fetch").mockResolvedValue(jsonResponse(mediaDetail));
+    const fetch = spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(jsonResponse(mediaDetail))
+      .mockResolvedValueOnce(jsonResponse(mediaContext));
 
-    expect(await getMedia("video", mediaDetail.id)).toEqual(mediaDetail);
-    expect(fetch.mock.calls[0]?.[0]).toBe(apiUrl("/api/media/video/video%2Fstory.mp4"));
+    expect(await getNarrativeMediaAsset("video", mediaDetail.id)).toEqual(mediaDetail);
+    expect(await getNarrativeMediaReverseReferences("CN", "video", mediaDetail.id)).toEqual(
+      mediaContext,
+    );
+    expect(fetch.mock.calls[0]?.[0]).toBe(apiUrl("/api/assets/narrative/video/video%2Fstory.mp4"));
+    expect(fetch.mock.calls[1]?.[0]).toBe(
+      apiUrl("/api/CN/assets/narrative/video/video%2Fstory.mp4/reverse-references"),
+    );
   });
 
-  it("encodes art IDs and deduplicates in-flight requests", async () => {
-    const fetch = spyOn(globalThis, "fetch").mockResolvedValue(jsonResponse(artResponse));
+  it("encodes artwork IDs and deduplicates in-flight requests", async () => {
+    const fetch = spyOn(globalThis, "fetch").mockResolvedValue(jsonResponse(artworkResponse));
 
-    const first = getArt("character", reference.artID);
-    const second = getArt("character", reference.artID);
+    const first = getNarrativeImageAsset("character", reference.asset.id);
+    const second = getNarrativeImageAsset("character", reference.asset.id);
 
     expect(first).toBe(second);
-    expect(await first).toEqual(artResponse);
+    expect(await first).toEqual(artworkResponse);
     expect(fetch).toHaveBeenCalledTimes(1);
-    expect(fetch.mock.calls[0]?.[0]).toBe(apiUrl("/api/arts/character/char_220_grani%235%241"));
+    expect(fetch.mock.calls[0]?.[0]).toBe(
+      apiUrl("/api/assets/narrative/character/char_220_grani%235%241"),
+    );
   });
 
   it("retains failed requests until an explicit retry clears the cache", async () => {
     const fetch = spyOn(globalThis, "fetch")
       .mockResolvedValueOnce(jsonResponse({ error: "service_unavailable" }, 503))
-      .mockResolvedValueOnce(jsonResponse(artResponse));
+      .mockResolvedValueOnce(jsonResponse(artworkResponse));
 
-    const error = await getArt("character", reference.artID).catch((reason: unknown) => reason);
+    const error = await getNarrativeImageAsset("character", reference.asset.id).catch(
+      (reason: unknown) => reason,
+    );
     expect(error).toEqual(
       expect.objectContaining({ name: "ApiError", message: expect.any(String), status: 503 }),
     );
     expect(error).toBeInstanceOf(ApiError);
-    expect(await getArt("character", reference.artID).catch((reason: unknown) => reason)).toBe(
-      error,
-    );
+    expect(
+      await getNarrativeImageAsset("character", reference.asset.id).catch(
+        (reason: unknown) => reason,
+      ),
+    ).toBe(error);
     expect(fetch).toHaveBeenCalledTimes(1);
 
     clearApiCache();
-    expect(await getArt("character", reference.artID)).toEqual(artResponse);
+    expect(await getNarrativeImageAsset("character", reference.asset.id)).toEqual(artworkResponse);
     expect(fetch).toHaveBeenCalledTimes(2);
   });
 
   it("rejects successful non-JSON responses", async () => {
     spyOn(globalThis, "fetch").mockResolvedValue(new Response("<html />", { status: 200 }));
-    const error = await getArt("image", "bad-response").catch((reason: unknown) => reason);
+    const error = await getNarrativeImageAsset("illustration", "bad-response").catch(
+      (reason: unknown) => reason,
+    );
     expect(error).toBeInstanceOf(ApiError);
     expect(error).toEqual(expect.objectContaining({ status: 200 }));
   });
@@ -291,7 +339,7 @@ describe("archive API client", () => {
 
     expect(await getMovements("EN")).toEqual([movement]);
     expect(await getMovement("EN", "main")).toEqual(movementDetail);
-    expect((await getScoreSection("EN", "main", "main_17")).gallery).toEqual(galleryDetail);
+    expect((await getSection("EN", "main", "main_17")).gallery).toEqual(galleryDetail);
     expect(await getScoreStory("EN", "main", "main_17", "main_17-1")).toEqual(storyDetail);
     expect(fetch.mock.calls.map(([url]) => url)).toEqual([
       apiUrl("/api/EN/scores"),
@@ -301,20 +349,23 @@ describe("archive API client", () => {
     ]);
   });
 
-  it("uses compact Archive routes with hyphenated route kinds", async () => {
-    const kinds: ArchiveKindSummary[] = [{ kind: "operator-record", groupCount: 1 }];
+  it("uses compact Archive routes with hyphenated categories", async () => {
+    const categories: ArchiveCategorySummary[] = [
+      { archiveCategory: "operator-record", groupCount: 1 },
+    ];
     const group: ArchiveGroupSummary = {
       id: "char_220_grani",
       name: "Grani",
-      kind: "operator-record",
+      archiveCategory: "operator-record",
       type: "operator_record",
-      representativeArtReference: reference,
-      previewArtReferences: [reference],
+      representativeAssetReference: reference,
+      previewAssetReferences: [reference],
     };
     const detail: ArchiveGroupDetail = {
       ...group,
       stories: [storySummary],
-      artReferences: [reference],
+      media: storyDetail.media,
+      imageReferences: [reference],
       openingMedia: storyDetail.media,
       gallery: null,
     };
@@ -322,18 +373,18 @@ describe("archive API client", () => {
       ...storyDetail,
       parent: {
         kind: "archive",
-        archiveKind: "operator-record",
+        archiveCategory: "operator-record",
         groupID: group.id,
         groupName: group.name,
       },
     };
     const fetch = spyOn(globalThis, "fetch")
-      .mockResolvedValueOnce(jsonResponse(kinds))
+      .mockResolvedValueOnce(jsonResponse(categories))
       .mockResolvedValueOnce(jsonResponse([group]))
       .mockResolvedValueOnce(jsonResponse(detail))
       .mockResolvedValueOnce(jsonResponse(archiveStory));
 
-    expect(await getArchiveKinds("CN")).toEqual(kinds);
+    expect(await getArchiveCategories("CN")).toEqual(categories);
     expect(await getArchiveGroups("CN", "operator-record")).toEqual([group]);
     expect(await getArchiveGroup("CN", "operator-record", group.id)).toEqual(detail);
     expect(await getArchiveStory("CN", "operator-record", group.id, archiveStory.id)).toEqual(
@@ -347,13 +398,13 @@ describe("archive API client", () => {
     ]);
   });
 
-  it("loads display-owned galleries and retains stable cg IDs", async () => {
+  it("loads Gallery Group-owned artwork and retains stable cg IDs", async () => {
     const summary: GallerySummary = {
       id: galleryDetail.id,
       name: galleryDetail.name,
       description: galleryDetail.description,
       parent: galleryDetail.parent,
-      previewThumbnailContentUrls: ["https://objects.example/cg.webp"],
+      previewUrls: ["https://objects.example/cg.webp"],
     };
     const fetch = spyOn(globalThis, "fetch")
       .mockResolvedValueOnce(jsonResponse([summary]))
@@ -361,9 +412,9 @@ describe("archive API client", () => {
 
     expect(await getGalleries("CN")).toEqual([summary]);
     const detail = await getGallery("CN", "main/17");
-    expect(detail.displays[0]?.artworks[0]).toMatchObject({
+    expect(detail.groups[0]?.references[0]).toMatchObject({
       cgID: "cg_001",
-      artID: "cg_001_a/cg_001_b",
+      asset: { id: "cg_001_a/cg_001_b" },
     });
     expect(fetch.mock.calls.map(([url]) => url)).toEqual([
       apiUrl("/api/CN/galleries"),
@@ -371,48 +422,64 @@ describe("archive API client", () => {
     ]);
   });
 
-  it("loads category-qualified composite panels for slash-containing artwork IDs", async () => {
-    const composite: ArtDetail = {
-      ...artResponse,
+  it("loads category-qualified source panels for slash-containing artwork IDs", async () => {
+    const panelArtwork: NarrativeImageAsset = {
+      ...artworkResponse,
       id: "panel_a/panel_b",
-      category: "image",
-      sourceArts: [
-        { category: "image", id: "panel_a" },
-        { category: "image", id: "panel_b" },
+      category: "illustration",
+      materials: [
+        { namespace: "material", category: "illustration", id: "panel_a" },
+        { namespace: "material", category: "illustration", id: "panel_b" },
       ],
     };
-    const sourceResponse = (id: string) => ({
+    const sourceResponse = (id: string): MaterialAsset => ({
+      namespace: "material",
       id,
-      category: "image",
-      kind: "composite_panel",
+      category: "illustration",
+      format: "image",
+      mime: "image/png",
+      size: 1536,
+      url: `https://objects.example/${id}.png`,
+      width: 100,
+      height: 200,
+      materialType: "panel",
       characterID: null,
       role: null,
       variant: null,
-      image: { ...artResponse.image, contentUrl: `https://objects.example/${id}.png` },
+      reverseReferences: [
+        { namespace: "narrative", category: "illustration", id: panelArtwork.id },
+      ],
     });
     const fetch = spyOn(globalThis, "fetch")
-      .mockResolvedValueOnce(jsonResponse(composite))
+      .mockResolvedValueOnce(jsonResponse(panelArtwork))
       .mockResolvedValueOnce(jsonResponse(sourceResponse("panel_a")))
       .mockResolvedValueOnce(jsonResponse(sourceResponse("panel_b")));
 
-    const [art, sources] = await getArtWithSources("image", composite.id);
-    expect(art).toEqual(composite);
-    expect(sources.map(({ id, kind }) => ({ id, kind }))).toEqual([
-      { id: "panel_a", kind: "composite_panel" },
-      { id: "panel_b", kind: "composite_panel" },
+    const [artwork, sources] = await getNarrativeImageAssetWithMaterials(
+      "illustration",
+      panelArtwork.id,
+    );
+    expect(artwork).toEqual(panelArtwork);
+    expect(sources.map(({ id, materialType }) => ({ id, materialType }))).toEqual([
+      { id: "panel_a", materialType: "panel" },
+      { id: "panel_b", materialType: "panel" },
+    ]);
+    expect(sources[0]?.reverseReferences).toEqual([
+      { namespace: "narrative", category: "illustration", id: panelArtwork.id },
     ]);
     expect(fetch.mock.calls.map(([url]) => url)).toEqual([
-      apiUrl("/api/arts/image/panel_a%2Fpanel_b"),
-      apiUrl("/api/source-arts/image/panel_a"),
-      apiUrl("/api/source-arts/image/panel_b"),
+      apiUrl("/api/assets/narrative/illustration/panel_a%2Fpanel_b"),
+      apiUrl("/api/assets/material/illustration/panel_a"),
+      apiUrl("/api/assets/material/illustration/panel_b"),
     ]);
   });
 
-  it("loads and caches hierarchy-aware artwork context", async () => {
-    const context: ArtContext = {
+  it("loads and caches hierarchy-aware Artwork Reverse References", async () => {
+    const reverseReferences: NarrativeImageReverseReferences = {
       names: ["安洁莉娜"],
-      siblings: [],
+      characterVariants: [],
       textures: [],
+      galleries: [],
       occurrences: [
         {
           parent: scoreParent,
@@ -423,39 +490,56 @@ describe("archive API client", () => {
         },
       ],
     };
-    const fetch = spyOn(globalThis, "fetch").mockResolvedValue(jsonResponse(context));
+    const fetch = spyOn(globalThis, "fetch").mockResolvedValue(jsonResponse(reverseReferences));
 
-    const first = getArtContext("CN", "character", reference.artID);
-    expect(getArtContext("CN", "character", reference.artID)).toBe(first);
-    expect(await first).toEqual(context);
+    const first = getNarrativeImageReverseReferences("CN", "character", reference.asset.id);
+    expect(getNarrativeImageReverseReferences("CN", "character", reference.asset.id)).toBe(first);
+    expect(await first).toEqual(reverseReferences);
     expect(fetch).toHaveBeenCalledTimes(1);
   });
 
-  it("loads the global unreferenced artwork index once", async () => {
-    const summaries = [
+  it("loads and caches all six orphan narrative asset categories", async () => {
+    const assets: OrphanNarrativeAssets = [
       {
+        namespace: "narrative",
         id: "untracked",
-        category: "image" as const,
-        thumbnailContentUrl: "https://objects.example/untracked.webp",
+        category: "illustration",
+        format: "image",
+        mime: "image/png",
+        size: 456,
+        url: "https://objects.example/untracked.png",
+        width: 100,
+        height: 200,
+        previewUrl: "https://objects.example/untracked.webp",
+      },
+      {
+        namespace: "narrative",
+        id: "unused-audio",
+        category: "audio",
+        format: "audio",
+        mime: "audio/wav",
+        size: 123,
+        url: "https://objects.example/unused.wav",
       },
     ];
-    const fetch = spyOn(globalThis, "fetch").mockResolvedValue(jsonResponse(summaries));
+    const fetch = spyOn(globalThis, "fetch").mockResolvedValueOnce(jsonResponse(assets));
 
-    const first = getUnreferencedArts();
-    expect(getUnreferencedArts()).toBe(first);
-    expect(await first).toEqual(summaries);
+    const first = getOrphanNarrativeAssets("CN");
+    expect(getOrphanNarrativeAssets("CN")).toBe(first);
+    expect(await first).toEqual(assets);
     expect(fetch).toHaveBeenCalledTimes(1);
+    expect(fetch.mock.calls[0]?.[0]).toBe(apiUrl("/api/CN/orphans"));
   });
 
   it("encodes locale search queries and caches identical requests", async () => {
     const results = [
       {
-        kind: "art" as const,
+        kind: "narrative_asset" as const,
         id: "amiya",
         category: "character" as const,
         title: "Amiya",
         subtitle: "character",
-        thumbnailContentUrl: "https://objects.example/amiya.webp",
+        previewUrl: "https://objects.example/amiya.webp",
         parent: null,
       },
     ];
@@ -466,13 +550,54 @@ describe("archive API client", () => {
     expect(fetch.mock.calls[0]?.[0]).toBe(apiUrl("/api/EN/search?q=Amiya%20%26%20Grani"));
   });
 
+  it("lists and loads presentation assets with encoded identifiers", async () => {
+    const summary: PresentationAssetSummary = {
+      namespace: "presentation",
+      category: "key-visual",
+      id: "main/17#kv",
+      format: "image",
+      mime: "image/png",
+      size: 4096,
+      width: 1920,
+      height: 1080,
+      duration: null,
+      referenceCount: 1,
+      previewUrl: "https://objects.example/key-visual.webp",
+    };
+    const detail: PresentationAssetDetail = {
+      ...summary,
+      url: "https://objects.example/key-visual.png",
+      frameRate: null,
+      frameCount: null,
+      reverseReferences: [
+        {
+          ownerType: "section",
+          ownerID: "main_17",
+          movementID: "main",
+          role: "key-visual",
+          name: "Critical Phase Transition",
+        },
+      ],
+    };
+    const fetch = spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(jsonResponse([summary]))
+      .mockResolvedValueOnce(jsonResponse(detail));
+
+    expect(await getPresentationAssets("EN")).toEqual([summary]);
+    expect(await getPresentationAsset("EN", "key-visual", summary.id)).toEqual(detail);
+    expect(fetch.mock.calls.map(([url]) => url)).toEqual([
+      apiUrl("/api/EN/assets/presentation"),
+      apiUrl("/api/EN/assets/presentation/key-visual/main%2F17%23kv"),
+    ]);
+  });
+
   it("retains a failed section request across Suspense renders", async () => {
     const fetch = spyOn(globalThis, "fetch").mockResolvedValue(
       jsonResponse({ error: "not_found" }, 404),
     );
 
-    const first = getScoreSection("CN", "main", "missing");
-    expect(getScoreSection("CN", "main", "missing")).toBe(first);
+    const first = getSection("CN", "main", "missing");
+    expect(getSection("CN", "main", "missing")).toBe(first);
     const error = await first.catch((reason: unknown) => reason);
     expect(error).toEqual(expect.objectContaining({ name: "ApiError", status: 404 }));
     expect(fetch).toHaveBeenCalledTimes(1);

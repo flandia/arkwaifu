@@ -1,9 +1,14 @@
 import { use } from "react";
 import { useParams } from "react-router";
 import { getHomeCollections } from "../api/home";
-import type { ArchiveKind } from "../api/types";
+import type { ArchiveCategory } from "../api/types";
 import { useUi } from "../i18n";
-import { archiveKindLabel, archiveKinds, requiredLocale, TransitionLink } from "../navigation";
+import {
+  archiveCategoryLabel,
+  archiveCategories,
+  requiredLocale,
+  TransitionLink,
+} from "../navigation";
 import { ArchivePage } from "../shared/Page";
 import { ActionLink } from "../shared/ui/Action";
 import { cn } from "../shared/ui/cn";
@@ -47,7 +52,9 @@ export function HomePage() {
   const { t } = useUi();
   const locale = requiredLocale(useParams().locale);
   const { movements, archives, galleries } = use(getHomeCollections(locale));
-  const archiveCounts = new Map(archives.map((summary) => [summary.kind, summary.groupCount]));
+  const archiveCounts = new Map(
+    archives.map((summary) => [summary.archiveCategory, summary.groupCount]),
+  );
   const scoreCollectionCount = movements.reduce(
     (count, movement) => count + movement.sectionCount,
     0,
@@ -103,13 +110,13 @@ export function HomePage() {
             label={t("score.title")}
             to={`/${locale}/scores`}
           />
-          {(Object.keys(archiveKinds) as ArchiveKind[]).map((kind) => (
+          {(Object.keys(archiveCategories) as ArchiveCategory[]).map((category) => (
             <EntryCard
-              count={archiveCounts.get(kind) ?? 0}
-              index={archiveKinds[kind].index}
-              key={kind}
-              label={archiveKindLabel(kind, t)}
-              to={`/${locale}/archives/${kind}`}
+              count={archiveCounts.get(category) ?? 0}
+              index={archiveCategories[category].index}
+              key={category}
+              label={archiveCategoryLabel(category, t)}
+              to={`/${locale}/archives/${category}`}
             />
           ))}
           <EntryCard

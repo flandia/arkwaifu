@@ -10,9 +10,9 @@ export function ScoreStoryPage() {
   const { t } = useUi();
   const params = useParams();
   const locale = requiredLocale(params.locale);
-  const movementID = params.movementID ?? "";
-  const sectionID = params.sectionID ?? "";
-  const story = use(getScoreStory(locale, movementID, sectionID, params.storyID ?? ""));
+  const movementID = params["movement-id"] ?? "";
+  const sectionID = params["section-id"] ?? "";
+  const story = use(getScoreStory(locale, movementID, sectionID, params["story-id"] ?? ""));
   if (
     story.parent.kind !== "score" ||
     story.parent.movementID !== movementID ||

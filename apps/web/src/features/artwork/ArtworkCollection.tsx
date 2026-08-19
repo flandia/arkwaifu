@@ -1,5 +1,5 @@
 import { useState } from "react";
-import type { ArtCategory, Locale } from "../../api/types";
+import type { NarrativeImageCategory, Locale } from "../../api/types";
 import { useUi } from "../../i18n";
 import { useCategoryLabel } from "../../navigation";
 import { ActionButton } from "../../shared/ui/Action";
@@ -7,28 +7,27 @@ import { ArtworkGrid } from "../../shared/ui/ArtworkGrid";
 import { SectionHeading } from "../../shared/ui/Typography";
 import { ArtworkCard } from "./ArtworkCard";
 
-const categoryOrder: ArtCategory[] = ["image", "background", "item", "character"];
+const categoryOrder: NarrativeImageCategory[] = ["illustration", "background", "item", "character"];
 const initialArtworkCount = 7;
 
 export interface ArtworkCollectionItem {
-  artID: string;
-  category: ArtCategory;
+  asset: { category: NarrativeImageCategory; id: string };
   isAnimeKV?: boolean;
   title?: string | null;
   subtitle?: string | null;
   names?: string[];
-  thumbnailContentUrl: string | null;
+  previewUrl?: string;
 }
 
 function artworkTitle(artwork: ArtworkCollectionItem, category: string): string {
   return (
     artwork.title?.trim() ||
     artwork.names?.filter(Boolean).join(", ") ||
-    `${category} ${artwork.artID}`
+    `${category} ${artwork.asset.id}`
   );
 }
 
-function ArtworkCategorySection({
+function NarrativeImageCategorySection({
   category,
   eyebrow,
   from,
@@ -37,7 +36,7 @@ function ArtworkCategorySection({
   locale,
   tone,
 }: {
-  category: ArtCategory;
+  category: NarrativeImageCategory;
   eyebrow?: string;
   from: string;
   items: ArtworkCollectionItem[];
@@ -53,7 +52,7 @@ function ArtworkCategorySection({
   return (
     <section className="scroll-mt-8" id={category}>
       <SectionHeading
-        eyebrow={eyebrow ?? t("art.assetCategory")}
+        eyebrow={eyebrow ?? t("artwork.assetCategory")}
         meta={new Intl.NumberFormat().format(items.length)}
         title={labelCategory(category, true)}
         tone={tone}
@@ -62,16 +61,16 @@ function ArtworkCategorySection({
         <ArtworkGrid>
           {visibleItems.map((artwork) => (
             <ArtworkCard
-              badge={artwork.isAnimeKV ? t("art.animeKV") : undefined}
-              category={artwork.category}
+              badge={artwork.isAnimeKV ? t("artwork.animeKV") : undefined}
+              category={artwork.asset.category}
               from={from}
-              id={artwork.artID}
-              key={`${artwork.category}:${artwork.artID}`}
+              id={artwork.asset.id}
+              key={`${artwork.asset.category}:${artwork.asset.id}`}
               language={language}
               locale={locale}
               subtitle={artwork.subtitle ?? undefined}
-              thumbnailUrl={artwork.thumbnailContentUrl}
-              title={artworkTitle(artwork, labelCategory(artwork.category))}
+              thumbnailUrl={artwork.previewUrl ?? null}
+              title={artworkTitle(artwork, labelCategory(artwork.asset.category))}
             />
           ))}
         </ArtworkGrid>
@@ -81,7 +80,7 @@ function ArtworkCategorySection({
             tone === "dark" ? "m-0 leading-relaxed text-white/70" : "m-0 leading-relaxed text-muted"
           }
         >
-          {t("art.noArtworkInCategory")}
+          {t("artwork.noArtworkInCategory")}
         </p>
       )}
       {items.length > initialArtworkCount ? (
@@ -91,7 +90,7 @@ function ArtworkCategorySection({
             onClick={() => setExpanded((value) => !value)}
             variant="secondary"
           >
-            {expanded ? t("art.showFewer") : t("art.showAll", { count: items.length })}
+            {expanded ? t("artwork.showFewer") : t("artwork.showAll", { count: items.length })}
           </ActionButton>
         </div>
       ) : null}
@@ -114,11 +113,11 @@ export function ArtworkCollection({
   artworks: ArtworkCollectionItem[];
   tone?: "light" | "dark";
 }) {
-  const byCategory = new Map<ArtCategory, ArtworkCollectionItem[]>();
+  const byCategory = new Map<NarrativeImageCategory, ArtworkCollectionItem[]>();
   for (const artwork of artworks) {
-    const values = byCategory.get(artwork.category) ?? [];
+    const values = byCategory.get(artwork.asset.category) ?? [];
     values.push(artwork);
-    byCategory.set(artwork.category, values);
+    byCategory.set(artwork.asset.category, values);
   }
 
   return (
@@ -126,7 +125,7 @@ export function ArtworkCollection({
       {categoryOrder.map((category) => {
         const items = byCategory.get(category) ?? [];
         return (
-          <ArtworkCategorySection
+          <NarrativeImageCategorySection
             category={category}
             eyebrow={eyebrow}
             from={from}

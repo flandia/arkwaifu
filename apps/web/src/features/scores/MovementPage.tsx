@@ -1,28 +1,23 @@
 import { use, useEffect, useRef, useState } from "react";
 import { useParams } from "react-router";
 import { getMovement } from "../../api/scores";
-import type {
-  MovementDetail,
-  ScoreSectionItem,
-  ScoreSectionSummary,
-  ScoreSplit,
-} from "../../api/types";
+import type { MovementDetail, SectionItem, SectionSummary, MovementDivider } from "../../api/types";
 import { useUi } from "../../i18n";
 import { localeLanguageTag, requiredLocale } from "../../navigation";
 import { ArchivePage, BackLink, EmptyState } from "../../shared/Page";
 import { Eyebrow } from "../../shared/ui/Typography";
 import { ScoreBackdrop, ScoreImageAsset } from "../hierarchy/ScoreVisual";
-import { MainThemeSectionRow, ScoreSectionCard, ScoreSplitCard } from "./ScoreCards";
+import { MainThemeSectionRow, SectionCard, MovementDividerCard } from "./ScoreCards";
 
-function lastSplit(movement: MovementDetail): ScoreSplit | undefined {
-  return movement.items.findLast((item): item is ScoreSplit => item.kind === "split");
+function lastDivider(movement: MovementDetail): MovementDivider | undefined {
+  return movement.items.findLast((item): item is MovementDivider => item.kind === "divider");
 }
 
-function lastSection(movement: MovementDetail): ScoreSectionItem | undefined {
-  return movement.items.findLast((item): item is ScoreSectionItem => item.kind === "section");
+function lastSection(movement: MovementDetail): SectionItem | undefined {
+  return movement.items.findLast((item): item is SectionItem => item.kind === "section");
 }
 
-function movementSections(movement: MovementDetail): ScoreSectionSummary[] {
+function movementSections(movement: MovementDetail): SectionSummary[] {
   return movement.items.flatMap((item) => (item.kind === "section" ? [item.section] : []));
 }
 
@@ -54,14 +49,14 @@ function MainlineSectionShortcuts({ movement }: { movement: MovementDetail }) {
   );
 }
 
-function MovementSectionMasonry({
+function SectionMasonry({
   locale,
   movementID,
   sections,
 }: {
   locale: ReturnType<typeof requiredLocale>;
   movementID: string;
-  sections: ScoreSectionSummary[];
+  sections: SectionSummary[];
 }) {
   const containerRef = useRef<HTMLDivElement>(null);
   const [isTwoColumn, setIsTwoColumn] = useState(false);
@@ -83,8 +78,8 @@ function MovementSectionMasonry({
     return () => observer.disconnect();
   }, []);
 
-  const renderSection = (section: ScoreSectionSummary) => (
-    <ScoreSectionCard key={section.id} locale={locale} movementID={movementID} section={section} />
+  const renderSection = (section: SectionSummary) => (
+    <SectionCard key={section.id} locale={locale} movementID={movementID} section={section} />
   );
 
   return (
@@ -109,10 +104,10 @@ export function MovementPage() {
   const { t } = useUi();
   const params = useParams();
   const locale = requiredLocale(params.locale);
-  const movement = use(getMovement(locale, params.movementID ?? ""));
+  const movement = use(getMovement(locale, params["movement-id"] ?? ""));
   const language = localeLanguageTag(locale);
   const isMainline = movement.id === "mainline";
-  const activeSplit = isMainline ? lastSplit(movement) : undefined;
+  const activeSplit = isMainline ? lastDivider(movement) : undefined;
   const activeSection = isMainline ? lastSection(movement)?.section : undefined;
   const heroVideo = activeSplit?.video ?? movement.backgroundVideo;
   const heroImage = activeSection?.background ?? movement.background;
@@ -168,7 +163,7 @@ export function MovementPage() {
   return (
     <ArchivePage
       description={t("score.movementDescription", { name: movement.name })}
-      image={movement.logo?.image?.contentUrl ?? heroImage?.image?.contentUrl ?? undefined}
+      image={movement.logo?.image?.url ?? heroImage?.image?.url ?? undefined}
       theme="dark"
       title={movement.name || t("score.untitledMovement")}
     >
@@ -193,8 +188,8 @@ export function MovementPage() {
         isMainline ? (
           <ol aria-label={t("score.orderedSections")} className="mt-16 grid list-none gap-8 p-0">
             {movement.items.map((item) =>
-              item.kind === "split" ? (
-                <ScoreSplitCard key={`split:${item.id}`} split={item} />
+              item.kind === "divider" ? (
+                <MovementDividerCard divider={item} key={`divider:${item.id}`} />
               ) : (
                 <MainThemeSectionRow
                   key={`section:${item.section.id}`}
@@ -206,7 +201,7 @@ export function MovementPage() {
             )}
           </ol>
         ) : (
-          <MovementSectionMasonry
+          <SectionMasonry
             locale={locale}
             movementID={movement.id}
             sections={movementSections(movement)}

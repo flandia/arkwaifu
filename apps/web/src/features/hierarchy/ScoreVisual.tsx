@@ -53,7 +53,7 @@ export function ScoreImageAsset({
       fetchPriority={eager ? "high" : "auto"}
       height={asset.image.height}
       loading={eager ? "eager" : "lazy"}
-      src={asset.image.contentUrl}
+      src={asset.image.url}
       width={asset.image.width}
     />
   );
@@ -79,8 +79,8 @@ export function ScoreBackdrop({
   const containerRef = useRef<HTMLDivElement>(null);
   const [nearViewport, setNearViewport] = useState(!viewportGated);
   const [failedVideo, setFailedVideo] = useState<string>();
-  const poster = image?.image?.contentUrl;
-  const videoUrl = video?.video?.contentUrl;
+  const poster = image?.image?.url;
+  const videoUrl = video?.video?.url;
 
   useEffect(() => {
     if (!viewportGated) {
@@ -125,7 +125,7 @@ export function ScoreBackdrop({
           playsInline
           poster={poster}
           preload="metadata"
-          src={video.video.contentUrl}
+          src={video.video.url}
           tabIndex={-1}
           width={video.video.width}
         />

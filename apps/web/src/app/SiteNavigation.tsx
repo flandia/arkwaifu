@@ -4,7 +4,12 @@ import { useLocation } from "react-router";
 import { getMovements } from "../api/scores";
 import type { Locale, ScoreImage } from "../api/types";
 import { useUi } from "../i18n";
-import { archiveKinds, isPathAtOrBelow, TransitionLink, useArchiveKinds } from "../navigation";
+import {
+  archiveCategories,
+  isPathAtOrBelow,
+  TransitionLink,
+  useArchiveCategories,
+} from "../navigation";
 import { Eyebrow } from "../shared/ui/Typography";
 import { ScoreArchiveMark } from "../features/hierarchy/ScoreVisual";
 
@@ -43,7 +48,7 @@ function NavItem({
               className="size-7 object-contain"
               height={icon.image.height}
               loading="lazy"
-              src={icon.image.contentUrl}
+              src={icon.image.url}
               width={icon.image.width}
             />
           ) : (
@@ -107,7 +112,7 @@ export function SiteNavigation({
 }) {
   const { pathname } = useLocation();
   const { t } = useUi();
-  const archives = useArchiveKinds();
+  const archives = useArchiveCategories();
 
   return (
     <div className="flex min-h-full flex-col bg-ink text-white">
@@ -173,16 +178,18 @@ export function SiteNavigation({
             onNavigate={onNavigate}
             to={`/${locale}/archives`}
           />
-          {(Object.keys(archiveKinds) as Array<keyof typeof archiveKinds>).map((kind) => (
-            <NavItem
-              active={pathname.startsWith(`/${locale}/archives/${kind}`)}
-              index={archiveKinds[kind].index}
-              key={kind}
-              label={archives[kind].title}
-              onNavigate={onNavigate}
-              to={`/${locale}/archives/${kind}`}
-            />
-          ))}
+          {(Object.keys(archiveCategories) as Array<keyof typeof archiveCategories>).map(
+            (category) => (
+              <NavItem
+                active={pathname.startsWith(`/${locale}/archives/${category}`)}
+                index={archiveCategories[category].index}
+                key={category}
+                label={archives[category].title}
+                onNavigate={onNavigate}
+                to={`/${locale}/archives/${category}`}
+              />
+            ),
+          )}
         </ul>
 
         <SectionLabel>{t("navigation.collections")}</SectionLabel>
@@ -195,11 +202,18 @@ export function SiteNavigation({
             to={`/${locale}/galleries`}
           />
           <NavItem
-            active={pathname === `/${locale}/unreferenced`}
+            active={pathname.startsWith(`/${locale}/assets/presentation`)}
             index="C2"
-            label={t("navigation.unreferenced")}
+            label={t("navigation.presentationAssets")}
             onNavigate={onNavigate}
-            to={`/${locale}/unreferenced`}
+            to={`/${locale}/assets/presentation`}
+          />
+          <NavItem
+            active={pathname === `/${locale}/orphans`}
+            index="C3"
+            label={t("navigation.orphans")}
+            onNavigate={onNavigate}
+            to={`/${locale}/orphans`}
           />
         </ul>
 

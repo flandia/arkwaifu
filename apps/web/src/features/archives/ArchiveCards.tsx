@@ -1,18 +1,16 @@
-import type { ArchiveGroupSummary, ArchiveKind, Locale } from "../../api/types";
+import type { ArchiveGroupSummary, ArchiveCategory, Locale } from "../../api/types";
 import { useUi } from "../../i18n";
-import { archiveKindLabel, localeLanguageTag, TransitionLink } from "../../navigation";
+import { archiveCategoryLabel, localeLanguageTag, TransitionLink } from "../../navigation";
 import { CardBackdrop } from "../../shared/ui/CardBackdrop";
 import { Eyebrow } from "../../shared/ui/Typography";
 
 function previewUrls(group: ArchiveGroupSummary): string[] {
-  const references = group.previewArtReferences.length
-    ? group.previewArtReferences
-    : group.representativeArtReference
-      ? [group.representativeArtReference]
+  const references = group.previewAssetReferences.length
+    ? group.previewAssetReferences
+    : group.representativeAssetReference
+      ? [group.representativeAssetReference]
       : [];
-  return references.flatMap((reference) =>
-    reference.thumbnailContentUrl ? [reference.thumbnailContentUrl] : [],
-  );
+  return references.flatMap((reference) => (reference.previewUrl ? [reference.previewUrl] : []));
 }
 
 export function ArchiveGroupCard({
@@ -28,7 +26,7 @@ export function ArchiveGroupCard({
     <article className="min-w-0 [contain-intrinsic-size:auto_20rem] [content-visibility:auto]">
       <TransitionLink
         className="group relative flex min-h-80 flex-col justify-end overflow-hidden border-r-2 border-b-2 border-ink bg-brand p-6 text-white no-underline"
-        to={`/${locale}/archives/${group.kind}/${encodeURIComponent(group.id)}`}
+        to={`/${locale}/archives/${group.archiveCategory}/${encodeURIComponent(group.id)}`}
         transition="forward"
       >
         <CardBackdrop scrim={backgrounds.length ? "dark" : "brand"} sources={backgrounds} />
@@ -55,15 +53,15 @@ export function ArchiveGroupCard({
   );
 }
 
-export function ArchiveKindCard({
+export function ArchiveCategoryCard({
+  category,
   count,
   index,
-  kind,
   locale,
 }: {
+  category: ArchiveCategory;
   count: number;
   index: string;
-  kind: ArchiveKind;
   locale: Locale;
 }) {
   const { t } = useUi();
@@ -71,14 +69,14 @@ export function ArchiveKindCard({
     <li className="min-w-0 [contain-intrinsic-size:auto_14rem] [content-visibility:auto]">
       <TransitionLink
         className="grid min-h-56 grid-cols-[3rem_minmax(0,1fr)_auto] items-center gap-5 border-r-2 border-b-2 border-ink bg-surface p-6 no-underline hover:bg-brand-soft"
-        to={`/${locale}/archives/${kind}`}
+        to={`/${locale}/archives/${category}`}
         transition="forward"
       >
         <span className="font-mono text-xs font-black text-muted" aria-hidden="true">
           {index}
         </span>
         <h2 className="m-0 text-[clamp(1.6rem,3.5vw,3rem)] leading-none font-black tracking-tight uppercase">
-          {archiveKindLabel(kind, t)}
+          {archiveCategoryLabel(category, t)}
         </h2>
         <strong className="font-mono text-[clamp(2.8rem,6vw,5rem)] leading-none tabular-nums">
           {new Intl.NumberFormat().format(count)}

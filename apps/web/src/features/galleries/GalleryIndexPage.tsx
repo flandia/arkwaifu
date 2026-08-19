@@ -1,10 +1,10 @@
 import { use } from "react";
 import { useParams } from "react-router";
 import { getGalleries } from "../../api/galleries";
-import type { ArchiveKind, GallerySummary, Locale, StoryParent } from "../../api/types";
+import type { ArchiveCategory, GallerySummary, Locale, StoryParent } from "../../api/types";
 import { useUi } from "../../i18n";
 import {
-  archiveKindLabel,
+  archiveCategoryLabel,
   localeLanguageTag,
   requiredLocale,
   TransitionLink,
@@ -25,7 +25,7 @@ function gallerySearchValues(gallery: GallerySummary): string[] {
     gallery.id,
     gallery.description,
     parent.kind === "score" ? parent.movementName : parent.groupName,
-    parent.kind === "score" ? parent.sectionName : parent.archiveKind,
+    parent.kind === "score" ? parent.sectionName : parent.archiveCategory,
   ];
 }
 
@@ -53,7 +53,7 @@ function groupByOwner(galleries: GallerySummary[]): OwnerGroup[] {
     const key =
       parent.kind === "score"
         ? `score:${parent.movementID}:${parent.sectionID}`
-        : `archive:${parent.archiveKind}:${parent.groupID}`;
+        : `archive:${parent.archiveCategory}:${parent.groupID}`;
     const group = groups.get(key) ?? { key, parent, galleries: [] };
     group.galleries.push(gallery);
     groups.set(key, group);
@@ -63,7 +63,7 @@ function groupByOwner(galleries: GallerySummary[]): OwnerGroup[] {
 
 function groupHierarchy(galleries: GallerySummary[]): GalleryHierarchy {
   const movements = new Map<string, OwnerBranch>();
-  const archiveKinds = new Map<string, OwnerBranch>();
+  const archiveCategories = new Map<string, OwnerBranch>();
 
   for (const owner of groupByOwner(galleries)) {
     const parent = owner.parent;
@@ -78,16 +78,16 @@ function groupHierarchy(galleries: GallerySummary[]): GalleryHierarchy {
       continue;
     }
 
-    const branch = archiveKinds.get(parent.archiveKind) ?? {
-      key: parent.archiveKind,
-      name: parent.archiveKind,
+    const branch = archiveCategories.get(parent.archiveCategory) ?? {
+      key: parent.archiveCategory,
+      name: parent.archiveCategory,
       owners: [],
     };
     branch.owners.push(owner);
-    archiveKinds.set(parent.archiveKind, branch);
+    archiveCategories.set(parent.archiveCategory, branch);
   }
 
-  return { score: [...movements.values()], archive: [...archiveKinds.values()] };
+  return { score: [...movements.values()], archive: [...archiveCategories.values()] };
 }
 
 function GalleryIndexCard({
@@ -108,8 +108,8 @@ function GalleryIndexCard({
         transition="forward"
       >
         <CardBackdrop
-          scrim={gallery.previewThumbnailContentUrls.length ? "dark" : "brand"}
-          sources={gallery.previewThumbnailContentUrls}
+          scrim={gallery.previewUrls.length ? "dark" : "brand"}
+          sources={gallery.previewUrls}
         />
         <span
           className="relative z-10 mb-auto font-mono text-3xl font-black text-white/65 tabular-nums"
@@ -147,7 +147,7 @@ function GalleryBranch({
   const title =
     kind === "score"
       ? branch.name || t("score.untitledMovement")
-      : archiveKindLabel(branch.key as ArchiveKind, t);
+      : archiveCategoryLabel(branch.key as ArchiveCategory, t);
   const galleryCount = branch.owners.reduce((count, owner) => count + owner.galleries.length, 0);
 
   return (
@@ -157,7 +157,7 @@ function GalleryBranch({
     >
       <div className="mb-10 grid grid-cols-[minmax(0,1fr)_auto] items-end border-b-[3px] border-ink pb-4">
         <Eyebrow className="col-span-full">
-          {kind === "score" ? t("score.movement") : t("archive.kindEyebrow")}
+          {kind === "score" ? t("score.movement") : t("archive.categoryEyebrow")}
         </Eyebrow>
         <h3
           className="m-0 max-w-[24ch] text-[clamp(2rem,4vw,4rem)] leading-none font-black tracking-[-0.035em] uppercase"

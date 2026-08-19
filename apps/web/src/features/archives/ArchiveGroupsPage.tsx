@@ -3,7 +3,7 @@ import { useParams } from "react-router";
 import { getArchiveGroups } from "../../api/archives";
 import type { ArchiveGroupSummary } from "../../api/types";
 import { useUi } from "../../i18n";
-import { archiveKindLabel, requiredArchiveKind, requiredLocale } from "../../navigation";
+import { archiveCategoryLabel, requiredArchiveCategory, requiredLocale } from "../../navigation";
 import { CollectionControls, useCollectionIndex } from "../../shared/CollectionIndex";
 import { ArchivePage, BackLink, EmptyState, PageHeader } from "../../shared/Page";
 import { ArchiveGroupCard } from "./ArchiveCards";
@@ -16,16 +16,16 @@ export function ArchiveGroupsPage() {
   const { t } = useUi();
   const params = useParams();
   const locale = requiredLocale(params.locale);
-  const kind = requiredArchiveKind(params.kind);
-  const groups = use(getArchiveGroups(locale, kind));
+  const category = requiredArchiveCategory(params["archive-category"]);
+  const groups = use(getArchiveGroups(locale, category));
   const index = useCollectionIndex(groups, groupSearchValues);
-  const title = archiveKindLabel(kind, t);
+  const title = archiveCategoryLabel(category, t);
 
   return (
-    <ArchivePage description={t("archive.kindDescription", { name: title })} title={title}>
+    <ArchivePage description={t("archive.categoryDescription", { name: title })} title={title}>
       <BackLink to={`/${locale}/archives`}>{t("archive.backToArchives")}</BackLink>
       <PageHeader
-        eyebrow={t("archive.kindEyebrow")}
+        eyebrow={t("archive.categoryEyebrow")}
         meta={<span>{t("common.locale", { locale })}</span>}
         title={title}
       />

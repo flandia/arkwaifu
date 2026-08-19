@@ -19,8 +19,11 @@ import { ActionButton, ActionLink } from "./shared/ui/Action";
 import { Eyebrow } from "./shared/ui/Typography";
 
 const AboutPage = lazy(async () => ({ default: (await import("./features/about")).AboutPage }));
-const ArtDetailPage = lazy(async () => ({
-  default: (await import("./features/artwork/ArtDetailPage")).ArtDetailPage,
+const NarrativeImageAssetPage = lazy(async () => ({
+  default: (await import("./features/artwork/NarrativeImageAssetPage")).NarrativeImageAssetPage,
+}));
+const MaterialAssetDetailPage = lazy(async () => ({
+  default: (await import("./features/artwork/MaterialAssetDetailPage")).MaterialAssetDetailPage,
 }));
 const ArchiveGroupPage = lazy(async () => ({
   default: (await import("./features/archives/ArchiveGroupPage")).ArchiveGroupPage,
@@ -37,8 +40,8 @@ const ArchiveStoryPage = lazy(async () => ({
 const GalleryDetailPage = lazy(async () => ({
   default: (await import("./features/galleries/GalleryDetailPage")).GalleryDetailPage,
 }));
-const GalleryDisplayPage = lazy(async () => ({
-  default: (await import("./features/galleries/GalleryDisplayPage")).GalleryDisplayPage,
+const GalleryGroupPage = lazy(async () => ({
+  default: (await import("./features/galleries/GalleryGroupPage")).GalleryGroupPage,
 }));
 const GalleryIndexPage = lazy(async () => ({
   default: (await import("./features/galleries/GalleryIndexPage")).GalleryIndexPage,
@@ -50,14 +53,14 @@ const NotFoundPage = lazy(async () => ({
 const MovementPage = lazy(async () => ({
   default: (await import("./features/scores/MovementPage")).MovementPage,
 }));
-const MediaDetailPage = lazy(async () => ({
-  default: (await import("./features/media/MediaDetailPage")).MediaDetailPage,
+const NarrativeMediaAssetPage = lazy(async () => ({
+  default: (await import("./features/media/NarrativeMediaAssetPage")).NarrativeMediaAssetPage,
 }));
 const ScoreIndexPage = lazy(async () => ({
   default: (await import("./features/scores/ScoreIndexPage")).ScoreIndexPage,
 }));
-const ScoreSectionPage = lazy(async () => ({
-  default: (await import("./features/scores/ScoreSectionPage")).ScoreSectionPage,
+const SectionPage = lazy(async () => ({
+  default: (await import("./features/scores/SectionPage")).SectionPage,
 }));
 const ScoreStoryPage = lazy(async () => ({
   default: (await import("./features/scores/ScoreStoryPage")).ScoreStoryPage,
@@ -65,9 +68,26 @@ const ScoreStoryPage = lazy(async () => ({
 const SearchPage = lazy(async () => ({
   default: (await import("./features/search")).SearchPage,
 }));
-const UnreferencedArtPage = lazy(async () => ({
-  default: (await import("./features/artwork/UnreferencedArtPage")).UnreferencedArtPage,
+const OrphanNarrativeAssetsPage = lazy(async () => ({
+  default: (await import("./features/artwork/OrphanNarrativeAssetsPage")).OrphanNarrativeAssetsPage,
 }));
+const PresentationAssetCatalogPage = lazy(async () => ({
+  default: (await import("./features/presentation/PresentationAssetCatalogPage"))
+    .PresentationAssetCatalogPage,
+}));
+const PresentationAssetDetailPage = lazy(async () => ({
+  default: (await import("./features/presentation/PresentationAssetDetailPage"))
+    .PresentationAssetDetailPage,
+}));
+
+function NarrativeAssetPage() {
+  const category = useParams()["asset-category"];
+  return category === "audio" || category === "video" ? (
+    <NarrativeMediaAssetPage />
+  ) : (
+    <NarrativeImageAssetPage />
+  );
+}
 
 function preferredLocale(): Locale {
   try {
@@ -187,23 +207,34 @@ export default function App() {
         <Route element={<HomePage />} index />
         <Route element={<SearchPage />} path="search" />
         <Route element={<ScoreIndexPage />} path="scores" />
-        <Route element={<MovementPage />} path="scores/:movementID" />
-        <Route element={<ScoreSectionPage />} path="scores/:movementID/:sectionID" />
-        <Route element={<ScoreStoryPage />} path="scores/:movementID/:sectionID/:storyID" />
+        <Route element={<MovementPage />} path="scores/:movement-id" />
+        <Route element={<SectionPage />} path="scores/:movement-id/:section-id" />
+        <Route element={<ScoreStoryPage />} path="scores/:movement-id/:section-id/:story-id" />
         <Route element={<ArchiveIndexPage />} path="archives" />
-        <Route element={<ArchiveGroupsPage />} path="archives/:kind" />
-        <Route element={<ArchiveGroupPage />} path="archives/:kind/:groupID" />
-        <Route element={<ArchiveStoryPage />} path="archives/:kind/:groupID/:storyID" />
-        <Route element={<GalleryIndexPage />} path="galleries" />
-        <Route element={<GalleryDetailPage />} path="galleries/:galleryID" />
+        <Route element={<ArchiveGroupsPage />} path="archives/:archive-category" />
+        <Route element={<ArchiveGroupPage />} path="archives/:archive-category/:group-id" />
         <Route
-          element={<GalleryDisplayPage />}
-          path="galleries/:galleryID/displays/:displayID/:cgID"
+          element={<ArchiveStoryPage />}
+          path="archives/:archive-category/:group-id/:story-id"
         />
-        <Route element={<GalleryDisplayPage />} path="galleries/:galleryID/displays/:displayID" />
-        <Route element={<UnreferencedArtPage />} path="unreferenced" />
-        <Route element={<ArtDetailPage />} path="art/:category/:artID" />
-        <Route element={<MediaDetailPage />} path="media/:kind/:mediaID" />
+        <Route element={<GalleryIndexPage />} path="galleries" />
+        <Route element={<GalleryDetailPage />} path="galleries/:gallery-id" />
+        <Route
+          element={<GalleryGroupPage />}
+          path="galleries/:gallery-id/groups/:group-id/:reference-id"
+        />
+        <Route element={<GalleryGroupPage />} path="galleries/:gallery-id/groups/:group-id" />
+        <Route element={<OrphanNarrativeAssetsPage />} path="orphans" />
+        <Route element={<PresentationAssetCatalogPage />} path="assets/presentation" />
+        <Route
+          element={<PresentationAssetDetailPage />}
+          path="assets/presentation/:asset-category/:asset-id"
+        />
+        <Route element={<NarrativeAssetPage />} path="assets/narrative/:asset-category/:asset-id" />
+        <Route
+          element={<MaterialAssetDetailPage />}
+          path="assets/material/:asset-category/:asset-id"
+        />
         <Route element={<AboutPage />} path="about" />
         <Route element={<NotFoundPage />} path="*" />
       </Route>

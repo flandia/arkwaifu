@@ -1,24 +1,24 @@
 import type { CSSProperties } from "react";
-import type { Locale, ScoreSectionSummary, ScoreSplit } from "../../api/types";
+import type { Locale, SectionSummary, MovementDivider } from "../../api/types";
 import { useUi } from "../../i18n";
 import { localeLanguageTag, TransitionLink } from "../../navigation";
 import { Eyebrow } from "../../shared/ui/Typography";
 import { ScoreBackdrop, ScoreImageAsset } from "../hierarchy/ScoreVisual";
 
-function imageRatio(section: ScoreSectionSummary): CSSProperties {
+function imageRatio(section: SectionSummary): CSSProperties {
   const image = section.keyVisual?.image;
   return image ? { aspectRatio: `${image.width} / ${image.height}` } : { aspectRatio: "4 / 3" };
 }
 
-export function ScoreSplitCard({ split }: { split: ScoreSplit }) {
+export function MovementDividerCard({ divider }: { divider: MovementDivider }) {
   const { t } = useUi();
-  const video = split.video?.video;
+  const video = divider.video?.video;
   return (
     <li
       className="relative overflow-hidden bg-black text-white [contain-intrinsic-block-size:auto_31rem] [content-visibility:auto]"
       style={{ aspectRatio: video ? `${video.width} / ${video.height}` : "50 / 31" }}
     >
-      <ScoreBackdrop image={null} video={split.video} viewportGated />
+      <ScoreBackdrop image={null} video={divider.video} viewportGated />
       <span
         className="absolute inset-0 bg-gradient-to-tr from-black/90 via-black/20 to-transparent"
         aria-hidden="true"
@@ -26,13 +26,13 @@ export function ScoreSplitCard({ split }: { split: ScoreSplit }) {
       <div className="absolute right-0 bottom-0 left-0 z-10 flex items-end gap-5 p-[clamp(1.25rem,4vw,3.5rem)]">
         <ScoreImageAsset
           alt=""
-          asset={split.icon}
+          asset={divider.icon}
           className="max-h-24 max-w-[min(38%,12rem)] object-contain object-left-bottom drop-shadow-xl"
         />
         <div>
-          <Eyebrow className="text-white/70">{t("score.interlude")}</Eyebrow>
+          <Eyebrow className="text-white/70">{t("score.divider")}</Eyebrow>
           <h2 className="m-0 text-[clamp(1.5rem,4vw,4rem)] leading-none font-black tracking-tight uppercase">
-            {split.subName || t("score.untitledSplit")}
+            {divider.subName || t("score.untitledDivider")}
           </h2>
         </div>
       </div>
@@ -47,7 +47,7 @@ export function MainThemeSectionRow({
 }: {
   locale: Locale;
   movementID: string;
-  section: ScoreSectionSummary;
+  section: SectionSummary;
 }) {
   const { t } = useUi();
   const language = localeLanguageTag(locale);
@@ -101,14 +101,14 @@ export function MainThemeSectionRow({
   );
 }
 
-export function ScoreSectionCard({
+export function SectionCard({
   locale,
   movementID,
   section,
 }: {
   locale: Locale;
   movementID: string;
-  section: ScoreSectionSummary;
+  section: SectionSummary;
 }) {
   const { t } = useUi();
   const language = localeLanguageTag(locale);
