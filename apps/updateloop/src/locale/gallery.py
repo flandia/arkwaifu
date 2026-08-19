@@ -556,7 +556,7 @@ def _movement_collection_id(section_id: str) -> str:
 
 
 def _unique_id(base: str, used: set[str]) -> str:
-    candidate = base
+    candidate = base.lower()
     suffix = 2
     while candidate in used:
         candidate = f"{base}_{suffix}"
