@@ -16,7 +16,7 @@ const apiBaseUrl = resolveApiBaseUrl(
   import.meta.env.VITE_API_BASE_URL,
   typeof window === "undefined" ? undefined : window.location.hostname,
 );
-const requestTimeoutMs = 15_000;
+const requestTimeoutMs = 2 * 60_000;
 
 const requests = new LRUCache<string, Promise<unknown>>({
   max: 256,

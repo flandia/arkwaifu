@@ -252,6 +252,15 @@ describe("archive helpers", () => {
 });
 
 describe("archive API client", () => {
+  it("allows archive requests two minutes to complete", async () => {
+    const timeout = spyOn(AbortSignal, "timeout");
+    spyOn(globalThis, "fetch").mockResolvedValue(jsonResponse(artworkResponse));
+
+    await getNarrativeImageAsset("character", reference.asset.id);
+
+    expect(timeout).toHaveBeenCalledWith(120_000);
+  });
+
   it("loads independently addressable media resources", async () => {
     const fetch = spyOn(globalThis, "fetch")
       .mockResolvedValueOnce(jsonResponse(mediaDetail))
