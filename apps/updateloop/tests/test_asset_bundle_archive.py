@@ -64,13 +64,31 @@ def _mock_artwork_client(
     )
 
 
-def test_archive_manifest_rejects_short_digest():
+def test_archive_manifest_accepts_short_anon_digest():
+    resources = UpstreamArtworkBuilder._parse_all_resources(
+        {
+            "abInfos": [
+                {
+                    "name": "anon/f97e80db75bb062d98254cfb40e2d578.bin",
+                    "md5": "26A8",
+                }
+            ]
+        },
+        "v1",
+    )
+
+    assert [(resource.name, resource.md5) for resource in resources] == [
+        ("anon/f97e80db75bb062d98254cfb40e2d578.bin", "26a8")
+    ]
+
+
+def test_archive_manifest_rejects_short_digest_for_other_resources():
     with pytest.raises(ValueError, match="invalid MD5"):
         UpstreamArtworkBuilder._parse_all_resources(
             {
                 "abInfos": [
                     {
-                        "name": "anon/f97e80db75bb062d98254cfb40e2d578.bin",
+                        "name": "avg/bg/example.ab",
                         "md5": "26A8",
                     }
                 ]

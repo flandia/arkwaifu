@@ -971,8 +971,15 @@ class UpstreamArtworkBuilder:
 
     @staticmethod
     def _parse_md5(value: object, version: str, name: str) -> str:
-        if not isinstance(value, str) or not re.fullmatch(r"[0-9A-Fa-f]{32}", value):
+        valid_full_md5 = isinstance(value, str) and re.fullmatch(r"[0-9A-Fa-f]{32}", value)
+        valid_anon_digest = (
+            fnmatch.fnmatchcase(name, "anon/*.bin")
+            and isinstance(value, str)
+            and re.fullmatch(r"[0-9A-Fa-f]{4}", value)
+        )
+        if not valid_full_md5 and not valid_anon_digest:
             raise ValueError(f"resource list entry has an invalid MD5: {version}:{name}")
+        assert isinstance(value, str)
         return value.lower()
 
     @staticmethod
@@ -1455,6 +1462,8 @@ class UpstreamArtworkBuilder:
 
         with zipfile.ZipFile(path) as archive:
             digest = _archive_member_md5(archive, resource.name)
+        if len(resource.md5) == 4:
+            return
         if digest != resource.md5:
             raise ValueError(
                 f"MD5 mismatch for {resource.name}: expected {resource.md5}, got {digest}"
@@ -1480,6 +1489,8 @@ class UpstreamArtworkBuilder:
             while chunk := source.read(1024 * 1024):
                 digest.update(chunk)
         actual = digest.hexdigest()
+        if len(resource.md5) == 4:
+            return bundle
         if actual != resource.md5:
             raise ValueError(
                 f"MD5 mismatch for {resource.name}: expected {resource.md5}, got {actual}"
