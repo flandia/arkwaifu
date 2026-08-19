@@ -6,6 +6,10 @@ This package runs the OCaml 5.5 Dream read service. It downloads the published `
 
 The service reads published data and returns JavaScript Object Notation (JSON) metadata. It does not download game data, write database rows, process images, or require updater and object-store credentials.
 
+Rebuild the service image whenever the reader or updater-owned schema changes. The
+service image workflow runs its contract test against `apps/updateloop/src/arkwaifu.sql`
+before publishing the image consumed by App Platform.
+
 The service returns direct public Uniform Resource Locators (URLs) for images and thumbnails. It has no image content or redirect endpoints, so browsers fetch image bytes from the bucket or content delivery network (CDN).
 
 `GET /sitemap.txt` renders the website's text sitemap from the current SQLite generation. The main website's `robots.txt` may reference this cross-origin URL; a successful database refresh updates subsequent sitemap responses without a web rebuild.
