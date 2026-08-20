@@ -95,7 +95,7 @@ _ARTWORK_STAGE_FORMATS = {
     "fetched": "1",
     "unwrapped": "1",
     "extracted": "5",
-    "rendered": "9",
+    "rendered": "10",
 }
 _LOGGER = logging.getLogger(__name__)
 

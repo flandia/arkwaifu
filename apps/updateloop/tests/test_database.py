@@ -372,6 +372,13 @@ def test_gallery_writer_constraints_cascade_and_missing_panel_artwork(tmp_path):
         assert connection.execute(
             "SELECT kind, entry_id FROM search_entries ORDER BY kind, entry_id"
         ).fetchall() == [("gallery", "gallery")]
+        connection.execute(
+            "INSERT INTO gallery_groups VALUES "
+            "('CN', 'gallery', 'RawGroup', 1, 'Raw', '', NULL, NULL)"
+        )
+        assert connection.execute(
+            "SELECT group_id FROM gallery_groups WHERE group_id = 'RawGroup'"
+        ).fetchone() == ("RawGroup",)
 
     assert find_missing_artwork_references(path) == ("background/top/bottom",)
     with sqlite3.connect(path) as connection:

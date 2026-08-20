@@ -374,8 +374,7 @@ CREATE INDEX galleries_by_collection
 CREATE TABLE gallery_groups (
     locale TEXT NOT NULL,
     gallery_id TEXT NOT NULL,
-    group_id TEXT NOT NULL
-        CHECK (length(group_id) > 0 AND group_id = lower(group_id)),
+    group_id TEXT NOT NULL CHECK (length(group_id) > 0),
     position INTEGER NOT NULL CHECK (position >= 0),
     name TEXT NOT NULL,
     description TEXT NOT NULL,

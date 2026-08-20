@@ -51,6 +51,16 @@ def test_picture_png_bytes_are_preserved(tmp_path: Path):
     assert manifest.artworks[0].image.content == expected
 
 
+def test_picture_identity_uses_unity_object_name(tmp_path: Path):
+    picture = tmp_path / "assets/torappu/dynamicassets/avg/images/21_i1.png"
+    write_png(picture, (1, 2, 3, 255))
+    write_json(picture.with_suffix(".Texture2D.json"), {"m_Name": "21_I1"})
+
+    manifest = build_artwork_manifest(tmp_path, "v1")
+
+    assert [artwork.id for artwork in manifest.artworks] == ["21_I1"]
+
+
 def test_picture_identity_includes_category(tmp_path: Path):
     write_png(
         tmp_path / "assets/torappu/dynamicassets/avg/images/shared.png",

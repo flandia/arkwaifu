@@ -61,18 +61,14 @@ def test_missing_legacy_detail_falls_back_to_story_set(tmp_path: Path):
     assert galleries[0].groups[0].artworks[0].asset_id == "asset1"
 
 
-def test_legacy_gallery_group_ids_are_lowercase(tmp_path: Path):
+def test_legacy_gallery_group_ids_preserve_source_case(tmp_path: Path):
     _base(tmp_path)
     _write(
         tmp_path,
         "story_review_meta_table.json",
         {
-            "actArchiveResData": {
-                "pics": {"kv1": {"id": "KV1", "assetPath": "asset1"}}
-            },
-            "actArchiveData": {
-                "components": {"act1": {"pic": {"pics": [{"picId": "KV1"}]}}}
-            },
+            "actArchiveResData": {"pics": {"kv1": {"id": "KV1", "assetPath": "asset1"}}},
+            "actArchiveData": {"components": {"act1": {"pic": {"pics": [{"picId": "KV1"}]}}}},
         },
     )
     _write(tmp_path, "retro_table.json", {"retroActList": {}})
@@ -88,7 +84,7 @@ def test_legacy_gallery_group_ids_are_lowercase(tmp_path: Path):
 
     galleries = parse_galleries(tmp_path)
 
-    assert galleries[0].groups[0].id == "kv1_legacy"
+    assert galleries[0].groups[0].id == "KV1_legacy"
 
 
 def test_current_cg_schema_merges_legacy_and_new_entries(tmp_path: Path):

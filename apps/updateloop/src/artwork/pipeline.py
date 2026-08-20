@@ -209,16 +209,29 @@ def _scan_character(directory: Path) -> tuple[_Body, ...]:
 def _picture_records(extracted_root: Path) -> list[ArtworkRecord]:
     """Read picture artworks, which need no processing beyond PNG validation."""
 
+    def asset_id(path: Path) -> str:
+        """Use Unity's logical object name instead of the normalized filename."""
+
+        for suffix in (".Texture2D.json", ".Sprite.json"):
+            sidecar = path.with_suffix(suffix)
+            if not sidecar.is_file():
+                continue
+            payload = _read_json(sidecar)
+            object_name = payload.get("m_Name") if isinstance(payload, dict) else None
+            if isinstance(object_name, str) and object_name:
+                return object_name
+        return path.stem
+
     records: list[ArtworkRecord] = []
     for subdirectory, category in _PICTURE_CATEGORIES.items():
         directory = extracted_root / _AVG_ROOT / subdirectory
         if not directory.is_dir():
             continue
         for path in sorted(directory.glob("*.png")):
-            asset_id = path.stem
+            logical_id = asset_id(path)
             records.append(
                 ArtworkRecord(
-                    id=asset_id,
+                    id=logical_id,
                     category=category,
                     image=PngArtifact.from_bytes(path.read_bytes()),
                 )
