@@ -708,3 +708,34 @@ def test_complete_artwork_counts_collapsed_case_variants_as_removals(tmp_path):
             score_video_keys={},
             complete_artwork=True,
         )
+
+
+def test_complete_artwork_accepts_a_bounded_removal(tmp_path):
+    path = tmp_path / "arkwaifu.sqlite3"
+    initialize_or_validate(path)
+    image = PngArtifact.from_image(Image.new("RGBA", (1, 1)))
+    initial = ArtworkManifest(
+        "art-v1",
+        tuple(ArtworkRecord(f"asset-{index}", "illustration", image) for index in range(100)),
+        (),
+    )
+    replacement = ArtworkManifest("art-v2", initial.artworks[:91], ())
+
+    for manifest in (initial, replacement):
+        apply_changes(
+            path,
+            (manifest,),
+            artwork_keys={
+                (artwork.category, artwork.id): (
+                    f"ART/{manifest.upstream_version}/{artwork.id}.png"
+                )
+                for artwork in manifest.artworks
+            },
+            source_layer_keys={},
+            score_asset_keys={},
+            score_video_keys={},
+            complete_artwork=manifest is replacement,
+        )
+
+    with sqlite3.connect(path) as connection:
+        assert connection.execute("SELECT count(*) FROM narrative_image_assets").fetchone()[0] == 91

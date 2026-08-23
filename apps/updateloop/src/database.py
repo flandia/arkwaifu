@@ -14,7 +14,7 @@ SCHEMA_VERSION = 2
 _NARRATIVE_IMAGE_REFERENCE_INDEX = "story_narrative_image_references_by_asset"
 _NARRATIVE_IMAGE_REFERENCE_INDEX_COLUMNS = ("locale", "category", "asset_id")
 _COMPLETE_ARTWORK_MIN_REMOVAL_ALLOWANCE = 5
-_COMPLETE_ARTWORK_REMOVAL_DIVISOR = 100
+_COMPLETE_ARTWORK_REMOVAL_DIVISOR = 10
 
 
 def _connect(path: Path) -> sqlite3.Connection:
