@@ -13,6 +13,8 @@ from .domain import ArtworkManifest, FileAudioArtifact, FileVideoArtifact, Local
 SCHEMA_VERSION = 2
 _NARRATIVE_IMAGE_REFERENCE_INDEX = "story_narrative_image_references_by_asset"
 _NARRATIVE_IMAGE_REFERENCE_INDEX_COLUMNS = ("locale", "category", "asset_id")
+_COMPLETE_ARTWORK_MIN_REMOVAL_ALLOWANCE = 5
+_COMPLETE_ARTWORK_REMOVAL_DIVISOR = 100
 
 
 def _connect(path: Path) -> sqlite3.Connection:
@@ -103,6 +105,7 @@ def apply_changes(
     score_asset_keys: Mapping[tuple[str, str], str],
     score_video_keys: Mapping[str, str],
     media_keys: Mapping[tuple[str, str], str] | None = None,
+    complete_artwork: bool = False,
 ) -> frozenset[str]:
     """Apply all manifests atomically and return every referenced object key."""
 
@@ -120,10 +123,12 @@ def apply_changes(
                         score_asset_keys,
                         score_video_keys,
                         media_keys or {},
+                        complete_artwork,
                     )
             for manifest in manifests:
                 if isinstance(manifest, LocaleManifest):
                     _replace_locale(connection, manifest)
+            _resolve_case_insensitive_asset_references(connection)
             _rebuild_search_entries(connection)
             connection.execute("COMMIT")
         except BaseException:
@@ -145,6 +150,178 @@ def apply_changes(
         connection.close()
 
 
+def _resolve_case_insensitive_asset_references(connection: sqlite3.Connection) -> None:
+    """Point upstream case variants at the one available resource identity."""
+
+    for reference_table in (
+        "story_narrative_image_references",
+        "gallery_narrative_asset_references",
+    ):
+        connection.execute(
+            f"""
+            UPDATE {reference_table} AS reference
+            SET asset_id = (
+                SELECT asset.asset_id
+                FROM narrative_image_assets AS asset
+                WHERE asset.category = reference.category
+                  AND asset.asset_id COLLATE NOCASE = reference.asset_id COLLATE NOCASE
+            )
+            WHERE NOT EXISTS (
+                SELECT 1 FROM narrative_image_assets AS asset
+                WHERE asset.category = reference.category
+                  AND asset.asset_id = reference.asset_id
+            )
+              AND 1 = (
+                SELECT COUNT(*) FROM narrative_image_assets AS asset
+                WHERE asset.category = reference.category
+                  AND asset.asset_id COLLATE NOCASE = reference.asset_id COLLATE NOCASE
+              )
+            """
+        )
+    connection.execute(
+        """
+        UPDATE story_narrative_media_references AS reference
+        SET asset_id = (
+            SELECT asset.asset_id
+            FROM narrative_media_assets AS asset
+            WHERE asset.category = reference.category
+              AND asset.asset_id COLLATE NOCASE = reference.asset_id COLLATE NOCASE
+        )
+        WHERE NOT EXISTS (
+            SELECT 1 FROM narrative_media_assets AS asset
+            WHERE asset.category = reference.category
+              AND asset.asset_id = reference.asset_id
+        )
+          AND 1 = (
+            SELECT COUNT(*) FROM narrative_media_assets AS asset
+            WHERE asset.category = reference.category
+              AND asset.asset_id COLLATE NOCASE = reference.asset_id COLLATE NOCASE
+          )
+        """
+    )
+    for table, column, category in (
+        ("movements", "icon_asset_id", "icon"),
+        ("movements", "logo_asset_id", "logo"),
+        ("movements", "background_asset_id", "background"),
+        ("sections", "key_visual_asset_id", "key-visual"),
+        ("sections", "title_asset_id", "title"),
+        ("sections", "background_asset_id", "background"),
+        ("sections", "decoration_asset_id", "decoration"),
+        ("sections", "retro_background_asset_id", "retro-background"),
+        ("movement_locations", "divider_icon_asset_id", "divider"),
+    ):
+        connection.execute(
+            f"""
+            UPDATE {table} AS reference
+            SET {column} = (
+                SELECT asset.asset_id
+                FROM presentation_image_assets AS asset
+                WHERE asset.category = ?
+                  AND asset.asset_id COLLATE NOCASE = reference.{column} COLLATE NOCASE
+            )
+            WHERE reference.{column} IS NOT NULL
+              AND NOT EXISTS (
+                SELECT 1 FROM presentation_image_assets AS asset
+                WHERE asset.category = ? AND asset.asset_id = reference.{column}
+              )
+              AND 1 = (
+                SELECT COUNT(*) FROM presentation_image_assets AS asset
+                WHERE asset.category = ?
+                  AND asset.asset_id COLLATE NOCASE = reference.{column} COLLATE NOCASE
+              )
+            """,
+            (category, category, category),
+        )
+
+
+def _validate_complete_artwork_candidates(connection: sqlite3.Connection) -> None:
+    """Reject an empty or implausibly destructive authoritative artwork snapshot."""
+
+    tables = (
+        ("narrative_image_assets", "candidate_narrative_image_assets"),
+        ("material_assets", "candidate_material_assets"),
+        ("presentation_image_assets", "candidate_presentation_image_assets"),
+        ("presentation_video_assets", "candidate_presentation_video_assets"),
+        ("narrative_media_assets", "candidate_narrative_media_assets"),
+    )
+    candidate_total = sum(
+        int(connection.execute(f"SELECT count(*) FROM {candidate}").fetchone()[0])
+        for _, candidate in tables
+    )
+    if candidate_total == 0:
+        raise ValueError("complete artwork manifest contains no assets")
+
+    def validate_removals(label: str, existing: int, removed: int) -> None:
+        allowance = max(
+            _COMPLETE_ARTWORK_MIN_REMOVAL_ALLOWANCE,
+            (existing + _COMPLETE_ARTWORK_REMOVAL_DIVISOR - 1) // _COMPLETE_ARTWORK_REMOVAL_DIVISOR,
+        )
+        if removed > allowance:
+            raise ValueError(
+                "complete artwork manifest would remove too many rows from "
+                f"{label}: existing={existing}, removed={removed}, allowance={allowance}"
+            )
+
+    for existing_table, candidate_table in tables:
+        existing = int(connection.execute(f"SELECT count(*) FROM {existing_table}").fetchone()[0])
+        candidate = int(connection.execute(f"SELECT count(*) FROM {candidate_table}").fetchone()[0])
+        if existing and not candidate and existing_table != "material_assets":
+            raise ValueError(
+                f"complete artwork manifest would remove every row from {existing_table}"
+            )
+
+        existing_categories = {
+            str(category): int(count)
+            for category, count in connection.execute(
+                f"SELECT category, count(*) FROM {existing_table} GROUP BY category"
+            )
+        }
+        candidate_categories = {
+            str(category): int(count)
+            for category, count in connection.execute(
+                f"SELECT category, count(*) FROM {candidate_table} GROUP BY category"
+            )
+        }
+        removed_categories = {
+            str(category): int(count)
+            for category, count in connection.execute(
+                f"""
+                WITH existing_identities AS (
+                    SELECT category, asset_id COLLATE NOCASE AS asset_id, count(*) AS row_count
+                    FROM {existing_table}
+                    GROUP BY category, asset_id COLLATE NOCASE
+                ),
+                candidate_identities AS (
+                    SELECT category, asset_id COLLATE NOCASE AS asset_id, count(*) AS row_count
+                    FROM {candidate_table}
+                    GROUP BY category, asset_id COLLATE NOCASE
+                )
+                SELECT existing.category,
+                       sum(existing.row_count - coalesce(candidate.row_count, 0))
+                FROM existing_identities AS existing
+                LEFT JOIN candidate_identities AS candidate
+                  ON candidate.category = existing.category
+                 AND candidate.asset_id COLLATE NOCASE = existing.asset_id COLLATE NOCASE
+                WHERE existing.row_count > coalesce(candidate.row_count, 0)
+                GROUP BY existing.category
+                """
+            )
+        }
+        validate_removals(existing_table, existing, sum(removed_categories.values()))
+        for category, existing_count in existing_categories.items():
+            candidate_count = candidate_categories.get(category, 0)
+            if existing_count and not candidate_count and existing_table != "material_assets":
+                raise ValueError(
+                    "complete artwork manifest would remove every row from "
+                    f"{existing_table}[{category}]"
+                )
+            validate_removals(
+                f"{existing_table}[{category}]",
+                existing_count,
+                removed_categories.get(category, 0),
+            )
+
+
 def _apply_artwork(
     connection: sqlite3.Connection,
     manifest: ArtworkManifest,
@@ -153,6 +330,7 @@ def _apply_artwork(
     score_asset_keys: Mapping[tuple[str, str], str],
     score_video_keys: Mapping[str, str],
     media_keys: Mapping[tuple[str, str], str],
+    complete: bool,
 ) -> None:
     connection.execute(
         """
@@ -370,6 +548,66 @@ def _apply_artwork(
             for video in manifest.score_videos
         ),
     )
+    if complete:
+        _validate_complete_artwork_candidates(connection)
+    connection.execute(
+        """
+        DELETE FROM narrative_asset_material_references
+        WHERE (category, asset_id) IN (SELECT category, asset_id FROM candidate_narrative_image_assets)
+        """
+    )
+
+    if complete:
+        connection.execute(
+            """
+            DELETE FROM narrative_image_assets
+            WHERE NOT EXISTS (
+                SELECT 1 FROM candidate_narrative_image_assets AS candidate
+                WHERE candidate.category = narrative_image_assets.category
+                  AND candidate.asset_id = narrative_image_assets.asset_id
+            )
+            """
+        )
+        connection.execute(
+            """
+            DELETE FROM material_assets
+            WHERE NOT EXISTS (
+                SELECT 1 FROM candidate_material_assets AS candidate
+                WHERE candidate.category = material_assets.category
+                  AND candidate.asset_id = material_assets.asset_id
+            )
+            """
+        )
+        connection.execute(
+            """
+            DELETE FROM presentation_image_assets
+            WHERE NOT EXISTS (
+                SELECT 1 FROM candidate_presentation_image_assets AS candidate
+                WHERE candidate.category = presentation_image_assets.category
+                  AND candidate.asset_id = presentation_image_assets.asset_id
+            )
+            """
+        )
+        connection.execute(
+            """
+            DELETE FROM presentation_video_assets
+            WHERE NOT EXISTS (
+                SELECT 1 FROM candidate_presentation_video_assets AS candidate
+                WHERE candidate.category = presentation_video_assets.category
+                  AND candidate.asset_id = presentation_video_assets.asset_id
+            )
+            """
+        )
+        connection.execute(
+            """
+            DELETE FROM narrative_media_assets
+            WHERE NOT EXISTS (
+                SELECT 1 FROM candidate_narrative_media_assets AS candidate
+                WHERE candidate.category = narrative_media_assets.category
+                  AND candidate.asset_id = narrative_media_assets.asset_id
+            )
+            """
+        )
 
     connection.execute(
         """
@@ -432,12 +670,6 @@ def _apply_artwork(
             frame_rate_numerator = excluded.frame_rate_numerator,
             frame_rate_denominator = excluded.frame_rate_denominator,
             frame_count = excluded.frame_count
-        """
-    )
-    connection.execute(
-        """
-        DELETE FROM narrative_asset_material_references
-        WHERE (category, asset_id) IN (SELECT category, asset_id FROM candidate_narrative_image_assets)
         """
     )
     connection.execute(

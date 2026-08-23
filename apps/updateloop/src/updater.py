@@ -370,6 +370,10 @@ class Updater:
                         score_asset_keys=score_asset_keys,
                         score_video_keys=score_video_keys,
                         media_keys=media_keys,
+                        complete_artwork=any(
+                            request.unit == "artwork" and request.complete
+                            for request in changed_requests
+                        ),
                     )
                 )
             except Exception:

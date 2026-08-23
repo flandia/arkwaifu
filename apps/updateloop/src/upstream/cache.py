@@ -27,7 +27,7 @@ from typing import BinaryIO
 
 from ..asyncio_tools import await_owned
 
-_VERSION_COMPONENT = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,199}")
+_NAMESPACE_COMPONENT = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,199}")
 _MARKER = ".arkwaifu-cache.json"
 
 FileProducer = Callable[[Path], Awaitable[None]]
@@ -136,7 +136,7 @@ def _canonical_path(path: Path) -> str:
 
 
 class UpstreamCache:
-    """Store validated upstream files and completed trees under one version.
+    """Store validated upstream files and completed trees under one namespace.
 
     The cache materializes and replaces entries. Callers define each producer, validator, and format fingerprint.
     """
@@ -154,7 +154,7 @@ class UpstreamCache:
 
     async def file(
         self,
-        version: str,
+        namespace: str,
         relative: PurePath,
         producer: FileProducer,
         validator: FileValidator,
@@ -169,7 +169,7 @@ class UpstreamCache:
         callers to report caching without guessing from path existence.
         """
 
-        destination = self._path(version, relative)
+        destination = self._path(namespace, relative)
         async with self._locked(destination):
             if destination.is_file():
                 try:
@@ -199,7 +199,7 @@ class UpstreamCache:
 
     async def directory(
         self,
-        version: str,
+        namespace: str,
         relative: PurePath,
         fingerprint: str,
         producer: DirectoryProducer,
@@ -215,7 +215,7 @@ class UpstreamCache:
         only after the marker and optional validator both accept an existing tree.
         """
 
-        destination = self._path(version, relative)
+        destination = self._path(namespace, relative)
         async with self._locked(destination):
             marker = destination / _MARKER
             if self._marker_matches(marker, fingerprint):
@@ -267,14 +267,14 @@ class UpstreamCache:
                 if temporary.exists():
                     await await_owned(asyncio.to_thread(_remove_cache_entry, temporary))
 
-    def _path(self, version: str, relative: PurePath) -> Path:
-        """Resolve an entry while confining it below ``root/version``."""
+    def _path(self, namespace: str, relative: PurePath) -> Path:
+        """Resolve an entry while confining it below ``root/namespace``."""
 
-        if not _VERSION_COMPONENT.fullmatch(version):
-            raise ValueError(f"unsafe upstream version for cache path: {version!r}")
+        if not _NAMESPACE_COMPONENT.fullmatch(namespace):
+            raise ValueError(f"unsafe cache namespace: {namespace!r}")
         if relative.is_absolute() or not relative.parts or ".." in relative.parts:
             raise ValueError(f"unsafe relative cache path: {relative}")
-        destination = self._root / version / Path(*relative.parts)
+        destination = self._root / namespace / Path(*relative.parts)
         root = _canonical_path(self._root)
         candidate = _canonical_path(destination)
         try:

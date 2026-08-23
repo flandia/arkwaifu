@@ -365,13 +365,13 @@ async def test_cancelling_cross_process_lock_wait_does_not_leak_the_lock(tmp_pat
 
 
 @pytest.mark.asyncio
-async def test_cache_rejects_unsafe_version_and_relative_paths(tmp_path: Path):
+async def test_cache_rejects_unsafe_namespace_and_relative_paths(tmp_path: Path):
     cache = UpstreamCache(tmp_path / ".cache")
 
     async def produce(destination: Path) -> None:
         destination.write_bytes(b"value")
 
-    with pytest.raises(ValueError, match="unsafe upstream version"):
+    with pytest.raises(ValueError, match="unsafe cache namespace"):
         await cache.file("../escape", PurePosixPath("value"), produce, lambda _path: None)
 
     with pytest.raises(ValueError, match="unsafe relative cache path"):

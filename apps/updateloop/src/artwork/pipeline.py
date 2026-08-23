@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 import logging
 import math
+import os
 import shutil
 from collections.abc import Sequence
 from dataclasses import dataclass
@@ -100,6 +101,20 @@ def _read_json(path: Path) -> Any:
         return json.loads(path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as error:
         raise ValueError(f"cannot read {path}: {error}") from error
+
+
+def _logical_image_id(path: Path) -> str:
+    """Use Unity's logical object name instead of the normalized filename."""
+
+    for suffix in (".Texture2D.json", ".Sprite.json"):
+        sidecar = path.with_suffix(suffix)
+        if not sidecar.is_file():
+            continue
+        payload = _read_json(sidecar)
+        object_name = payload.get("m_Name") if isinstance(payload, dict) else None
+        if isinstance(object_name, str) and object_name:
+            return object_name
+    return path.stem
 
 
 def _logical_image(directory: Path, sprite: _Sprite) -> Image.Image | None:
@@ -209,26 +224,13 @@ def _scan_character(directory: Path) -> tuple[_Body, ...]:
 def _picture_records(extracted_root: Path) -> list[ArtworkRecord]:
     """Read picture artworks, which need no processing beyond PNG validation."""
 
-    def asset_id(path: Path) -> str:
-        """Use Unity's logical object name instead of the normalized filename."""
-
-        for suffix in (".Texture2D.json", ".Sprite.json"):
-            sidecar = path.with_suffix(suffix)
-            if not sidecar.is_file():
-                continue
-            payload = _read_json(sidecar)
-            object_name = payload.get("m_Name") if isinstance(payload, dict) else None
-            if isinstance(object_name, str) and object_name:
-                return object_name
-        return path.stem
-
     records: list[ArtworkRecord] = []
     for subdirectory, category in _PICTURE_CATEGORIES.items():
         directory = extracted_root / _AVG_ROOT / subdirectory
         if not directory.is_dir():
             continue
         for path in sorted(directory.glob("*.png")):
-            logical_id = asset_id(path)
+            logical_id = _logical_image_id(path)
             records.append(
                 ArtworkRecord(
                     id=logical_id,
@@ -415,7 +417,7 @@ def _score_asset_records(extracted_root: Path) -> list[ScoreAssetRecord]:
         for path in sorted(directory.glob("*.png")):
             records.append(
                 ScoreAssetRecord(
-                    id=path.stem,
+                    id=_logical_image_id(path),
                     kind=kind,
                     image=PngArtifact.from_bytes(path.read_bytes()),
                 )
@@ -684,10 +686,19 @@ def merge_artwork_manifests(
     )
 
 
+def _link_or_copy(source: Path, destination: Path) -> None:
+    """Reuse immutable file data on one volume, copying when links are unavailable."""
+
+    try:
+        os.link(source, destination)
+    except OSError:
+        shutil.copyfile(source, destination)
+
+
 def write_artwork_manifest(manifest: ArtworkManifest, destination: Path) -> None:
     """Persist one cache manifest and its ordinal PNG files.
 
-    Ordinal names keep the cache layout independent from upstream identifiers. The function writes ``manifest.json`` after every image. Each cache entry belongs to one upstream version, so records inherit the manifest's ``upstream_version``.
+    Ordinal names keep the cache layout independent from upstream identifiers. The function writes ``manifest.json`` after every image. A shared cache entry is rebound to its contributing upstream version when it is read.
     """
     processed = destination / "processed"
     processed.mkdir(parents=True, exist_ok=True)
@@ -704,7 +715,7 @@ def write_artwork_manifest(manifest: ArtworkManifest, destination: Path) -> None
         if artifact.path is None:
             output.write_bytes(artifact.content)
         elif artifact.path != output.resolve():
-            shutil.copyfile(artifact.path, output)
+            _link_or_copy(artifact.path, output)
         return relative
 
     def persist_video(artifact: FileVideoArtifact) -> str:
@@ -713,7 +724,7 @@ def write_artwork_manifest(manifest: ArtworkManifest, destination: Path) -> None
         next_video_index += 1
         output = destination / Path(relative)
         if artifact.path != output.resolve():
-            shutil.copyfile(artifact.path, output)
+            _link_or_copy(artifact.path, output)
         return relative
 
     def persist_media(artifact: FileAudioArtifact | FileVideoArtifact) -> str:
@@ -723,7 +734,7 @@ def write_artwork_manifest(manifest: ArtworkManifest, destination: Path) -> None
         next_media_index += 1
         output = destination / Path(relative)
         if artifact.path != output.resolve():
-            shutil.copyfile(artifact.path, output)
+            _link_or_copy(artifact.path, output)
         return relative
 
     payload = {

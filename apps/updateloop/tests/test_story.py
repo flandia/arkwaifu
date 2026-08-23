@@ -153,6 +153,23 @@ def test_story_directives_project_new_artwork_and_media_references():
     ]
 
 
+def test_story_directives_project_interlude_and_blocker_artwork():
+    directives = parse_directives(
+        '[Blocker(image="blocker_movi")]'
+        '[interlude(type=2,name="bg_ruinsinterior")]'
+        '[interlude(type=3,name="avg_npc_1485_1#4$2")]'
+    )
+
+    pictures = story_module._pictures(directives, {})
+    characters = story_module._characters(directives, {})
+
+    assert [(reference.asset_id, reference.category) for reference in pictures] == [
+        ("blocker_movi", "illustration"),
+        ("bg_ruinsinterior", "background"),
+    ]
+    assert [reference.asset_id for reference in characters] == ["avg_npc_1485_1#4$2"]
+
+
 def test_story_media_references_resolve_story_variables():
     directives = parse_directives(
         '[PlayMusic(key="$flashback",intro="$M_SYS_INTRO")][PlaySound(key="$blooddrop")]'

@@ -23,7 +23,9 @@ from arkwaifu_updateloop.domain import (
     GalleryGroup,
     LocaleManifest,
     MediaRecord,
+    Movement,
     PngArtifact,
+    ScoreAssetRecord,
     Section,
     SourceLayerReference,
     StoryArtworkReference,
@@ -444,3 +446,265 @@ def test_gallery_writer_constraints_cascade_and_missing_panel_artwork(tmp_path):
             "gallery_reference_panels",
         ):
             assert connection.execute(f"SELECT count(*) FROM {table}").fetchone()[0] == 0
+
+
+def test_references_resolve_unique_upstream_case_variants(tmp_path):
+    path = tmp_path / "arkwaifu.sqlite3"
+    initialize_or_validate(path)
+    audio_path = tmp_path / "sound.wav"
+    audio_path.write_bytes(b"RIFFaudio")
+    story = StoryRecord(
+        id="story",
+        collection_id="archive_group:group",
+        tag="before",
+        tag_text="",
+        code="",
+        name="Story",
+        info="",
+        artwork_references=(
+            StoryArtworkReference("assetid", "picture", "illustration"),
+            StoryArtworkReference("ambiguous", "picture", "illustration"),
+        ),
+        text="",
+        media_references=(StoryMediaReference("soundid", "sound"),),
+    )
+    locale = LocaleManifest(
+        unit="CN",
+        upstream_version="locale-v1",
+        movements=(
+            Movement(
+                id="movement",
+                position=0,
+                movement_type="continue",
+                name="Movement",
+                icon_asset_id=None,
+                logo_asset_id="scorelogo",
+                background_asset_id=None,
+                has_video=False,
+                start_time=0,
+                locations=(),
+            ),
+        ),
+        sections=(),
+        archive_groups=(
+            ArchiveGroup(
+                id="group",
+                collection_id="archive_group:group",
+                position=0,
+                name="Group",
+                archive_category="others",
+                story_type=None,
+                stories=(story,),
+            ),
+        ),
+        galleries=(),
+    )
+    artwork = ArtworkManifest(
+        "art-v1",
+        (
+            ArtworkRecord(
+                "AssetID",
+                "illustration",
+                PngArtifact.from_image(Image.new("RGBA", (1, 1))),
+            ),
+            ArtworkRecord(
+                "Ambiguous",
+                "illustration",
+                PngArtifact.from_image(Image.new("RGBA", (1, 1))),
+            ),
+            ArtworkRecord(
+                "AMBIGUOUS",
+                "illustration",
+                PngArtifact.from_image(Image.new("RGBA", (1, 1))),
+            ),
+        ),
+        (),
+        score_assets=(
+            ScoreAssetRecord(
+                "ScoreLogo",
+                "logo",
+                PngArtifact.from_image(Image.new("RGBA", (1, 1))),
+            ),
+        ),
+        media=(
+            MediaRecord(
+                "SoundID",
+                "audio",
+                FileAudioArtifact.from_path(audio_path, content_type="audio/wav"),
+            ),
+        ),
+    )
+
+    apply_changes(
+        path,
+        (artwork, locale),
+        artwork_keys={
+            ("illustration", "AssetID"): "ART/art-v1/AssetID.png",
+            ("illustration", "Ambiguous"): "ART/art-v1/Ambiguous.png",
+            ("illustration", "AMBIGUOUS"): "ART/art-v1/AMBIGUOUS.png",
+        },
+        source_layer_keys={},
+        score_asset_keys={("logo", "ScoreLogo"): "ART/art-v1/ScoreLogo.png"},
+        score_video_keys={},
+        media_keys={("audio", "SoundID"): "MEDIA/art-v1/SoundID.wav"},
+    )
+
+    with sqlite3.connect(path) as connection:
+        assert connection.execute(
+            "SELECT asset_id FROM story_narrative_image_references ORDER BY position"
+        ).fetchall() == [("AssetID",), ("ambiguous",)]
+        assert connection.execute(
+            "SELECT asset_id FROM story_narrative_media_references"
+        ).fetchone() == ("SoundID",)
+        assert connection.execute("SELECT logo_asset_id FROM movements").fetchone() == (
+            "ScoreLogo",
+        )
+
+
+def test_complete_artwork_rejects_an_empty_manifest(tmp_path):
+    path = tmp_path / "arkwaifu.sqlite3"
+    initialize_or_validate(path)
+
+    with pytest.raises(ValueError, match="contains no assets"):
+        apply_changes(
+            path,
+            (ArtworkManifest("art-v1", (), ()),),
+            artwork_keys={},
+            source_layer_keys={},
+            score_asset_keys={},
+            score_video_keys={},
+            complete_artwork=True,
+        )
+
+    with sqlite3.connect(path) as connection:
+        assert connection.execute("SELECT count(*) FROM unit_versions").fetchone()[0] == 0
+
+
+def test_complete_artwork_rejects_a_same_sized_disjoint_manifest(tmp_path):
+    path = tmp_path / "arkwaifu.sqlite3"
+    initialize_or_validate(path)
+    image = PngArtifact.from_image(Image.new("RGBA", (1, 1)))
+    initial = ArtworkManifest(
+        "art-v1",
+        tuple(ArtworkRecord(f"asset-{index}", "illustration", image) for index in range(30)),
+        (),
+    )
+    initial_keys = {
+        (artwork.category, artwork.id): f"ART/art-v1/{artwork.id}.png"
+        for artwork in initial.artworks
+    }
+    apply_changes(
+        path,
+        (initial,),
+        artwork_keys=initial_keys,
+        source_layer_keys={},
+        score_asset_keys={},
+        score_video_keys={},
+    )
+    disjoint = ArtworkManifest(
+        "art-v2",
+        tuple(ArtworkRecord(f"replacement-{index}", "illustration", image) for index in range(30)),
+        (),
+    )
+
+    with pytest.raises(ValueError, match="would remove too many rows"):
+        apply_changes(
+            path,
+            (disjoint,),
+            artwork_keys={
+                (artwork.category, artwork.id): f"ART/art-v2/{artwork.id}.png"
+                for artwork in disjoint.artworks
+            },
+            source_layer_keys={},
+            score_asset_keys={},
+            score_video_keys={},
+            complete_artwork=True,
+        )
+
+    with sqlite3.connect(path) as connection:
+        assert connection.execute("SELECT count(*) FROM narrative_image_assets").fetchone()[0] == 30
+        assert connection.execute(
+            "SELECT res_version FROM unit_versions WHERE unit = 'artwork'"
+        ).fetchone() == ("art-v1",)
+
+
+def test_complete_artwork_accepts_case_only_identity_changes(tmp_path):
+    path = tmp_path / "arkwaifu.sqlite3"
+    initialize_or_validate(path)
+    image = PngArtifact.from_image(Image.new("RGBA", (1, 1)))
+    initial = ArtworkManifest(
+        "art-v1",
+        tuple(ArtworkRecord(f"Asset-{index}", "illustration", image) for index in range(10)),
+        (),
+    )
+    replacement = ArtworkManifest(
+        "art-v2",
+        tuple(ArtworkRecord(f"asset-{index}", "illustration", image) for index in range(10)),
+        (),
+    )
+
+    for manifest in (initial, replacement):
+        apply_changes(
+            path,
+            (manifest,),
+            artwork_keys={
+                (artwork.category, artwork.id): (
+                    f"ART/{manifest.upstream_version}/{artwork.id}.png"
+                )
+                for artwork in manifest.artworks
+            },
+            source_layer_keys={},
+            score_asset_keys={},
+            score_video_keys={},
+            complete_artwork=manifest is replacement,
+        )
+
+    with sqlite3.connect(path) as connection:
+        assert connection.execute(
+            "SELECT lower(asset_id) FROM narrative_image_assets ORDER BY lower(asset_id)"
+        ).fetchall() == [(f"asset-{index}",) for index in range(10)]
+
+
+def test_complete_artwork_counts_collapsed_case_variants_as_removals(tmp_path):
+    path = tmp_path / "arkwaifu.sqlite3"
+    initialize_or_validate(path)
+    image = PngArtifact.from_image(Image.new("RGBA", (1, 1)))
+    initial = ArtworkManifest(
+        "art-v1",
+        tuple(
+            ArtworkRecord(f"{prefix}-{index}", "illustration", image)
+            for index in range(6)
+            for prefix in ("Asset", "asset")
+        ),
+        (),
+    )
+    collapsed = ArtworkManifest(
+        "art-v2",
+        tuple(ArtworkRecord(f"asset-{index}", "illustration", image) for index in range(6)),
+        (),
+    )
+    apply_changes(
+        path,
+        (initial,),
+        artwork_keys={
+            (artwork.category, artwork.id): f"ART/art-v1/{artwork.id}.png"
+            for artwork in initial.artworks
+        },
+        source_layer_keys={},
+        score_asset_keys={},
+        score_video_keys={},
+    )
+
+    with pytest.raises(ValueError, match="would remove too many rows"):
+        apply_changes(
+            path,
+            (collapsed,),
+            artwork_keys={
+                (artwork.category, artwork.id): f"ART/art-v2/{artwork.id}.png"
+                for artwork in collapsed.artworks
+            },
+            source_layer_keys={},
+            score_asset_keys={},
+            score_video_keys={},
+            complete_artwork=True,
+        )

@@ -29,7 +29,7 @@ import re
 import time
 import zipfile
 from concurrent.futures import ProcessPoolExecutor
-from dataclasses import dataclass, replace
+from dataclasses import asdict, dataclass, replace
 from pathlib import Path, PurePosixPath
 from typing import Any, cast
 from urllib.parse import quote
@@ -97,6 +97,7 @@ _ARTWORK_STAGE_FORMATS = {
     "extracted": "5",
     "rendered": "10",
 }
+_ARTWORK_CONTENT_CACHE_NAMESPACE = "artwork-content-v1"
 _LOGGER = logging.getLogger(__name__)
 
 
@@ -126,7 +127,19 @@ class _GalleryRecipes:
 
     @property
     def cache_identity(self) -> str:
-        return f"{self.version}:{self.digest}"
+        return self.digest
+
+
+def _gallery_recipe_digest(recipes: tuple[GalleryArtwork, ...]) -> str:
+    """Hash only the normalized recipe data that can change rendered artwork."""
+
+    payload = json.dumps(
+        [asdict(recipe) for recipe in recipes],
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    return hashlib.sha256(payload.encode()).hexdigest()
 
 
 class _ProcessingStageError(RuntimeError):
@@ -433,6 +446,70 @@ def _resource_cache_path(resource: _Resource) -> PurePosixPath:
     )
 
 
+def _resource_stage_cache_path(
+    resource: _Resource,
+    stage: str,
+    fingerprint: str,
+) -> PurePosixPath:
+    """Place one immutable stage format beside the resource's other variants."""
+
+    identity = json.dumps(
+        {"md5": resource.md5, "resource": resource.name},
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    resource_digest = hashlib.sha256(identity.encode()).hexdigest()
+    fingerprint_digest = hashlib.sha256(fingerprint.encode()).hexdigest()
+    return PurePosixPath(
+        "artwork",
+        "resources",
+        resource_digest[:2],
+        resource_digest,
+        stage,
+        fingerprint_digest,
+    )
+
+
+def _uses_companion_streams(resource_name: str) -> bool:
+    """Return whether processing consumes wrapper members not covered by the bundle MD5."""
+
+    return resource_name.lower().startswith("avg/animatedkv/")
+
+
+def _uses_gallery_recipes(resource_name: str) -> bool:
+    """Return whether a static picture bundle can contain gallery composition panels."""
+
+    return any(
+        fnmatch.fnmatchcase(resource_name, pattern)
+        for pattern in ("avg/imgs/**", "avg/images/**", "avg/bg/**", "avg/backgrounds/**")
+    )
+
+
+def _contains_score_artwork(resource_name: str) -> bool:
+    """Return whether a resource can export artwork used by the Score index."""
+
+    return fnmatch.fnmatchcase(resource_name, "arts/ui/mixstory/**") or fnmatch.fnmatchcase(
+        resource_name,
+        "spritepack/mixstory_*.ab",
+    )
+
+
+def _processing_cache_key(
+    resource: _Resource,
+    version: str,
+    stage: str,
+    fingerprint: str,
+) -> tuple[str, PurePosixPath]:
+    """Keep companion-bearing wrappers versioned and share every complete ordinary stage."""
+
+    if stage == "fetched" or _uses_companion_streams(resource.name):
+        return version, _resource_cache_path(resource) / stage
+    return (
+        _ARTWORK_CONTENT_CACHE_NAMESPACE,
+        _resource_stage_cache_path(resource, stage, fingerprint),
+    )
+
+
 def _resource_filename(resource_name: str) -> str:
     """Return the flat wrapper filename used by the official CDN."""
 
@@ -463,6 +540,8 @@ def _stage_fingerprint(
     }
     if stage == "rendered" and gallery_recipes is not None:
         payload["gallery_recipes"] = gallery_recipes.cache_identity
+    if stage == "rendered" and _contains_score_artwork(resource.name):
+        payload["score_asset_identity_format"] = "2"
     return json.dumps(
         payload,
         sort_keys=True,
@@ -830,7 +909,7 @@ class UpstreamArtworkBuilder:
             raise RuntimeError(
                 f"CN gallery metadata changed during artwork preparation: {before} to {after}"
             )
-        digest = hashlib.sha256(content).hexdigest()
+        content_digest = hashlib.sha256(content).hexdigest()
 
         async def materialize(destination: Path) -> None:
             await await_owned(asyncio.to_thread(destination.write_bytes, content))
@@ -844,12 +923,12 @@ class UpstreamArtworkBuilder:
 
         cached = await self._cache.file(
             before,
-            PurePosixPath("artwork", "gallery-recipes", f"{digest}.json"),
+            PurePosixPath("artwork", "gallery-recipes", f"{content_digest}.json"),
             materialize,
             validate,
         )
         recipes = validate(cached)
-        return _GalleryRecipes(before, digest, recipes)
+        return _GalleryRecipes(before, _gallery_recipe_digest(recipes), recipes)
 
     @staticmethod
     def _parse_gallery_recipes(payload: object) -> tuple[GalleryArtwork, ...]:
@@ -1142,7 +1221,12 @@ class UpstreamArtworkBuilder:
         total = len(resources)
 
         async def process_one(resource: _Resource, current: int) -> ArtworkManifest:
-            resource_root = _resource_cache_path(resource)
+            resource_gallery_recipes = (
+                gallery_recipes if _uses_gallery_recipes(resource.name) else None
+            )
+            recipes = (
+                resource_gallery_recipes.recipes if resource_gallery_recipes is not None else ()
+            )
 
             def log(
                 action: str,
@@ -1159,14 +1243,31 @@ class UpstreamArtworkBuilder:
                     elapsed_seconds=elapsed_seconds,
                 )
 
+            async def cache_stage(
+                stage,
+                fingerprint,
+                producer,
+                validator,
+                *,
+                on_hit,
+            ):
+                namespace, relative = _processing_cache_key(
+                    resource,
+                    version,
+                    stage,
+                    fingerprint,
+                )
+                return await self._cache.directory(
+                    namespace,
+                    relative,
+                    fingerprint,
+                    producer,
+                    validator,
+                    on_hit=on_hit,
+                )
+
             def validate_rendered(destination: Path) -> ArtworkManifest:
-                manifest = read_artwork_manifest(destination)
-                if manifest.upstream_version != version:
-                    raise ValueError(
-                        "rendered artwork resource has the wrong upstream version: "
-                        f"{manifest.upstream_version!r}, expected {version!r}"
-                    )
-                return manifest
+                return replace(read_artwork_manifest(destination), upstream_version=version)
 
             if resource.name.endswith(".usm"):
                 score_video = _is_score_video(resource.name)
@@ -1194,9 +1295,8 @@ class UpstreamArtworkBuilder:
                                         raise
                                 log("fetch", "done", time.perf_counter() - started)
 
-                            fetched = await self._cache.directory(
-                                version,
-                                resource_root / "fetched",
+                            fetched = await cache_stage(
+                                "fetched",
                                 _stage_fingerprint("fetched", resource),
                                 materialize_video_fetched,
                                 lambda path: self._validate_fetched(path, resource),
@@ -1209,16 +1309,13 @@ class UpstreamArtworkBuilder:
                                     fetched.path / "wrapper.dat",
                                     resource.name,
                                     unwrapped,
-                                    extract_companions=resource.name.lower().startswith(
-                                        "avg/animatedkv/"
-                                    ),
+                                    extract_companions=_uses_companion_streams(resource.name),
                                 )
                             )
                             log("unzip", "done", time.perf_counter() - started)
 
-                        unwrapped = await self._cache.directory(
-                            version,
-                            resource_root / "unwrapped",
+                        unwrapped = await cache_stage(
+                            "unwrapped",
                             _stage_fingerprint("unwrapped", resource),
                             materialize_video_unwrapped,
                             lambda path: self._validate_unwrapped(path, resource),
@@ -1233,9 +1330,8 @@ class UpstreamArtworkBuilder:
                         )
                         log("extract", "done", time.perf_counter() - started)
 
-                    extracted = await self._cache.directory(
-                        version,
-                        resource_root / "extracted",
+                    extracted = await cache_stage(
+                        "extracted",
                         _stage_fingerprint("extracted", resource),
                         materialize_video_extracted,
                         _read_score_video_metadata,
@@ -1254,9 +1350,8 @@ class UpstreamArtworkBuilder:
                     )
                     log("compose", "done", time.perf_counter() - started)
 
-                rendered_video = await self._cache.directory(
-                    version,
-                    resource_root / "rendered",
+                rendered_video = await cache_stage(
+                    "rendered",
                     _stage_fingerprint("rendered", resource),
                     materialize_video_rendered,
                     validate_rendered,
@@ -1288,9 +1383,8 @@ class UpstreamArtworkBuilder:
                                     raise
                             log("fetch", "done", time.perf_counter() - started)
 
-                        fetched = await self._cache.directory(
-                            version,
-                            resource_root / "fetched",
+                        fetched = await cache_stage(
+                            "fetched",
                             _stage_fingerprint("fetched", resource),
                             materialize_fetched,
                             lambda path: self._validate_fetched(path, resource),
@@ -1304,9 +1398,7 @@ class UpstreamArtworkBuilder:
                                     fetched.path / "wrapper.dat",
                                     resource.name,
                                     unwrapped,
-                                    extract_companions=resource.name.lower().startswith(
-                                        "avg/animatedkv/"
-                                    ),
+                                    extract_companions=_uses_companion_streams(resource.name),
                                 )
                             )
                         except Exception:
@@ -1314,9 +1406,8 @@ class UpstreamArtworkBuilder:
                             raise
                         log("unzip", "done", time.perf_counter() - started)
 
-                    unwrapped = await self._cache.directory(
-                        version,
-                        resource_root / "unwrapped",
+                    unwrapped = await cache_stage(
+                        "unwrapped",
                         _stage_fingerprint("unwrapped", resource),
                         materialize_unwrapped,
                         lambda path: self._validate_unwrapped(path, resource),
@@ -1332,7 +1423,7 @@ class UpstreamArtworkBuilder:
                                 extracted,
                                 rendered,
                                 version,
-                                gallery_recipes.recipes,
+                                recipes,
                             )
                         )
                     except _ProcessingStageError as error:
@@ -1347,9 +1438,8 @@ class UpstreamArtworkBuilder:
                         log("compose", "done")
                     rendered_by_extractor = True
 
-                extracted = await self._cache.directory(
-                    version,
-                    resource_root / "extracted",
+                extracted = await cache_stage(
+                    "extracted",
                     _stage_fingerprint("extracted", resource),
                     materialize_extracted,
                     self._validate_extracted,
@@ -1365,7 +1455,7 @@ class UpstreamArtworkBuilder:
                                 extracted.path,
                                 rendered,
                                 version,
-                                gallery_recipes.recipes,
+                                recipes,
                             )
                         )
                     except Exception:
@@ -1373,10 +1463,9 @@ class UpstreamArtworkBuilder:
                         raise
                     log("compose", "done", time.perf_counter() - started)
 
-            rendered = await self._cache.directory(
-                version,
-                resource_root / "rendered",
-                _stage_fingerprint("rendered", resource, gallery_recipes),
+            rendered = await cache_stage(
+                "rendered",
+                _stage_fingerprint("rendered", resource, resource_gallery_recipes),
                 materialize_rendered,
                 validate_rendered,
                 on_hit=lambda: log("compose", "cached"),

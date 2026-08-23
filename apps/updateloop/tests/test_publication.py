@@ -850,7 +850,24 @@ async def test_complete_artwork_builds_at_current_version_and_pushes_database_on
 
     remote = CountingRemote()
     updater = Updater(remote)
-    await updater.run([update_request(artwork_manifest("v3", "current"))])
+    obsolete_source = SourceLayerRecord(
+        id="obsolete-source",
+        category="illustration",
+        kind="panel",
+        image=PngArtifact.from_image(Image.new("RGBA", (2, 2), (4, 5, 6, 255))),
+    )
+    initial_manifest = ArtworkManifest(
+        "v3",
+        (
+            replace(
+                artwork_manifest("v3", "current").artworks[0],
+                source_layer_references=(SourceLayerReference("illustration", obsolete_source.id),),
+            ),
+            artwork_manifest("v3", "obsolete").artworks[0],
+        ),
+        (obsolete_source,),
+    )
+    await updater.run([update_request(initial_manifest)])
     remote.pushes = 0
     caplog.clear()
     caplog.set_level("INFO", logger=updater_module.__name__)
@@ -902,6 +919,13 @@ async def test_complete_artwork_builds_at_current_version_and_pushes_database_on
             "historical": "ART/v1/composition/background/historical.png",
             "current": "ART/v3/composition/illustration/current.png",
         }
+        assert connection.execute("SELECT count(*) FROM material_assets").fetchone()[0] == 0
+        assert (
+            connection.execute(
+                "SELECT count(*) FROM narrative_asset_material_references"
+            ).fetchone()[0]
+            == 0
+        )
     assert set(remote.objects) >= {
         "ART/v1/composition/background/historical.png",
         "ART/v1/thumbnail/background/historical.webp",

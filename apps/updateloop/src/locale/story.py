@@ -90,6 +90,7 @@ _HANDLED_DIRECTIVE_ACTIONS: dict[str, DirectiveAction] = {
     "background": "artwork",
     "backgroundtween": "artwork",
     "bgeffect": "artwork",
+    "blocker": "artwork",
     "largebgtween": "artwork",
     "largebg": "artwork",
     "gridbg": "artwork",
@@ -100,6 +101,7 @@ _HANDLED_DIRECTIVE_ACTIONS: dict[str, DirectiveAction] = {
     "imgeffect": "artwork",
     "imagerotate": "artwork",
     "imagetween": "artwork",
+    "interlude": "artwork",
     "avgdisplay": "artwork",
     "character": "characters",
     "charslot": "characters",
@@ -1599,7 +1601,7 @@ def _pictures(
 
     for directive in directives:
         name = _directive_name(directive)
-        if name == "image":
+        if name in {"image", "blocker"}:
             add(directive.params.get("image", ""), "illustration")
         elif name == "background":
             add(directive.params.get("image", ""), "background")
@@ -1621,6 +1623,8 @@ def _pictures(
         }:
             # ``animekv`` is a Unity animated bundle, while ``bg`` is a
             # regular background. Both use a stable logical artwork name.
+            add(directive.params.get("name", ""), "background")
+        elif name == "interlude" and directive.params.get("type") == "2":
             add(directive.params.get("name", ""), "background")
     return tuple(pictures)
 
@@ -1761,6 +1765,10 @@ def _characters(
         elif _directive_name(directive) == "dialog":
             spotlight = ""
             characters.clear()
+        elif _directive_name(directive) == "interlude" and directive.params.get("type") == "3":
+            identifier = _resolve_character_id(directive.params.get("name", ""), variables)
+            if identifier:
+                history.append(identifier)
 
     return tuple(
         StoryArtworkReference(

@@ -49,6 +49,22 @@ def _write_wrapper(destination: Path, resource: _Resource, content: bytes) -> No
         archive.writestr(resource.name, content)
 
 
+def _content_stage_path(
+    root: Path,
+    resource: _Resource,
+    stage: str,
+    gallery_recipes=None,
+) -> Path:
+    fingerprint = artwork_module._stage_fingerprint(stage, resource, gallery_recipes)
+    relative = artwork_module._resource_stage_cache_path(resource, stage, fingerprint)
+    return root / artwork_module._ARTWORK_CONTENT_CACHE_NAMESPACE / Path(*relative.parts)
+
+
+def _versioned_stage_path(root: Path, version: str, resource: _Resource, stage: str) -> Path:
+    relative = artwork_module._resource_cache_path(resource) / stage
+    return root / version / Path(*relative.parts)
+
+
 def _empty_render(extracted: Path, rendered: Path, version: str) -> None:
     extracted.mkdir(parents=True, exist_ok=True)
     (extracted / "unity-export.txt").write_text("uncomposed", encoding="utf-8")
@@ -69,6 +85,51 @@ def test_animated_kv_unwrap_keeps_adjacent_stream_resource(tmp_path: Path):
     assert (destination / resource.name).read_bytes() == b"bundle"
     assert (destination / "avg/animatedkv/example.resource").read_bytes() == b"stream"
     assert not (destination / "avg/animatedkv/ignored.ab").exists()
+
+
+def test_companion_resources_keep_versioned_processing_cache_keys():
+    normal = _resource("avg/images/example.ab")
+    companion = _resource("avg/animatedkv/example.ab")
+    fingerprint = artwork_module._stage_fingerprint("rendered", normal)
+
+    normal_namespace, normal_path = artwork_module._processing_cache_key(
+        normal,
+        "version-1",
+        "rendered",
+        fingerprint,
+    )
+    companion_namespace, companion_path = artwork_module._processing_cache_key(
+        companion,
+        "version-1",
+        "rendered",
+        artwork_module._stage_fingerprint("rendered", companion),
+    )
+    fetched_namespace, fetched_path = artwork_module._processing_cache_key(
+        normal,
+        "version-1",
+        "fetched",
+        artwork_module._stage_fingerprint("fetched", normal),
+    )
+
+    assert normal_namespace == artwork_module._ARTWORK_CONTENT_CACHE_NAMESPACE
+    assert normal_path.parts[-2] == "rendered"
+    assert companion_namespace == "version-1"
+    assert companion_path.parts[-1] == "rendered"
+    assert fetched_namespace == "version-1"
+    assert fetched_path.parts[-1] == "fetched"
+
+
+def test_score_identity_change_invalidates_only_score_rendering():
+    score = _resource("arts/ui/mixstory/common.ab")
+    ordinary = _resource("avg/images/example.ab")
+
+    score_fingerprint = json.loads(artwork_module._stage_fingerprint("rendered", score))
+    ordinary_fingerprint = json.loads(artwork_module._stage_fingerprint("rendered", ordinary))
+
+    assert score_fingerprint["formats"]["rendered"] == "10"
+    assert score_fingerprint["score_asset_identity_format"] == "2"
+    assert ordinary_fingerprint["formats"]["rendered"] == "10"
+    assert "score_asset_identity_format" not in ordinary_fingerprint
 
 
 @pytest.mark.parametrize(
@@ -166,6 +227,7 @@ async def test_gallery_recipes_are_branch_consistent_and_fetched_once(tmp_path: 
         "/cn/hot_update_list.json",
     ]
     assert first.version == "cn-v1"
+    assert first.cache_identity == first.digest
     assert first.recipes[0].asset_id == "Top/Bottom"
     assert first.recipes[0].category == "background"
 
@@ -213,6 +275,41 @@ def _gallery_recipe_stage() -> dict[str, object]:
             }
         },
     }
+
+
+def test_gallery_recipe_identity_ignores_unrelated_stage_metadata():
+    first = _gallery_recipe_stage()
+    second = json.loads(json.dumps(first))
+    second["unrelatedStageData"] = {"changed": True}
+
+    first_recipes = UpstreamArtworkBuilder._parse_gallery_recipes(first)
+    second_recipes = UpstreamArtworkBuilder._parse_gallery_recipes(second)
+
+    assert artwork_module._gallery_recipe_digest(first_recipes) == (
+        artwork_module._gallery_recipe_digest(second_recipes)
+    )
+
+
+def test_gallery_recipe_fingerprint_only_applies_to_static_picture_bundles():
+    recipes = artwork_module._GalleryRecipes("cn-v1", "a" * 64, ())
+
+    picture = json.loads(
+        artwork_module._stage_fingerprint(
+            "rendered",
+            _resource("avg/images/example.ab"),
+            recipes,
+        )
+    )
+    assert picture["gallery_recipes"] == recipes.cache_identity
+
+    for name in (
+        "avg/characters/example.ab",
+        "avg/items/example.ab",
+        "avg/animatedkv/example.ab",
+        "arts/ui/mixstory/example.ab",
+        "audio/sound_beta_2/music/example.ab",
+    ):
+        assert not artwork_module._uses_gallery_recipes(name)
 
 
 @pytest.mark.parametrize(
@@ -408,15 +505,7 @@ async def test_cold_fetched_stage_retries_a_corrupt_wrapper(
     assert requests == 2
     assert manifests == [ArtworkManifest("version", (), ())]
     cached_wrapper = (
-        tmp_path
-        / ".cache"
-        / "version"
-        / "artwork"
-        / "resources"
-        / "avg%2Fimages%2Fretry.ab"
-        / resource.md5
-        / "fetched"
-        / "wrapper.dat"
+        _versioned_stage_path(tmp_path / ".cache", "version", resource, "fetched") / "wrapper.dat"
     )
     UpstreamArtworkBuilder._validate_bundle(cached_wrapper, resource)
 
@@ -655,17 +744,22 @@ async def test_build_returns_promoted_file_backed_paths_in_cache_workspace(
 
     path = merged.artworks[0].image.path
     assert path is not None and path.is_file()
-    assert "rendered" in path.parts
-    assert "avg%2Fimages%2Fcallback.ab" in path.parts
-    assert resource.md5 in path.parts
-    resource_root = path.parents[2]
-    assert (resource_root / "fetched" / "wrapper.dat").is_file()
-    assert (resource_root / "unwrapped" / "avg" / "images" / "callback.ab").is_file()
-    assert (resource_root / "extracted").is_dir()
+    cache_root = tmp_path / ".cache"
+    rendered = _content_stage_path(
+        cache_root, resource, "rendered", artwork_module._GalleryRecipes("disabled", "none", ())
+    )
+    assert path.is_relative_to(rendered)
+    assert (
+        _versioned_stage_path(cache_root, "version", resource, "fetched") / "wrapper.dat"
+    ).is_file()
+    assert (
+        _content_stage_path(cache_root, resource, "unwrapped") / "avg" / "images" / "callback.ab"
+    ).is_file()
+    assert _content_stage_path(cache_root, resource, "extracted").is_dir()
 
 
 @pytest.mark.asyncio
-async def test_staged_cache_retains_inputs_and_render_only_reuses_extracted_tree(
+async def test_staged_content_cache_reuses_versions_and_render_variants(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     caplog: pytest.LogCaptureFixture,
@@ -725,15 +819,20 @@ async def test_staged_cache_retains_inputs_and_render_only_reuses_extracted_tree
     monkeypatch.setattr(artwork_module, "_render_artwork_resource", render_resource)
     monkeypatch.setattr(builder, "_download_resource", download)
     resource = _resource("avg/images/cached.ab", content)
+    recipes_a_v1 = artwork_module._GalleryRecipes("cn-v1", "a" * 64, ())
+    recipes_a_v2 = artwork_module._GalleryRecipes("cn-v2", "a" * 64, ())
+    recipes_b = artwork_module._GalleryRecipes("cn-v3", "b" * 64, ())
     caplog.set_level(logging.INFO, logger=artwork_module.__name__)
 
     async with httpx.AsyncClient() as client:
-        first = await builder._process_resources(client, "version", [resource])
-        second = await builder._process_resources(client, "version", [resource])
+        first = await builder._process_resources(client, "version-1", [resource], recipes_a_v1)
+        second = await builder._process_resources(client, "version-2", [resource], recipes_a_v2)
 
     assert downloads == 1
     assert extractions == 1
     assert renders == 1
+    assert first[0].upstream_version == "version-1"
+    assert second[0].upstream_version == "version-2"
     assert first[0].artworks == second[0].artworks
     action_records = [record for record in caplog.records if hasattr(record, "action")]
     assert [(record.action, record.status) for record in action_records] == [
@@ -743,57 +842,84 @@ async def test_staged_cache_retains_inputs_and_render_only_reuses_extracted_tree
         ("compose", "done"),
         ("compose", "cached"),
     ]
-    assert all(record.res_version == "version" for record in action_records)
+    assert [record.res_version for record in action_records] == [
+        "version-1",
+        "version-1",
+        "version-1",
+        "version-1",
+        "version-2",
+    ]
     assert all((record.current, record.total) == (1, 1) for record in action_records)
 
-    resource_path = (
-        tmp_path
-        / ".cache"
-        / "version"
-        / "artwork"
-        / "resources"
-        / "avg%2Fimages%2Fcached.ab"
-        / resource.md5
-    )
-    assert (resource_path / "fetched" / "wrapper.dat").is_file()
-    assert (resource_path / "unwrapped" / "avg" / "images" / "cached.ab").is_file()
-    assert (resource_path / "extracted" / "unity-export.txt").is_file()
-    assert (resource_path / "rendered" / "manifest.json").is_file()
-    for stage in ("fetched", "unwrapped", "extracted", "rendered"):
-        assert (resource_path / stage / ".arkwaifu-cache.json").is_file()
+    cache_root = tmp_path / ".cache"
+    stage_paths = {
+        stage: _content_stage_path(
+            cache_root,
+            resource,
+            stage,
+            recipes_a_v1 if stage == "rendered" else None,
+        )
+        for stage in ("unwrapped", "extracted", "rendered")
+    }
+    fetched_path = _versioned_stage_path(cache_root, "version-1", resource, "fetched")
+    assert (fetched_path / "wrapper.dat").is_file()
+    assert (stage_paths["unwrapped"] / "avg" / "images" / "cached.ab").is_file()
+    assert (stage_paths["extracted"] / "unity-export.txt").is_file()
+    assert (stage_paths["rendered"] / "manifest.json").is_file()
+    assert (fetched_path / ".arkwaifu-cache.json").is_file()
+    for stage in ("unwrapped", "extracted", "rendered"):
+        assert (stage_paths[stage] / ".arkwaifu-cache.json").is_file()
 
-    manifest_path = resource_path / "rendered" / "manifest.json"
+    async with httpx.AsyncClient() as client:
+        changed_recipe = await builder._process_resources(
+            client, "version-3", [resource], recipes_b
+        )
+        reused_recipe = await builder._process_resources(
+            client, "version-4", [resource], recipes_a_v1
+        )
+
+    assert changed_recipe[0].upstream_version == "version-3"
+    assert reused_recipe[0].upstream_version == "version-4"
+    assert downloads == 1
+    assert extractions == 1
+    assert renders == 2
+    assert (
+        _content_stage_path(cache_root, resource, "rendered", recipes_b) / "manifest.json"
+    ).is_file()
+
+    manifest_path = stage_paths["rendered"] / "manifest.json"
     payload = json.loads(manifest_path.read_text(encoding="utf-8"))
     payload["upstream_version"] = "wrong-version"
     manifest_path.write_text(json.dumps(payload), encoding="utf-8")
-    prior_action_count = len(action_records)
 
     async with httpx.AsyncClient() as client:
-        manifests = await builder._process_resources(client, "version", [resource])
+        manifests = await builder._process_resources(client, "version-5", [resource], recipes_a_v1)
 
     assert downloads == 1
     assert extractions == 1
     assert renders == 2
-    assert manifests[0].upstream_version == "version"
+    assert manifests[0].upstream_version == "version-5"
     assert manifests[0].artworks == ()
     assert manifests[0].source_layers == ()
-    rerender_records = [record for record in caplog.records if hasattr(record, "action")][
-        prior_action_count:
-    ]
-    assert [(record.action, record.status) for record in rerender_records] == [
-        ("extract", "cached"),
-        ("compose", "done"),
-    ]
+
+    payload["artworks"] = "corrupt"
+    manifest_path.write_text(json.dumps(payload), encoding="utf-8")
+    async with httpx.AsyncClient() as client:
+        await builder._process_resources(client, "version-6", [resource], recipes_a_v1)
+
+    assert downloads == 1
+    assert extractions == 1
+    assert renders == 3
 
     changed_content = b"changed cached bundle"
     changed = _resource(resource.name, changed_content)
     content = changed_content
     async with httpx.AsyncClient() as client:
-        await builder._process_resources(client, "version", [changed])
+        await builder._process_resources(client, "version-6", [changed], recipes_a_v1)
 
-    changed_path = resource_path.parent / changed.md5
-    assert (resource_path / "rendered" / "manifest.json").is_file()
-    assert (changed_path / "rendered" / "manifest.json").is_file()
+    changed_path = _content_stage_path(cache_root, changed, "rendered", recipes_a_v1)
+    assert manifest_path.is_file()
+    assert (changed_path / "manifest.json").is_file()
     assert downloads == 2
     assert extractions == 2
-    assert renders == 3
+    assert renders == 4

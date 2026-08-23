@@ -185,7 +185,7 @@ async def test_monolithic_database_and_pngs_publish_to_minio(isolated_bucket, tm
     assert head["ContentType"] == "image/png"
     assert head["CacheControl"] == "public, max-age=31536000, immutable"
     assert head["Metadata"] == {}
-    assert object_key == (f"ART/{artwork.upstream_version}/composition/image/fixture.png")
+    assert object_key == (f"ART/{artwork.upstream_version}/composition/illustration/fixture.png")
     thumbnail_key = f"ART/{artwork.upstream_version}/thumbnail/illustration/fixture.webp"
     thumbnail_head = client.head_object(Bucket=bucket, Key=thumbnail_key)
     assert thumbnail_head["ContentType"] == "image/webp"

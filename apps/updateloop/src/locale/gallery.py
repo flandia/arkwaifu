@@ -235,6 +235,7 @@ def _merge_legacy(
     retro = _mapping(_read(root, "retro_table.json", optional=True))
     roguelike = _mapping(_read(root, "roguelike_topic_table.json", optional=True))
     replicate = _mapping(_read(root, "replicate_table.json", optional=True))
+    reclamation = _mapping(_read(root, "sandbox_perm_table.json", optional=True))
     components = _mapping(_at(review_meta, "actArchiveData", "components"))
     picture_rows = _mapping(_at(review_meta, "actArchiveResData", "pics"))
     pictures: dict[str, dict[str, Any]] = {}
@@ -339,8 +340,55 @@ def _merge_legacy(
                 )
             )
             existing_artworks.add(identity)
+        for group in _reclamation_gallery_groups(reclamation, normalized_activity):
+            identities = {(artwork.category, artwork.asset_id) for artwork in group.artworks}
+            if identities & existing_artworks:
+                continue
+            groups.append(replace(group, position=len(groups)))
+            existing_artworks.update(identities)
         result[gallery_index] = replace(gallery, groups=tuple(groups))
     return tuple(result)
+
+
+def _reclamation_gallery_groups(
+    table: Mapping[str, Any], topic_id: str
+) -> tuple[GalleryGroup, ...]:
+    topic = _mapping(_mapping(table.get("basicInfo")).get(topic_id))
+    template = _text(topic.get("topicTemplate"))
+    detail = _mapping(_at(table, "detail", template, topic_id))
+    quests = sorted(
+        _mapping(detail.get("archiveQuestData")).items(),
+        key=lambda item: (_integer(_at(item[1], "sortId")), item[0]),
+    )
+    groups = []
+    for _, raw_quest in quests:
+        quest = _mapping(raw_quest)
+        for raw_cg in _mappings(quest.get("cgDataList")):
+            cg_id = _raw_identifier(raw_cg.get("cgId"))
+            asset_id = _raw_identifier(raw_cg.get("cgPath")) or cg_id
+            if cg_id is None or asset_id is None:
+                continue
+            groups.append(
+                GalleryGroup(
+                    id=cg_id,
+                    position=len(groups),
+                    name=_text(raw_cg.get("cgTitle")),
+                    description=_text(raw_cg.get("cgDesc")),
+                    related_story_id=None,
+                    related_stage_id=None,
+                    artworks=(
+                        GalleryArtwork(
+                            position=0,
+                            cg_id=cg_id,
+                            asset_id=asset_id,
+                            category="illustration",
+                            layout="none",
+                            panels=(),
+                        ),
+                    ),
+                )
+            )
+    return tuple(groups)
 
 
 def _group_ranks(stage: Mapping[str, Any]) -> dict[str, tuple[int, int, str, str]]:

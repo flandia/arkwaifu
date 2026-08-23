@@ -87,6 +87,72 @@ def test_legacy_gallery_group_ids_preserve_source_case(tmp_path: Path):
     assert galleries[0].groups[0].id == "KV1_legacy"
 
 
+def test_reclamation_gallery_uses_archived_cg_metadata(tmp_path: Path):
+    _base(tmp_path)
+    _write(
+        tmp_path,
+        "story_review_meta_table.json",
+        {
+            "actArchiveResData": {"pics": {}},
+            "actArchiveData": {"components": {"sandbox_1": {"pic": None}}},
+        },
+    )
+    _write(tmp_path, "retro_table.json", {"retroActList": {}})
+    _write(tmp_path, "stage_table.json", {})
+    _write(
+        tmp_path,
+        "sandbox_perm_table.json",
+        {
+            "basicInfo": {"sandbox_1": {"topicId": "sandbox_1", "topicTemplate": "SANDBOX_V2"}},
+            "detail": {
+                "SANDBOX_V2": {
+                    "sandbox_1": {
+                        "archiveQuestData": {
+                            "story_3": {
+                                "sortId": 3,
+                                "cgDataList": [
+                                    {
+                                        "cgId": "pic_sandbox_1_5",
+                                        "cgPath": "pic_sandbox_1_5",
+                                        "cgTitle": "A glimpse into the past",
+                                        "cgDesc": "She looks into the past.",
+                                    },
+                                    {
+                                        "cgId": "pic_sandbox_1_4",
+                                        "cgPath": "pic_sandbox_1_4",
+                                        "cgTitle": "A joyful farewell",
+                                        "cgDesc": "The journey continues.",
+                                    },
+                                ],
+                            }
+                        }
+                    }
+                }
+            },
+        },
+    )
+
+    (gallery,) = parse_galleries(
+        tmp_path,
+        collection_names={"reclamation_algorithm:sandbox_1": "Reclamation"},
+        legacy_collections={"sandbox_1": "reclamation_algorithm:sandbox_1"},
+    )
+
+    assert gallery.id == "sandbox_1"
+    assert [group.id for group in gallery.groups] == [
+        "pic_sandbox_1_5",
+        "pic_sandbox_1_4",
+    ]
+    assert [group.name for group in gallery.groups] == [
+        "A glimpse into the past",
+        "A joyful farewell",
+    ]
+    assert [group.artworks[0].asset_id for group in gallery.groups] == [
+        "pic_sandbox_1_5",
+        "pic_sandbox_1_4",
+    ]
+
+
 def test_current_cg_schema_merges_legacy_and_new_entries(tmp_path: Path):
     _base(tmp_path)
     _write(

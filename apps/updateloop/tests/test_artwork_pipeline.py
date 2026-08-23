@@ -14,6 +14,7 @@ from arkwaifu_updateloop.artwork import (
     read_artwork_manifest,
     write_artwork_manifest,
 )
+from arkwaifu_updateloop.artwork import pipeline as pipeline_module
 from arkwaifu_updateloop.domain import (
     ArtworkManifest,
     ArtworkPanel,
@@ -205,6 +206,16 @@ def test_score_visual_directories_keep_dedicated_kinds(tmp_path: Path):
         ("logo", "storyline_ur"),
         ("retro-background", "retro_main_0"),
     ]
+
+
+def test_score_visual_identity_uses_unity_object_name(tmp_path: Path):
+    logo = tmp_path / "assets/torappu/dynamicassets/arts/ui/mixstory/logos/storyline_ms.png"
+    write_png(logo, (1, 2, 3, 255))
+    write_json(logo.with_suffix(".Sprite.json"), {"m_Name": "storyline_Ms"})
+
+    manifest = build_artwork_manifest(tmp_path, "v1")
+
+    assert [(asset.kind, asset.id) for asset in manifest.score_assets] == [("logo", "storyline_Ms")]
 
 
 def test_known_sacrifice_torch_vertical_recipe_is_top_to_bottom():
@@ -417,6 +428,33 @@ def test_writing_a_file_backed_manifest_streams_from_its_path(
         )
 
     assert (destination / "processed/00000000.png").read_bytes() == expected
+    assert source.samefile(destination / "processed/00000000.png")
+
+
+def test_writing_a_file_backed_manifest_copies_when_hardlinks_are_unavailable(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    source = tmp_path / "source.png"
+    expected = write_png(source, (1, 2, 3, 255))
+    destination = tmp_path / "cache"
+
+    def reject_link(_source: Path, _destination: Path) -> None:
+        raise OSError("hardlinks unavailable")
+
+    monkeypatch.setattr(pipeline_module.os, "link", reject_link)
+    write_artwork_manifest(
+        ArtworkManifest(
+            "v1",
+            (ArtworkRecord("event", "illustration", FilePngArtifact.from_path(source)),),
+            (),
+        ),
+        destination,
+    )
+
+    output = destination / "processed/00000000.png"
+    assert output.read_bytes() == expected
+    assert not source.samefile(output)
 
 
 def cached_character_manifest() -> ArtworkManifest:
