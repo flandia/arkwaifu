@@ -40,7 +40,7 @@ export function ArchivePage({
     <PageTransition
       className={
         theme === "dark"
-          ? "bg-black text-white transition-colors duration-500 ease-out motion-reduce:transition-none"
+          ? "bg-black text-white [color-scheme:dark] transition-colors duration-500 ease-out motion-reduce:transition-none"
           : "bg-paper text-ink transition-colors duration-500 ease-out motion-reduce:transition-none"
       }
     >
@@ -56,6 +56,7 @@ export function PageHeader({
   meta,
   titleLanguage,
   descriptionLanguage,
+  tone = "light",
 }: {
   eyebrow: string;
   title: string;
@@ -63,9 +64,12 @@ export function PageHeader({
   meta?: ReactNode;
   titleLanguage?: string;
   descriptionLanguage?: string;
+  tone?: "light" | "dark";
 }) {
   return (
-    <header className="grid border-b-[3px] border-ink pb-[clamp(2rem,5vw,4rem)]">
+    <header
+      className={`grid border-b-[3px] pb-[clamp(2rem,5vw,4rem)] ${tone === "dark" ? "border-white" : "border-ink"}`}
+    >
       <Eyebrow>{eyebrow}</Eyebrow>
       <h1
         className="mb-6 max-w-[14ch] [overflow-wrap:anywhere] font-display text-[clamp(3.4rem,8vw,7.5rem)] leading-[0.88] font-black tracking-[-0.035em] uppercase max-sm:text-[clamp(3rem,15vw,5.5rem)]"
@@ -75,7 +79,7 @@ export function PageHeader({
       </h1>
       {description ? (
         <p
-          className="mb-6 max-w-3xl text-[clamp(1.05rem,1.8vw,1.35rem)] leading-[1.55] text-ink/80"
+          className={`mb-6 max-w-3xl text-[clamp(1.05rem,1.8vw,1.35rem)] leading-[1.55] ${tone === "dark" ? "text-white/80" : "text-ink/80"}`}
           lang={descriptionLanguage}
         >
           {description}
@@ -114,14 +118,28 @@ export function BackLink({
   );
 }
 
-export function EmptyState({ title, children }: { title: string; children: ReactNode }) {
+export function EmptyState({
+  title,
+  children,
+  tone = "light",
+}: {
+  title: string;
+  children: ReactNode;
+  tone?: "light" | "dark";
+}) {
   const { t } = useUi();
 
   return (
-    <section className="mt-12 border-2 border-ink bg-surface p-[clamp(2rem,5vw,4rem)]">
+    <section
+      className={`mt-12 border-2 p-[clamp(2rem,5vw,4rem)] ${tone === "dark" ? "border-white bg-black text-white" : "border-ink bg-surface"}`}
+    >
       <Eyebrow>{t("empty.eyebrow")}</Eyebrow>
       <h2 className="mb-4 text-[clamp(1.7rem,4vw,3.2rem)] font-black uppercase">{title}</h2>
-      <p className="mb-0 max-w-2xl leading-relaxed text-muted">{children}</p>
+      <p
+        className={`mb-0 max-w-2xl leading-relaxed ${tone === "dark" ? "text-white/70" : "text-muted"}`}
+      >
+        {children}
+      </p>
     </section>
   );
 }

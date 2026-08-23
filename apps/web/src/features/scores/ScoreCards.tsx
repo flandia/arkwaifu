@@ -105,27 +105,49 @@ export function SectionCard({
   locale,
   movementID,
   section,
+  textBelow = false,
 }: {
   locale: Locale;
   movementID: string;
   section: SectionSummary;
+  textBelow?: boolean;
 }) {
   const { t } = useUi();
   const language = localeLanguageTag(locale);
   return (
     <li className="min-w-0 [contain-intrinsic-block-size:auto_34rem] [content-visibility:auto]">
       <TransitionLink
-        className="group relative grid w-full overflow-hidden bg-transparent text-white no-underline @container/card"
-        style={imageRatio(section)}
+        className={
+          textBelow
+            ? "group block w-full overflow-hidden bg-black text-white no-underline @container/card"
+            : "group relative grid w-full overflow-hidden bg-transparent text-white no-underline @container/card"
+        }
+        style={textBelow ? undefined : imageRatio(section)}
         to={`/${locale}/scores/${encodeURIComponent(movementID)}/${encodeURIComponent(section.id)}`}
         transition="forward"
       >
-        <ScoreImageAsset
-          alt=""
-          asset={section.keyVisual}
-          className="absolute inset-0 size-full object-contain brightness-70 transition-[filter,transform] duration-500 group-hover:scale-[1.02] group-hover:brightness-100 motion-reduce:transform-none"
-        />
-        <div className="relative z-10 mt-auto flex min-h-full flex-col justify-end p-6">
+        {textBelow ? (
+          <div className="relative overflow-hidden bg-black" style={imageRatio(section)}>
+            <ScoreImageAsset
+              alt=""
+              asset={section.keyVisual}
+              className="absolute inset-0 size-full object-contain brightness-70 transition-[filter,transform] duration-500 group-hover:scale-[1.02] group-hover:brightness-100 motion-reduce:transform-none"
+            />
+          </div>
+        ) : (
+          <ScoreImageAsset
+            alt=""
+            asset={section.keyVisual}
+            className="absolute inset-0 size-full object-contain brightness-70 transition-[filter,transform] duration-500 group-hover:scale-[1.02] group-hover:brightness-100 motion-reduce:transform-none"
+          />
+        )}
+        <div
+          className={
+            textBelow
+              ? "border-t border-white/20 p-6"
+              : "relative z-10 mt-auto flex min-h-full flex-col justify-end p-6"
+          }
+        >
           <ScoreImageAsset
             alt=""
             asset={section.titleImage}

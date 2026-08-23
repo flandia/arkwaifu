@@ -89,6 +89,7 @@ export function CollectionControls({
   onOrder,
   noun,
   count,
+  tone = "light",
 }: {
   query: string;
   onQuery: (value: string) => void;
@@ -96,6 +97,7 @@ export function CollectionControls({
   onOrder: (value: CollectionOrder) => void;
   noun: string;
   count: number;
+  tone?: "light" | "dark";
 }) {
   const { t } = useUi();
   const fieldID = useId();
@@ -104,7 +106,7 @@ export function CollectionControls({
 
   return (
     <section
-      className="my-8 grid items-end gap-4 border-b-2 border-ink pb-6 md:mb-12 md:grid-cols-[minmax(15rem,1fr)_minmax(10rem,0.4fr)_auto]"
+      className={`my-8 grid items-end gap-4 border-b-2 pb-6 md:mb-12 md:grid-cols-[minmax(15rem,1fr)_minmax(10rem,0.4fr)_auto] ${tone === "dark" ? "border-white" : "border-ink"}`}
       aria-label={t("collection.filtersLabel")}
     >
       <div className="grid gap-2">
@@ -116,7 +118,7 @@ export function CollectionControls({
         </label>
         <input
           autoComplete="off"
-          className="min-h-11 w-full rounded-none border-2 border-ink bg-surface px-3 py-2.5 text-ink"
+          className={`min-h-11 w-full rounded-none border-2 px-3 py-2.5 ${tone === "dark" ? "border-white bg-black text-white" : "border-ink bg-surface text-ink"}`}
           id={searchID}
           name="q"
           onChange={(event) => onQuery(event.currentTarget.value)}
@@ -134,7 +136,7 @@ export function CollectionControls({
           {t("collection.orderLabel")}
         </label>
         <select
-          className="min-h-11 w-full rounded-none border-2 border-ink bg-surface px-3 py-2.5 text-ink"
+          className={`min-h-11 w-full rounded-none border-2 px-3 py-2.5 ${tone === "dark" ? "border-white bg-black text-white" : "border-ink bg-surface text-ink"}`}
           id={orderID}
           name="order"
           onChange={(event) => onOrder(event.currentTarget.value as CollectionOrder)}
