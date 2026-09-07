@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import type { ScoreImage, ScoreVideo } from "../../api/types";
+import { useUi } from "../../i18n";
 import { cn } from "../../shared/ui/cn";
 
 /** The nested Score-directory mark used by the in-game archive navigation. */
@@ -75,12 +76,27 @@ export function ScoreBackdrop({
   priority?: boolean;
   viewportGated?: boolean;
 }) {
+  const { t } = useUi();
   const reducedMotion = useReducedMotion();
   const containerRef = useRef<HTMLDivElement>(null);
+  const videoRef = useRef<HTMLVideoElement>(null);
   const [nearViewport, setNearViewport] = useState(!viewportGated);
   const [failedVideo, setFailedVideo] = useState<string>();
+  const [paused, setPaused] = useState(false);
   const poster = image?.image?.url;
   const videoUrl = video?.video?.url;
+  const activeVideo =
+    !reducedMotion && nearViewport && failedVideo !== videoUrl ? video?.video : null;
+
+  function togglePlayback(): void {
+    if (paused) {
+      setPaused(false);
+      void videoRef.current?.play().catch(() => setPaused(true));
+    } else {
+      videoRef.current?.pause();
+      setPaused(true);
+    }
+  }
 
   useEffect(() => {
     if (!viewportGated) {
@@ -101,35 +117,47 @@ export function ScoreBackdrop({
   }, [viewportGated]);
 
   return (
-    <div
-      aria-hidden="true"
-      className={cn("absolute inset-0 overflow-hidden", className)}
-      ref={containerRef}
-    >
-      <ScoreImageAsset
-        alt=""
-        asset={image}
-        className={cn("size-full object-cover", imageClassName)}
-        eager={priority}
-      />
-      {!reducedMotion && nearViewport && video?.video && failedVideo !== videoUrl ? (
-        // The upstream Score videos are visual loops without meaningful dialogue.
-        // oxlint-disable-next-line jsx-a11y/media-has-caption
-        <video
-          autoPlay
-          className={cn("absolute inset-0 size-full object-cover", imageClassName)}
-          height={video.video.height}
-          loop
-          muted
-          onError={() => setFailedVideo(videoUrl)}
-          playsInline
-          poster={poster}
-          preload="metadata"
-          src={video.video.url}
-          tabIndex={-1}
-          width={video.video.width}
+    <>
+      <div
+        aria-hidden="true"
+        className={cn("absolute inset-0 overflow-hidden", className)}
+        ref={containerRef}
+      >
+        <ScoreImageAsset
+          alt=""
+          asset={image}
+          className={cn("size-full object-cover", imageClassName)}
+          eager={priority}
         />
+        {activeVideo ? (
+          // The upstream Score videos are visual loops without meaningful dialogue.
+          // oxlint-disable-next-line jsx-a11y/media-has-caption
+          <video
+            autoPlay={!paused}
+            className={cn("absolute inset-0 size-full object-cover", imageClassName)}
+            height={activeVideo.height}
+            loop
+            muted
+            onError={() => setFailedVideo(videoUrl)}
+            playsInline
+            poster={poster}
+            preload="metadata"
+            ref={videoRef}
+            src={activeVideo.url}
+            tabIndex={-1}
+            width={activeVideo.width}
+          />
+        ) : null}
+      </div>
+      {activeVideo ? (
+        <button
+          className="absolute top-4 right-4 z-20 min-h-11 border-2 border-white bg-black/80 px-3 py-2 text-xs font-bold text-white hover:bg-black"
+          onClick={togglePlayback}
+          type="button"
+        >
+          {paused ? t("score.resumeAnimation") : t("score.pauseAnimation")}
+        </button>
       ) : null}
-    </div>
+    </>
   );
 }
