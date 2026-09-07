@@ -168,6 +168,8 @@ export const en = {
     collectionReferences: "Used by Sections and Groups",
   },
   score: {
+    pauseAnimation: "Pause Animation",
+    resumeAnimation: "Resume Animation",
     title: "Scores",
     description: "Arknights stories arranged as Movements and canonical sections in Scores.",
     indexEyebrow: "Score Index / S",

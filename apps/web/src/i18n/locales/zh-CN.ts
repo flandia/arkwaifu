@@ -167,6 +167,8 @@ export const zhCN = {
     collectionReferences: "由乐部与剧情组直接使用",
   },
   score: {
+    pauseAnimation: "暂停动画",
+    resumeAnimation: "继续动画",
     title: "曲谱",
     description: "收录于曲谱，并按照乐章及其乐部整理的《明日方舟》剧情。",
     indexEyebrow: "曲谱目录 / S",
