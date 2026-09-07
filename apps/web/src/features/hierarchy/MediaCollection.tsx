@@ -98,7 +98,19 @@ function MediaCard({
       <div className="flex min-w-0 flex-1 flex-col p-5">
         <Eyebrow>{label}</Eyebrow>
         <code className="block break-all text-sm font-extrabold" translate="no">
-          {asset.id}
+          {!isVideo && asset.url ? (
+            <TransitionLink
+              aria-label={t("common.open", { name: asset.id })}
+              className="underline decoration-2 underline-offset-4 hover:bg-brand-soft"
+              state={{ from }}
+              to={destination}
+              transition="forward"
+            >
+              {asset.id}
+            </TransitionLink>
+          ) : (
+            asset.id
+          )}
         </code>
         {asset.mime || asset.size ? (
           <div className="mt-5 flex flex-wrap gap-x-5 gap-y-2 border-t border-line pt-4 font-mono text-xs text-muted">
