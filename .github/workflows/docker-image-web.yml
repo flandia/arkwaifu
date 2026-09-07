@@ -63,6 +63,8 @@ jobs:
         with:
           context: apps/web
           file: apps/web/Dockerfile
+          build-args: |
+            VITE_GA_MEASUREMENT_ID=${{ vars.VITE_GA_MEASUREMENT_ID }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
           push: true
