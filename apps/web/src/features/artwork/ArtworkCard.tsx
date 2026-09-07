@@ -119,7 +119,7 @@ export function ArtworkCard({
   const destination = `/${locale}/assets/narrative/${category}/${encodeURIComponent(id)}`;
 
   return (
-    <article className="flex min-w-0 flex-col border-2 border-ink bg-surface text-ink [contain-intrinsic-size:auto_30rem] [content-visibility:auto]">
+    <article className="flex min-w-0 flex-col border-2 border-ink bg-surface text-ink [contain-intrinsic-block-size:auto_30rem] [content-visibility:auto]">
       <TransitionLink
         aria-label={t("common.open", { name: title })}
         className={cn(

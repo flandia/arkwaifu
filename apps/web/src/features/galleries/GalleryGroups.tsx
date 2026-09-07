@@ -55,7 +55,7 @@ function GalleryGroupCard({
   );
 
   return (
-    <article className="min-w-0 [contain-intrinsic-size:auto_23rem] [content-visibility:auto]">
+    <article className="min-w-0 [contain-intrinsic-block-size:auto_23rem] [content-visibility:auto]">
       {cover ? (
         <TransitionLink
           aria-label={t("common.open", { name: title })}

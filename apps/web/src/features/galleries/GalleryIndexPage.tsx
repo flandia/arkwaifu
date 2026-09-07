@@ -101,7 +101,7 @@ function GalleryIndexCard({
 }) {
   const { t } = useUi();
   return (
-    <article className="min-w-0 [contain-intrinsic-size:auto_21rem] [content-visibility:auto]">
+    <article className="min-w-0 [contain-intrinsic-block-size:auto_21rem] [content-visibility:auto]">
       <TransitionLink
         className="group relative flex min-h-84 flex-col justify-end overflow-hidden border-r-2 border-b-2 border-ink bg-brand p-6 text-white no-underline"
         to={`/${locale}/galleries/${encodeURIComponent(gallery.id)}`}
@@ -153,7 +153,7 @@ function GalleryBranch({
   return (
     <section
       aria-labelledby={`gallery-branch-${kind}-${branch.key}`}
-      className="[contain-intrinsic-size:auto_42rem] [content-visibility:auto]"
+      className="[contain-intrinsic-block-size:auto_42rem] [content-visibility:auto]"
     >
       <div className="mb-10 grid grid-cols-[minmax(0,1fr)_auto] items-end border-b-[3px] border-ink pb-4">
         <Eyebrow className="col-span-full">
