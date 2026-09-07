@@ -340,4 +340,5 @@ let routes ?china_object_base_url ~database ~object_base_url =
              with_locale request (fun locale ->
                  Database.gallery database locale (Dream.param request "gallery-id")
                  >>= respond (Model.gallery_json ~object_base_url)));
+         Dream.any "/**" (fun _ -> error_json `Not_Found "not_found");
        ]
