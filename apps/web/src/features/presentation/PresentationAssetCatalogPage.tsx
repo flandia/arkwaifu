@@ -83,7 +83,7 @@ export function PresentationAssetCatalogPage() {
         <ArtworkGrid>
           {visible.map((asset) => (
             <article
-              className="flex min-w-0 flex-col border-2 border-ink bg-surface [contain-intrinsic-size:auto_24rem] [content-visibility:auto]"
+              className="flex min-w-0 flex-col border-2 border-ink bg-surface [contain-intrinsic-block-size:auto_24rem] [content-visibility:auto]"
               key={`${asset.category}:${asset.id}`}
             >
               <TransitionLink
