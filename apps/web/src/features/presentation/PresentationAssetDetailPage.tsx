@@ -70,7 +70,7 @@ export function PresentationAssetDetailPage() {
               ))}
           </dl>
           <ActionLink adornment="external" target="_blank" to={asset.url}>
-            {t("artwork.openOriginal")}
+            {asset.format === "video" ? t("mediaAsset.openOriginal") : t("artwork.openOriginal")}
           </ActionLink>
         </aside>
       </div>
