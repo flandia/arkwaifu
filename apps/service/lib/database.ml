@@ -132,6 +132,56 @@ module Query = struct
     (unit ->! int)
       "SELECT EXISTS(SELECT 1 FROM sqlite_schema WHERE name = 'unit_versions')"
 
+  (* Resolve every reader column without scanning archive contents. *)
+  let schema_probe =
+    (unit ->* int)
+      {|
+        SELECT 1 FROM
+          (SELECT unit, res_version FROM unit_versions),
+          (SELECT category, asset_id, object_key, size, width, height
+           FROM narrative_image_assets),
+          (SELECT category, asset_id, material_type, character_id, role, variant,
+                  object_key, size, width, height FROM material_assets),
+          (SELECT category, asset_id, position, material_category, material_asset_id
+           FROM narrative_asset_material_references),
+          (SELECT category, asset_id, object_key, size, width, height
+           FROM presentation_image_assets),
+          (SELECT category, asset_id, object_key, mime, size, width, height,
+                  frame_rate_numerator, frame_rate_denominator, frame_count
+           FROM presentation_video_assets),
+          (SELECT category, asset_id, object_key, mime, size, duration, sample_rate,
+                  width, height, frame_rate_numerator, frame_rate_denominator,
+                  frame_count FROM narrative_media_assets),
+          (SELECT locale, collection_id, collection_kind FROM story_collections),
+          (SELECT locale, movement_id, position, movement_type, name, icon_asset_id,
+                  logo_asset_id, background_asset_id, start_time FROM movements),
+          (SELECT locale, section_id, collection_id, section_type, name,
+                  review_group_id, sort_by_year, sort_within_year,
+                  key_visual_asset_id, title_asset_id, background_asset_id,
+                  decoration_asset_id, retro_background_asset_id, description
+           FROM sections),
+          (SELECT locale, movement_id, location_id, position, location_type,
+                  section_id, divider_icon_asset_id, divider_sub_name, video_id
+           FROM movement_locations),
+          (SELECT locale, archive_id, collection_id, position, name,
+                  archive_category, story_type FROM archive_groups),
+          (SELECT locale, story_id, collection_id, tag, tag_text, code, name,
+                  info, text, position FROM stories),
+          (SELECT locale, story_id, position, asset_id, kind, category, title,
+                  subtitle, names_json FROM story_narrative_image_references),
+          (SELECT locale, story_id, position, asset_id, category, usage
+           FROM story_narrative_media_references),
+          (SELECT locale, gallery_id, collection_id, position, name, description
+           FROM galleries),
+          (SELECT locale, gallery_id, group_id, position, name, description,
+                  related_story_id, related_stage_id FROM gallery_groups),
+          (SELECT locale, gallery_id, group_id, position, cg_id, asset_id, category
+           FROM gallery_narrative_asset_references),
+          (SELECT locale, kind, entry_id, category, title, subtitle, search_text,
+                  parent_json, thumbnail_object_key FROM search_entries)
+        WHERE 0
+      |}
+
   let sitemap_movements =
     (unit ->* t2 string string)
       "SELECT locale, movement_id FROM movements ORDER BY locale, position"
@@ -1841,7 +1891,9 @@ let sqlite_with_pool_observer ~on_acquire path =
               (Error
                  (`Unavailable
                    (Printf.sprintf "unsupported SQLite schema version %d" version)))
-        | Ok _ -> health ()
+        | Ok _ ->
+            use (fun (module Db) -> Db.collect_list Query.schema_probe ())
+            >|= Result.map (fun _ -> ())
       in
       let sitemap_data () =
         use (fun (module Db) ->

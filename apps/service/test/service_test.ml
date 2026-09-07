@@ -1035,7 +1035,7 @@ let test_live_rejects_missing_required_schema () =
     let raw = Sqlite3.db_open destination in
     Fun.protect
       ~finally:(fun () -> ignore (Sqlite3.db_close raw))
-      (fun () -> execute raw "DROP TABLE unit_versions");
+      (fun () -> execute raw "ALTER TABLE stories RENAME COLUMN text TO old_text");
     Lwt.return (`Fetched None)
   in
   Alcotest.(check bool)
@@ -1044,6 +1044,39 @@ let test_live_rejects_missing_required_schema () =
        (Lwt_main.run
           (Database.For_test.live ~fetch ~cache_dir
              ~download_timeout_seconds:5.)))
+
+let test_live_rejects_incomplete_refresh () =
+  with_sqlite_fixture @@ fun source ->
+  with_temporary_directory @@ fun cache_dir ->
+  let initial = ref true in
+  let fetch ~etag:_ ~destination =
+    copy_file source destination;
+    if not !initial then (
+      let raw = Sqlite3.db_open destination in
+      Fun.protect
+        ~finally:(fun () -> ignore (Sqlite3.db_close raw))
+        (fun () -> execute raw "DROP TABLE narrative_media_assets"));
+    initial := false;
+    Lwt.return (`Fetched None)
+  in
+  let controlled =
+    match Lwt_main.run
+      (Database.For_test.live ~fetch ~cache_dir ~download_timeout_seconds:5.) with
+    | Ok value -> value
+    | Error error -> Alcotest.failf "initial complete generation: %s" error
+  in
+  Fun.protect
+    ~finally:(fun () -> Lwt_main.run (Database.close controlled.database))
+    (fun () ->
+      Alcotest.(check bool) "incomplete refresh is rejected" true
+        (match Lwt_main.run (controlled.refresh_once ()) with
+        | `Failed _ -> true
+        | _ -> false);
+      Lwt_main.run
+        (Database.narrative_media_asset controlled.database "video" "video/story.mp4")
+      |> require_ok "old generation remains queryable" |> ignore;
+      Alcotest.(check int) "rejected candidate removed" 1
+        (List.length (cache_generations cache_dir)))
 
 let test_refreshes_are_serialized () =
   with_sqlite_fixture @@ fun source ->
@@ -1085,6 +1118,8 @@ let () =
             test_live_rejects_initial_schema;
           Alcotest.test_case "required schema rejection" `Quick
             test_live_rejects_missing_required_schema;
+          Alcotest.test_case "incomplete refresh rejection" `Quick
+            test_live_rejects_incomplete_refresh;
           Alcotest.test_case "serialized refresh" `Quick
             test_refreshes_are_serialized;
         ] );
