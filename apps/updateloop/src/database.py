@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import sqlite3
 from collections.abc import Mapping, Sequence
+from contextlib import closing
 from importlib.resources import files
 from pathlib import Path
 
@@ -48,9 +49,10 @@ def initialize_or_validate(path: Path) -> bool:
 def _validate_schema_shape(path: Path) -> None:
     """Probe every required table and column without reading archive rows."""
 
-    expected = sqlite3.connect(":memory:")
-    connection = sqlite3.connect(path)
-    try:
+    with (
+        closing(sqlite3.connect(":memory:")) as expected,
+        closing(sqlite3.connect(path)) as connection,
+    ):
         expected.executescript(_read_schema())
         for (table,) in expected.execute("SELECT name FROM sqlite_schema WHERE type = 'table'"):
             columns = ", ".join(
@@ -60,9 +62,6 @@ def _validate_schema_shape(path: Path) -> None:
                 connection.execute(f'SELECT {columns} FROM "{table}" AS required LIMIT 0')
             except sqlite3.DatabaseError as error:
                 raise ValueError(f"unsupported database schema shape: {error}") from error
-    finally:
-        connection.close()
-        expected.close()
 
 
 def _ensure_performance_indexes(path: Path) -> bool:
