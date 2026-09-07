@@ -1,7 +1,6 @@
-import { use, useState } from "react";
-import { useLocation, useParams } from "react-router";
+import { use } from "react";
+import { useLocation, useParams, useSearchParams } from "react-router";
 import { getPresentationAssets } from "../../api/presentation";
-import type { PresentationAssetCategory } from "../../api/types";
 import { formatBytes } from "../../api/utils";
 import { useUi, useUiLanguage } from "../../i18n";
 import { requiredLocale, TransitionLink } from "../../navigation";
@@ -15,10 +14,22 @@ export function PresentationAssetCatalogPage() {
   const locale = requiredLocale(useParams().locale);
   const location = useLocation();
   const assets = use(getPresentationAssets(locale));
-  const [category, setCategory] = useState<PresentationAssetCategory | "">("");
-  const [format, setFormat] = useState<"" | "image" | "video">("");
-  const [referenceState, setReferenceState] = useState<"" | "referenced" | "orphaned">("");
+  const [searchParams, setSearchParams] = useSearchParams();
   const categories = [...new Set(assets.map((asset) => asset.category))];
+  const category = categories.find((value) => value === searchParams.get("category")) ?? "";
+  const formatParam = searchParams.get("format");
+  const format = formatParam === "image" || formatParam === "video" ? formatParam : "";
+  const referenceParam = searchParams.get("references");
+  const referenceState =
+    referenceParam === "referenced" || referenceParam === "orphaned" ? referenceParam : "";
+
+  function setFilter(key: string, value: string): void {
+    const next = new URLSearchParams(searchParams);
+    if (value) next.set(key, value);
+    else next.delete(key);
+    setSearchParams(next, { replace: true });
+  }
+
   const visible = assets.filter(
     (asset) =>
       (!category || asset.category === category) &&
@@ -39,9 +50,7 @@ export function PresentationAssetCatalogPage() {
           {t("presentation.category")}
           <select
             className="min-h-11 border-2 border-ink bg-white px-3"
-            onChange={(event) =>
-              setCategory(event.currentTarget.value as PresentationAssetCategory)
-            }
+            onChange={(event) => setFilter("category", event.currentTarget.value)}
             value={category}
           >
             <option value="">{t("presentation.all")}</option>
@@ -56,7 +65,7 @@ export function PresentationAssetCatalogPage() {
           {t("presentation.format")}
           <select
             className="min-h-11 border-2 border-ink bg-white px-3"
-            onChange={(event) => setFormat(event.currentTarget.value as "" | "image" | "video")}
+            onChange={(event) => setFilter("format", event.currentTarget.value)}
             value={format}
           >
             <option value="">{t("presentation.all")}</option>
@@ -68,9 +77,7 @@ export function PresentationAssetCatalogPage() {
           {t("presentation.referenceState")}
           <select
             className="min-h-11 border-2 border-ink bg-white px-3"
-            onChange={(event) =>
-              setReferenceState(event.currentTarget.value as "" | "referenced" | "orphaned")
-            }
+            onChange={(event) => setFilter("references", event.currentTarget.value)}
             value={referenceState}
           >
             <option value="">{t("presentation.all")}</option>
