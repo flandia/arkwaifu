@@ -41,7 +41,28 @@ def initialize_or_validate(path: Path) -> bool:
         finally:
             connection.close()
     validate_schema_version(path)
+    _validate_schema_shape(path)
     return created or _ensure_performance_indexes(path)
+
+
+def _validate_schema_shape(path: Path) -> None:
+    """Probe every required table and column without reading archive rows."""
+
+    expected = sqlite3.connect(":memory:")
+    connection = sqlite3.connect(path)
+    try:
+        expected.executescript(_read_schema())
+        for (table,) in expected.execute("SELECT name FROM sqlite_schema WHERE type = 'table'"):
+            columns = ", ".join(
+                f'required."{row[1]}"' for row in expected.execute(f'PRAGMA table_info("{table}")')
+            )
+            try:
+                connection.execute(f'SELECT {columns} FROM "{table}" AS required LIMIT 0')
+            except sqlite3.DatabaseError as error:
+                raise ValueError(f"unsupported database schema shape: {error}") from error
+    finally:
+        connection.close()
+        expected.close()
 
 
 def _ensure_performance_indexes(path: Path) -> bool:

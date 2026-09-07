@@ -118,6 +118,31 @@ def test_database_rejects_an_unsupported_schema_version(tmp_path):
         assert connection.execute("PRAGMA user_version").fetchone()[0] == 3
 
 
+@pytest.mark.parametrize(
+    "damage",
+    [
+        "DROP TABLE narrative_media_assets",
+        "ALTER TABLE stories DROP COLUMN text",
+    ],
+)
+def test_database_rejects_incomplete_version_two_before_repairing_indexes(tmp_path, damage):
+    path = tmp_path / "arkwaifu.sqlite3"
+    initialize_or_validate(path)
+    with sqlite3.connect(path) as connection:
+        connection.execute(damage)
+        connection.execute("DROP INDEX story_narrative_image_references_by_asset")
+
+    with pytest.raises(ValueError, match="unsupported database schema shape"):
+        initialize_or_validate(path)
+
+    with sqlite3.connect(path) as connection:
+        assert connection.execute("PRAGMA user_version").fetchone()[0] == 2
+        assert (
+            list(connection.execute("PRAGMA index_info(story_narrative_image_references_by_asset)"))
+            == []
+        )
+
+
 def test_database_writer_keeps_foreign_key_enforcement(tmp_path):
     path = tmp_path / "arkwaifu.sqlite3"
     initialize_or_validate(path)
