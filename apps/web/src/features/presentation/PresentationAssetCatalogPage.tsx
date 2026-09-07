@@ -83,7 +83,7 @@ export function PresentationAssetCatalogPage() {
         <ArtworkGrid>
           {visible.map((asset) => (
             <article
-              className="flex min-w-0 flex-col border-2 border-ink bg-surface"
+              className="flex min-w-0 flex-col border-2 border-ink bg-surface [contain-intrinsic-size:auto_24rem] [content-visibility:auto]"
               key={`${asset.category}:${asset.id}`}
             >
               <TransitionLink
@@ -93,7 +93,15 @@ export function PresentationAssetCatalogPage() {
                 transition="forward"
               >
                 {asset.previewUrl ? (
-                  <img alt="" className="size-full object-contain" src={asset.previewUrl} />
+                  <img
+                    alt=""
+                    className="size-full object-contain"
+                    decoding="async"
+                    height={asset.height ?? undefined}
+                    loading="lazy"
+                    src={asset.previewUrl}
+                    width={asset.width ?? undefined}
+                  />
                 ) : (
                   <span className="font-mono text-xs font-bold uppercase">{asset.format}</span>
                 )}
