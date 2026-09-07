@@ -15,6 +15,7 @@ import { useUi, useUiLanguage } from "../../i18n";
 import { localeLanguageTag, requiredLocale, TransitionLink } from "../../navigation";
 import { ArchivePage, BackLink, PageHeader } from "../../shared/Page";
 import { ActionLink } from "../../shared/ui/Action";
+import { DownloadButton } from "../../shared/ui/DownloadButton";
 import { ArtworkGrid } from "../../shared/ui/ArtworkGrid";
 import { Eyebrow, SectionHeading } from "../../shared/ui/Typography";
 import { ArtworkImage } from "../artwork/ArtworkCard";
@@ -168,9 +169,7 @@ function GalleryGroupLayout({
           />
           {artwork ? (
             <div className="mt-6 grid gap-3">
-              <ActionLink download to={artwork.url}>
-                {t("artwork.downloadOriginal")}
-              </ActionLink>
+              <DownloadButton url={artwork.url}>{t("artwork.downloadOriginal")}</DownloadButton>
               <ActionLink
                 adornment="external"
                 rel="noreferrer"

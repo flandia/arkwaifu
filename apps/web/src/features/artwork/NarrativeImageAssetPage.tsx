@@ -15,6 +15,7 @@ import {
 } from "../../navigation";
 import { ArchivePage, BackLink, PageHeader } from "../../shared/Page";
 import { ActionLink } from "../../shared/ui/Action";
+import { DownloadButton } from "../../shared/ui/DownloadButton";
 import { ArtworkGrid } from "../../shared/ui/ArtworkGrid";
 import { Eyebrow, SectionHeading } from "../../shared/ui/Typography";
 import { ArtworkImage } from "./ArtworkCard";
@@ -114,9 +115,7 @@ export function NarrativeImageAssetPage() {
             ))}
           </dl>
           <div className="grid gap-3">
-            <ActionLink download to={artwork.url}>
-              {t("artwork.downloadOriginal")}
-            </ActionLink>
+            <DownloadButton url={artwork.url}>{t("artwork.downloadOriginal")}</DownloadButton>
             <ActionLink
               adornment="external"
               rel="noreferrer"
