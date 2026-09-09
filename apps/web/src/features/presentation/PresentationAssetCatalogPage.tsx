@@ -87,6 +87,7 @@ export function PresentationAssetCatalogPage() {
               key={`${asset.category}:${asset.id}`}
             >
               <TransitionLink
+                aria-label={t("common.open", { name: asset.id })}
                 className="checkerboard grid aspect-video place-items-center overflow-hidden border-b-2 border-ink bg-black text-white no-underline"
                 state={{ from: `${location.pathname}${location.search}` }}
                 to={`/${locale}/assets/presentation/${asset.category}/${encodeURIComponent(asset.id)}`}
