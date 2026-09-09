@@ -849,9 +849,12 @@ let test_http_contract () =
     (Dream.status preflight |> Dream.status_to_int);
   List.iter
     (fun target ->
+      let missing = response handler target in
       Alcotest.(check int)
         ("legacy route absent: " ^ target) 404
-        (Dream.status (response handler target) |> Dream.status_to_int))
+        (Dream.status missing |> Dream.status_to_int);
+      Alcotest.(check string) ("missing route JSON: " ^ target) "not_found"
+        (response_json missing |> member "error" |> to_string))
     [
       "/api/CN/story-groups";
       "/api/CN/stories/score-story";
