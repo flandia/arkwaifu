@@ -178,7 +178,9 @@ class UpstreamCache:
                         on_hit()
                     return destination
                 except _CACHE_ERRORS:
-                    destination.unlink(missing_ok=True)
+                    pass
+            if destination.exists():
+                await await_owned(asyncio.to_thread(_remove_cache_entry, destination))
 
             destination.parent.mkdir(parents=True, exist_ok=True)
             temporary = destination.with_name(f".{destination.name}.{uuid.uuid4().hex}.tmp")
