@@ -140,7 +140,7 @@ A terminal record uses `done`, a cache hit uses `cached`, and a failure uses `fa
 
 The updater writes cache entries atomically and validates them before reuse. It replaces corrupted files or directories instead of treating them as cache hits.
 
-Artwork cache entries use the percent-encoded upstream resource name and published MD5 value:
+Downloaded wrappers remain version-specific, using the percent-encoded upstream resource name and published MD5 value:
 
 ```text
 .cache/<resVersion>/artwork/
@@ -148,19 +148,28 @@ Artwork cache entries use the percent-encoded upstream resource name and publish
 `-- resources/
     `-- <percent-encoded-resource-name>/
         `-- <upstream-md5>/
-            |-- fetched/
-            |   `-- wrapper.dat
-            |-- unwrapped/
-            |   `-- <relative-bundle-path>
-            |-- extracted/
-            |   `-- <unity-exports>
-            `-- rendered/
-                |-- processed/
-                |   `-- <png-audio-and-video-files>
-                `-- manifest.json
+            `-- fetched/
+                `-- wrapper.dat
 ```
 
-Each stage depends only on the previous stage and records a format fingerprint. Completed entries remain until an operator removes them.
+Ordinary resources share their `unwrapped`, `extracted`, and `rendered` products across versions when the resource name, MD5, and stage inputs match:
+
+```text
+.cache/artwork-content-v1/artwork/resources/
+`-- <first-two-resource-digest-characters>/
+    `-- <resource-digest>/
+        `-- <stage>/
+            `-- <fingerprint-digest>/
+                `-- <stage-files>
+```
+
+The resource digest is SHA-256 of the resource name and upstream MD5. The fingerprint digest is SHA-256 of the stage fingerprint, which includes the formats of that stage and its dependencies. Applicable rendered fingerprints also include normalized gallery recipes and the Score asset identity format. Different format and recipe variants coexist, so changing a rendering recipe can reuse compatible extraction products.
+
+Anime KV resources under `avg/animatedkv/` keep all four stages under the version-specific resource directory shown above. Their wrapper companions are not covered by the main bundle MD5, so processing products cannot be shared by that checksum alone.
+
+Every completed directory carries `.arkwaifu-cache.json`. Unwrapped directories contain the original relative bundle path, extracted directories contain Unity exports or demuxed video, and rendered directories contain `manifest.json` plus ordinal media files under `processed/`. Shared manifests are rebound to the contributing version when read; shared cache paths do not change published object keys.
+
+Completed entries remain until an operator removes them. Removing only `.cache/<resVersion>/` leaves ordinary shared processing products available. Use `--no-cache` to rebuild with an isolated temporary cache.
 
 Locales share `.cache/game-data/archive.zip`. The updater validates the archive against every requested locale version before reuse. Extracted locale data remains under `.cache/<resVersion>/game-data/<unit>/extracted/`.
 
