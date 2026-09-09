@@ -2662,7 +2662,12 @@ let clean_database_cache path =
               || String.ends_with ~suffix:".sqlite3.part" name)
          then remove_if_exists (Filename.concat path name))
 
-type generation = { database : t; path : string }
+type generation = {
+  database : t;
+  path : string;
+  mutable readers : int;
+  readers_finished : unit Lwt_condition.t;
+}
 
 type fetch_result =
   [ `Not_modified | `Fetched of string option | `Failed of string ]
@@ -2721,7 +2726,11 @@ let download_generation ~fetch ~cache_dir ~counter ~etag ~timeout_seconds =
             | Error `Not_found -> cleanup "database health check failed"
             | Ok () ->
                 candidate := None;
-                Lwt.return (`Fetched ({ database; path }, response_etag))))
+                Lwt.return
+                  (`Fetched
+                    ( { database; path; readers = 0;
+                        readers_finished = Lwt_condition.create () },
+                      response_etag ))))
   in
   Lwt.catch
     (fun () -> Lwt_unix.with_timeout timeout_seconds download)
@@ -2741,7 +2750,14 @@ type live_state = {
 }
 
 let retire generation =
-  generation.database.close () >|= fun () -> remove_if_exists generation.path
+  let rec wait_for_readers () =
+    if generation.readers = 0 then Lwt.return_unit
+    else
+      Lwt_condition.wait generation.readers_finished >>= wait_for_readers
+  in
+  Lwt.no_cancel
+    (wait_for_readers () >>= generation.database.close >|= fun () ->
+     remove_if_exists generation.path)
 
 let refresh_once ~fetch ~cache_dir ~download_timeout_seconds state =
   Lwt_mutex.with_lock state.refresh_lock (fun () ->
@@ -2783,7 +2799,20 @@ let start_live ~fetch ~cache_dir ~download_timeout_seconds =
             refresh_lock = Lwt_mutex.create ();
           }
         in
-        let with_current callback = callback !(state.current).database in
+        let with_current callback =
+          if state.closed then
+            Lwt.return (Error (`Unavailable "database is closed"))
+          else
+            let generation = !(state.current) in
+            generation.readers <- generation.readers + 1;
+            Lwt.finalize
+              (fun () -> callback generation.database)
+              (fun () ->
+                generation.readers <- generation.readers - 1;
+                if generation.readers = 0 then
+                  Lwt_condition.broadcast generation.readers_finished ();
+                Lwt.return_unit)
+        in
         let close_task = ref None in
         let close () =
           match !close_task with

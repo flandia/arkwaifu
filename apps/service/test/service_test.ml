@@ -1071,6 +1071,40 @@ let test_refreshes_are_serialized () =
       Alcotest.(check int) "one fetch at a time" 1 !maximum_active;
       Lwt_main.run (Database.close controlled.database)
 
+let test_refresh_preserves_active_readers () =
+  with_sqlite_fixture @@ fun source ->
+  with_temporary_directory @@ fun cache_dir ->
+  let fetch ~etag:_ ~destination =
+    copy_file source destination;
+    Lwt.return (`Fetched None)
+  in
+  match Lwt_main.run
+    (Database.For_test.live ~fetch ~cache_dir ~download_timeout_seconds:5.) with
+  | Error error -> Alcotest.failf "cannot start reader: %s" error
+  | Ok controlled ->
+      Fun.protect
+        ~finally:(fun () -> Lwt_main.run (Database.close controlled.database))
+        (fun () ->
+          let requests = List.init 100 (fun _ ->
+            Database.section controlled.database "CN" "movement-a" "section-a") in
+          let refresh = controlled.refresh_once () in
+          let results, replacement = Lwt_main.run
+            (Lwt_unix.with_timeout 5. (fun () ->
+              Lwt.both (Lwt.all requests) refresh)) in
+          List.iter (fun result ->
+            require_ok "in-flight section survives refresh" result |> ignore) results;
+          Alcotest.(check bool) "refresh completes" true (replacement = `Replaced);
+          Alcotest.(check int) "old generation retired" 1
+            (List.length (cache_generations cache_dir));
+          let pending = Database.section controlled.database
+            "CN" "movement-a" "section-a" in
+          let closing = Database.close controlled.database in
+          let result, () = Lwt_main.run
+            (Lwt_unix.with_timeout 5. (fun () -> Lwt.both pending closing)) in
+          require_ok "in-flight section survives close" result |> ignore;
+          Alcotest.(check bool) "closed reader rejects new queries" true
+            (Result.is_error (Lwt_main.run (Database.health controlled.database))))
+
 let () =
   Alcotest.run "arkwaifu-service"
     [
@@ -1087,6 +1121,8 @@ let () =
             test_live_rejects_missing_required_schema;
           Alcotest.test_case "serialized refresh" `Quick
             test_refreshes_are_serialized;
+          Alcotest.test_case "active readers survive refresh" `Quick
+            test_refresh_preserves_active_readers;
         ] );
       ( "http",
         [
