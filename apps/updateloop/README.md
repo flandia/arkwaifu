@@ -2,6 +2,9 @@
 
 The Python 3.14 updater publishes upstream Arknights artwork and locale data as one SQLite database plus versioned image and Score-video objects in S3-compatible storage. Use this guide to run, configure, and test the updater.
 
+For production checks every 15 minutes with updates on temporary DigitalOcean infrastructure, see
+[Schedule production updates on temporary Droplets](docs/github-droplet.md).
+
 ## Choose an update command
 
 Run the updater from `apps/updateloop`. The `run` subcommand accepts `artwork` and the locale units `CN`, `EN`, `JP`, `KR`, and `TW`.
@@ -18,6 +21,8 @@ uv run updateloop run
 uv run updateloop run CN --force
 uv run updateloop run artwork --no-cache
 uv run updateloop run --suppress-incomplete-upstream-warnings
+uv run updateloop check
+uv run updateloop check --archive
 ```
 
 Choose a mode based on the data you need to publish:
@@ -31,6 +36,14 @@ Choose a mode based on the data you need to publish:
 - `--force` rebuilds selected locales at their current versions
 - `--no-cache` uses temporary storage without reading or writing `.cache`
 - `--suppress-incomplete-upstream-warnings` hides expected warnings for missing upstream story text, artwork, or empty locale sections
+- `check` compares all six upstream versions with a downloaded copy of the published database, without building or publishing anything
+- `check --archive` also checks for missing historical wrapper completion manifests, including gaps before the latest archived version
+
+The check commands print one JSON object with `update_needed`, `database_update`, and
+`archive_update` booleans. Exit status 0 means the check succeeded, including when
+there is no work; a failed check exits nonzero and must not be treated as an
+unchanged result. Checks use temporary local storage and include any required
+database initialization or supported additive-index repair in `database_update`.
 
 The command removes duplicate units while preserving their first occurrence. It detects every requested unit concurrently and publishes nothing if detection or preparation fails.
 

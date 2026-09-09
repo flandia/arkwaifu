@@ -1,0 +1,90 @@
+name: Run production updateloop
+
+on:
+  schedule:
+    - cron: "*/15 * * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: read
+
+# All production writers in this repository must share this group.
+concurrency:
+  group: arkwaifu-production-writer
+  cancel-in-progress: false
+
+env:
+  UPDATELOOP_IMAGE: ghcr.io/flandia/arkwaifu/updateloop:latest
+  DROPLET_TAG: arkwaifu-updateloop-${{ github.repository_id }}
+  DROPLET_NAME: arkwaifu-${{ github.run_id }}-${{ github.run_attempt }}
+
+jobs:
+  preflight:
+    if: github.repository == 'flandia/arkwaifu' && github.ref == 'refs/heads/master'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    outputs:
+      update_needed: ${{ steps.preflight.outputs.update_needed }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check database versions on GitHub
+        id: preflight
+        env:
+          UPDATELOOP_ENV: ${{ secrets.UPDATELOOP_ENV }}
+          GH_TOKEN: ${{ github.token }}
+        run: bash .github/scripts/updateloop-droplet.sh check
+      - name: Retain preflight decision
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: preflight-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/updateloop-logs/
+          if-no-files-found: ignore
+          retention-days: 14
+
+  update:
+    needs: preflight
+    if: needs.preflight.outputs.update_needed == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    outputs:
+      droplet_ids: ${{ steps.provision.outputs.droplet_ids }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: digitalocean/action-doctl@v2
+        with:
+          token: ${{ secrets.DIGITALOCEAN_ACCESS_TOKEN }}
+      - name: Provision Droplet and run updater
+        id: provision
+        env:
+          DIGITALOCEAN_ACCESS_TOKEN: ${{ secrets.DIGITALOCEAN_ACCESS_TOKEN }}
+          UPDATELOOP_ENV: ${{ secrets.UPDATELOOP_ENV }}
+          GH_TOKEN: ${{ github.token }}
+          DROPLET_REGION: ${{ vars.UPDATELOOP_REGION || 'sgp1' }}
+          DROPLET_SIZE: ${{ vars.UPDATELOOP_SIZE || 'c-8' }}
+        run: bash .github/scripts/updateloop-droplet.sh run
+      - name: Retain run logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: updateloop-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/updateloop-logs/
+          if-no-files-found: ignore
+          retention-days: 14
+
+  cleanup:
+    needs: update
+    if: always() && needs.update.result != 'skipped'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: digitalocean/action-doctl@v2
+        with:
+          token: ${{ secrets.DIGITALOCEAN_ACCESS_TOKEN }}
+      - name: Destroy this run's Droplets and SSH key
+        env:
+          DIGITALOCEAN_ACCESS_TOKEN: ${{ secrets.DIGITALOCEAN_ACCESS_TOKEN }}
+          DROPLET_IDS: ${{ needs.update.outputs.droplet_ids || '[]' }}
+        run: bash .github/scripts/updateloop-droplet.sh cleanup

@@ -1,0 +1,40 @@
+name: Clean up updater Droplets
+
+on:
+  workflow_run:
+    workflows: [Run production updateloop]
+    types: [completed]
+  schedule:
+    - cron: "*/15 * * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  cleanup:
+    if: >-
+      github.repository == 'flandia/arkwaifu' &&
+      (github.event_name != 'workflow_run' ||
+       (github.event.workflow_run.head_branch == 'master' &&
+        github.event.workflow_run.event != 'pull_request'))
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      DIGITALOCEAN_ACCESS_TOKEN: ${{ secrets.DIGITALOCEAN_ACCESS_TOKEN }}
+      DROPLET_TAG: arkwaifu-updateloop-${{ github.repository_id }}
+      DROPLET_NAME: arkwaifu-${{ github.event.workflow_run.id || github.run_id }}-${{ github.event.workflow_run.run_attempt || github.run_attempt }}
+    steps:
+      # workflow_run is privileged: always use trusted default-branch scripts.
+      - uses: actions/checkout@v4
+        with:
+          ref: master
+      - uses: digitalocean/action-doctl@v2
+        with:
+          token: ${{ secrets.DIGITALOCEAN_ACCESS_TOKEN }}
+      - name: Retry cleanup of the completed or cancelled run
+        if: github.event_name == 'workflow_run'
+        run: bash .github/scripts/updateloop-droplet.sh cleanup
+      - name: Reap expired Droplets even when there is no upstream update
+        if: always()
+        run: bash .github/scripts/updateloop-droplet.sh reap
