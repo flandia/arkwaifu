@@ -79,6 +79,8 @@ def _unit(value: str) -> UpdateUnit:
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="updateloop")
     commands = parser.add_subparsers(dest="command", required=True)
+    check = commands.add_parser("check", help="check for pending updates without publishing")
+    check.add_argument("--archive", action="store_true", help="also check wrapper archive history")
     run = commands.add_parser("run", help="update selected units")
     run.add_argument("units", nargs="*", type=_unit)
     run.add_argument("--force", action="store_true")
@@ -253,6 +255,52 @@ async def _run(
         )
 
 
+async def _check(*, archive: bool) -> int:
+    """Print a JSON decision after read-only detection of database and archive work."""
+
+    try:
+        settings = Settings.from_environment()
+        with tempfile.TemporaryDirectory(prefix="arkwaifu-preflight-") as temporary:
+            cache = UpstreamCache(Path(temporary))
+            builder = _locale_builder(settings, cache)
+            try:
+                async with asyncio.TaskGroup() as group:
+                    artwork = group.create_task(_prepare_artwork(settings, cache))
+                    locales = [
+                        group.create_task(_prepare_locale(builder, cast(LocaleUnit, unit)))
+                        for unit in _ALL_UNITS
+                        if unit != "artwork"
+                    ]
+                requests = [artwork.result(), *(task.result() for task in locales)]
+                database_update = await _updater(settings).needs_update(requests)
+                archive_update = False
+                if archive:
+                    history = WindowsVersionHistory(
+                        github_api_url=settings.github_api_url,
+                        github_raw_url="https://raw.githubusercontent.com",
+                        github_token=settings.github_token,
+                        cache=cache,
+                    )
+                    versions = await history.versions(artwork.result().res_version)
+                    completed = await _asset_bundle_archive(settings).completed_versions()
+                    archive_update = any(version not in completed for version in versions)
+            finally:
+                await builder.aclose()
+        print(
+            json.dumps(
+                {
+                    "update_needed": database_update or archive_update,
+                    "database_update": database_update,
+                    "archive_update": archive_update,
+                }
+            )
+        )
+        return 0
+    except Exception:
+        _LOGGER.exception("update check status=failed")
+        return 1
+
+
 async def _run_with_cache(
     settings: Settings,
     units: list[UpdateUnit],
@@ -332,30 +380,27 @@ def main(argv: list[str] | None = None) -> None:
     _validate_arguments(parser, args)
     load_dotenv(Path.cwd() / ".env", override=False)
     _configure_logging(
-        suppress_incomplete_upstream_warnings=args.suppress_incomplete_upstream_warnings
+        suppress_incomplete_upstream_warnings=getattr(
+            args, "suppress_incomplete_upstream_warnings", False
+        )
     )
-    if args.command == "run":
+    if args.command in {"run", "check"}:
+        operation = (
+            _check(archive=args.archive)
+            if args.command == "check"
+            else _run(
+                args.units,
+                force=args.force,
+                complete=args.complete,
+                archive=args.archive,
+                use_cache=not args.no_cache,
+            )
+        )
         if sys.platform == "win32":
             loop_factory = lambda: asyncio.SelectorEventLoop(selectors.SelectSelector())
             with asyncio.Runner(loop_factory=loop_factory) as runner:
-                exit_code = runner.run(
-                    _run(
-                        args.units,
-                        force=args.force,
-                        complete=args.complete,
-                        archive=args.archive,
-                        use_cache=not args.no_cache,
-                    )
-                )
+                exit_code = runner.run(operation)
         else:
-            exit_code = asyncio.run(
-                _run(
-                    args.units,
-                    force=args.force,
-                    complete=args.complete,
-                    archive=args.archive,
-                    use_cache=not args.no_cache,
-                )
-            )
+            exit_code = asyncio.run(operation)
         raise SystemExit(exit_code)
     raise AssertionError(f"unhandled command: {args.command}")
