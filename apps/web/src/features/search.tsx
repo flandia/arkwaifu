@@ -68,7 +68,7 @@ function SearchResultCard({
   if (!path) return null;
 
   return (
-    <li className="min-w-0 [contain-intrinsic-size:auto_13rem] [content-visibility:auto]">
+    <li className="min-w-0 [contain-intrinsic-block-size:auto_13rem] [content-visibility:auto]">
       <TransitionLink
         className="group grid min-h-48 grid-cols-[8rem_minmax(0,1fr)] border-r-2 border-b-2 border-ink bg-surface text-ink no-underline transition-colors hover:bg-brand-soft sm:grid-cols-[11rem_minmax(0,1fr)]"
         to={path}
