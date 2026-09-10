@@ -3,7 +3,7 @@
 open Lwt.Infix
 
 let json ?(status = `OK) value =
-  Dream.json ~status (Yojson.Safe.to_string value)
+  Dream.json ~status (Timing.json (fun () -> Yojson.Safe.to_string value))
 
 let error_json status code = json ~status (`Assoc [ ("error", `String code) ])
 
@@ -18,7 +18,7 @@ let encode_response encode value =
 
 let respond encode = function
   | Ok value -> (
-      match encode_response encode value with
+      match Timing.json (fun () -> encode_response encode value) with
       | Ok encoded -> json encoded
       | Error message -> database_error (`Unavailable message))
   | Error error -> database_error error
@@ -153,7 +153,8 @@ let routes ?china_object_base_url ~database ~object_base_url =
               body)
   in
   let object_url request = request_object_base_url request in
-  public_read_cors
+  Timing.middleware
+  @@ public_read_cors
   @@ Dream.router
        [
          Dream.get "/health" (fun _ ->

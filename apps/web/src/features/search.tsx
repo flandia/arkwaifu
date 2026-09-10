@@ -1,4 +1,4 @@
-import { startTransition, useDeferredValue, useEffect, useId, useState } from "react";
+import { startTransition, useEffect, useId, useState } from "react";
 import type { TFunction } from "i18next";
 import { useParams, useSearchParams } from "react-router";
 import { getSearchResults } from "../api/search";
@@ -121,7 +121,6 @@ export function SearchPage() {
   const [searchParams, setSearchParams] = useSearchParams();
   const urlQuery = searchParams.get("q") ?? "";
   const [query, setQuery] = useState(urlQuery);
-  const deferredQuery = useDeferredValue(query);
   const fieldID = useId();
   const [state, setState] = useState<SearchState>({
     query: "",
@@ -145,7 +144,7 @@ export function SearchPage() {
     return () => window.clearTimeout(timeout);
   }, [query, searchParams, setSearchParams, urlQuery]);
 
-  const normalizedQuery = deferredQuery.trim();
+  const normalizedQuery = query.trim();
   useEffect(() => {
     let active = true;
     if (!normalizedQuery) {
@@ -155,9 +154,10 @@ export function SearchPage() {
       };
     }
 
+    const controller = new AbortController();
     setState((previous) => ({ ...previous, query: normalizedQuery, loading: true, error: null }));
     const timeout = window.setTimeout(() => {
-      void getSearchResults(locale, normalizedQuery).then(
+      void getSearchResults(locale, normalizedQuery, controller.signal).then(
         (results) => {
           if (!active) return;
           setState({ query: normalizedQuery, results, loading: false, error: null });
@@ -172,6 +172,7 @@ export function SearchPage() {
     return () => {
       active = false;
       window.clearTimeout(timeout);
+      controller.abort();
     };
   }, [locale, normalizedQuery]);
 

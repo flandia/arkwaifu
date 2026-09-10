@@ -383,6 +383,77 @@ let test_narrative_image_asset_json () =
     "https://objects.example/bucket/ART/v/thumbnail/illustration/cg%252Fpart.webp"
     (json |> member "previewUrl" |> to_string)
 
+let test_search_literal_context () =
+  with_database
+    ~after:{|
+      UPDATE stories SET info = 'MixedCASE 阿米娅 100%_ [x] boundary',
+        text = 'joined text' WHERE locale = 'CN' AND story_id = 'score-story';
+      UPDATE stories SET text = 'foreign-locale-only' WHERE locale = 'EN';
+    |}
+  @@ fun database ->
+  List.iter
+    (fun query ->
+      let results =
+        Lwt_main.run (Database.search database "CN" query)
+        |> require_ok "literal context search"
+      in
+      List.iter
+        (fun (kind, id) ->
+          Alcotest.(check bool) (query ^ " finds " ^ id) true
+            (List.exists
+               (fun (result : Model.search_result) ->
+                 result.kind = kind && result.id = id)
+               results))
+        [ ("story", "score-story"); ("narrative_asset", "artwork-first") ])
+    [ "mixedcase"; "米"; "100%_"; "[x]"; "boundary joined" ];
+  List.iter
+    (fun query ->
+      let results =
+        Lwt_main.run (Database.search database "CN" query)
+        |> require_ok "unmatched context search"
+      in
+      Alcotest.(check int) (query ^ " has no match") 0 (List.length results))
+    [ "foreign-locale-only"; "100-anything"; "missing-query" ]
+
+let test_anime_prefix_boundaries () =
+  with_database
+    ~after:{|
+      INSERT INTO narrative_image_assets VALUES
+        ('画%_[]/part', 'illustration', 'ART/v/composition/illustration/match.png', 1, 1, 1),
+        ('画%_[]0part', 'illustration', 'ART/v/composition/illustration/upper.png', 1, 1, 1),
+        ('画%_[]', 'illustration', 'ART/v/composition/illustration/exact.png', 1, 1, 1),
+        ('near0/part', 'illustration', 'ART/v/composition/illustration/near.png', 1, 1, 1);
+      INSERT INTO story_narrative_image_references VALUES
+        ('CN', 'score-story', 7, '画%_[]', 'picture', 'background', NULL, NULL, '[]'),
+        ('CN', 'score-story', 8, '画%_[]0', 'picture', 'background', NULL, NULL, '[]'),
+        ('CN', 'score-story', 9, 'near', 'picture', 'background', NULL, NULL, '[]');
+    |}
+  @@ fun database ->
+  let story =
+    Lwt_main.run
+      (Database.score_story database "CN" "movement-a" "section-a" "score-story")
+    |> require_ok "prefix story"
+  in
+  let section =
+    Lwt_main.run (Database.section database "CN" "movement-a" "section-a")
+    |> require_ok "prefix section"
+  in
+  List.iter
+    (fun references ->
+      List.iter
+        (fun (id, expected) ->
+          let reference =
+            List.find
+              (fun (reference : Model.story_narrative_image_reference) ->
+                reference.asset_id = id)
+              references
+          in
+          Alcotest.(check bool) (id ^ " literal slash prefix") expected
+            reference.is_anime_kv)
+        [ ("画%_[]", true); ("画%_[]0", false); ("near", false) ])
+    [ story.story.narrative_image_asset_references;
+      section.narrative_image_asset_references ]
+
 let test_database_contract () =
   with_database @@ fun database ->
   let movements =
@@ -640,6 +711,12 @@ let test_http_contract () =
   Alcotest.(check (option string))
     "public CORS" (Some "*")
     (Dream.header scores "Access-Control-Allow-Origin");
+  let timing = Dream.header scores "Server-Timing" |> Option.get in
+  List.iter
+    (fun stage ->
+      Alcotest.(check bool) (stage ^ " timing exposed") true
+        (contains timing (stage ^ ";dur=")))
+    [ "pool"; "db"; "json" ];
   let scores_json = response_json scores in
   let open Yojson.Safe.Util in
   Alcotest.(check int)
@@ -1004,6 +1081,8 @@ let test_live_refresh () =
         | _ -> false);
       Lwt_main.run (Database.movements controlled.database "CN")
       |> require_ok "movement after rejected refresh" |> ignore;
+      Lwt_main.run (Database.health controlled.database)
+      |> require_ok "health after rejected refresh";
       Alcotest.(check (list (option string)))
         "etag changes only after replacement"
         [ None; Some "generation-1"; Some "generation-1"; Some "generation-2" ]
@@ -1108,6 +1187,61 @@ let test_refresh_preserves_active_readers () =
           Alcotest.(check bool) "closed reader rejects new queries" true
             (Result.is_error (Lwt_main.run (Database.health controlled.database))))
 
+let test_request_timing_isolation () =
+  let handler =
+    Timing.middleware (fun request ->
+        let wait =
+          float_of_string (Dream.header request "X-Test-Wait" |> Option.get)
+        in
+        Timing.add_pool wait;
+        Lwt.pause () >>= fun () ->
+        Timing.add_pool wait;
+        Dream.empty `OK)
+  in
+  let request wait =
+    handler (Dream.request ~headers:[ ("X-Test-Wait", wait) ] "")
+  in
+  let left, right = Lwt_main.run (Lwt.both (request "7") (request "13")) in
+  List.iter
+    (fun (response, expected) ->
+      Alcotest.(check bool) "concurrent requests keep their own pool timing" true
+        (contains (Dream.header response "Server-Timing" |> Option.get) expected))
+    [ (left, "pool;dur=14.000"); (right, "pool;dur=26.000") ]
+
+let test_health_under_saturation () =
+  with_sqlite_fixture @@ fun source ->
+  with_temporary_directory @@ fun cache_dir ->
+  let fetch ~etag:_ ~destination =
+    copy_file source destination;
+    Lwt.return (`Fetched None)
+  in
+  let controlled =
+    Lwt_main.run
+      (Database.For_test.live ~fetch ~cache_dir ~download_timeout_seconds:5.)
+    |> Result.get_ok
+  in
+  (* SQLite uses the same bounded worker queue, even with a separate pool. *)
+  let gate = Mutex.create () in
+  Mutex.lock gate;
+  let _, workers = Lwt_preemptive.get_bounds () in
+  let blocked =
+    List.init workers (fun _ ->
+        Lwt_preemptive.detach
+          (fun () ->
+            Mutex.lock gate;
+            Mutex.unlock gate)
+          ())
+  in
+  let health = Database.health controlled.database in
+  let responsive = not (Lwt.is_sleeping health) in
+  Mutex.unlock gate;
+  Lwt_main.run (Lwt.join blocked);
+  Lwt_main.run health |> require_ok "health under saturation";
+  Lwt_main.run (Database.close controlled.database);
+  Alcotest.(check bool) "health bypasses saturated query workers" true responsive;
+  Alcotest.(check bool) "closed reader is not ready" true
+    (Result.is_error (Lwt_main.run (Database.health controlled.database)))
+
 let () =
   Alcotest.run "arkwaifu-service"
     [
@@ -1117,6 +1251,10 @@ let () =
         [
           Alcotest.test_case "Score and Archive contract" `Quick
             test_database_contract;
+          Alcotest.test_case "literal search context" `Quick
+            test_search_literal_context;
+          Alcotest.test_case "anime prefix boundaries" `Quick
+            test_anime_prefix_boundaries;
           Alcotest.test_case "live refresh" `Quick test_live_refresh;
           Alcotest.test_case "schema rejection" `Quick
             test_live_rejects_initial_schema;
@@ -1126,10 +1264,14 @@ let () =
             test_refreshes_are_serialized;
           Alcotest.test_case "active readers survive refresh" `Quick
             test_refresh_preserves_active_readers;
+          Alcotest.test_case "health under query saturation" `Quick
+            test_health_under_saturation;
         ] );
       ( "http",
         [
           Alcotest.test_case "clean routes" `Quick test_http_contract;
+          Alcotest.test_case "request timing isolation" `Quick
+            test_request_timing_isolation;
           Alcotest.test_case "invalid narrative_image_asset key" `Quick
             test_http_invalid_artwork_key;
         ] );

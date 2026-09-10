@@ -52,6 +52,11 @@ A successful refresh drains the previous connection pool before removing its fil
 
 Each service process owns its cache directory and refresh loop. Do not share a cache directory between processes. A rolling deployment gives each process an independent current generation.
 
+`GET /health` reports whether the live reader has a validated current generation
+and is still open. It performs no SQL, so it stays independent of the application
+connection pool and SQLite worker queue. A failed refresh keeps the previous
+validated generation ready; startup validation still fails closed.
+
 The database is monolithic, so each startup and published change transfers the complete file. Reserve space for the current and incoming generations during refresh.
 
 ## Prepare historical thumbnails
@@ -108,6 +113,27 @@ cmd.exe /d /c 'opam exec -- cmd.exe /d /v:on /c "set PATH=C:\opt\msys64\mingw64\
 ```
 
 Check `http://127.0.0.1:5174/health` from another terminal.
+
+## Measure request latency
+
+The [latency investigation](docs/latency.md) records the SQL baseline, query plans,
+and concurrent comparison for issue #53. Responses expose `pool`, `db`, and `json`
+durations in `Server-Timing`, and the request log records them separately.
+
+With the native preview running, execute the stdlib probe from this directory:
+
+```console
+python scripts/probe_latency.py http://127.0.0.1:5174 --query Rhodes --query Amiya --assert-budgets
+```
+
+It defaults to 46 concurrent requests. Add `--movement-id` with an existing
+movement ID to include its detail endpoint, or repeat `--path` to select a
+specific application mix. Initial probe targets are health P95 below 250 ms,
+application P95 below 2 seconds, and application P99 below 5 seconds; the
+corresponding flags can override them. HTTP and transport errors always fail
+the probe. Compare the same archive, routes, hardware, and concurrency before
+changing pool size or resources. `--warmup 0` skips warmup but does not clear
+SQLite or OS caches.
 
 ## Maintain the persistence boundary
 

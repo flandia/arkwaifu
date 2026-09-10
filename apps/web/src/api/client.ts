@@ -38,14 +38,17 @@ export function pathSegment(value: string): string {
   return encodeURIComponent(value);
 }
 
-export async function fetchJson<T>(path: string): Promise<T> {
+export async function fetchJson<T>(path: string, signal?: AbortSignal): Promise<T> {
   let response: Response;
   try {
     response = await fetch(`${apiBaseUrl}${path}`, {
       headers: { Accept: "application/json" },
-      signal: AbortSignal.timeout(requestTimeoutMs),
+      signal: signal
+        ? AbortSignal.any([signal, AbortSignal.timeout(requestTimeoutMs)])
+        : AbortSignal.timeout(requestTimeoutMs),
     });
   } catch {
+    signal?.throwIfAborted();
     throw new ApiError("The archive service could not be reached.", 503);
   }
 
@@ -66,16 +69,31 @@ export async function fetchJson<T>(path: string): Promise<T> {
   try {
     return (await response.json()) as T;
   } catch {
+    signal?.throwIfAborted();
     throw new ApiError("The archive service returned invalid JSON.", response.status);
   }
 }
 
-export function cachedRequest<T>(key: string, load: () => Promise<T>): Promise<T> {
+export function cachedRequest<T>(
+  key: string,
+  load: () => Promise<T>,
+  signal?: AbortSignal,
+): Promise<T> {
+  signal?.throwIfAborted();
   const existing = requests.get(key);
   if (existing) return existing as Promise<T>;
 
   const request = load();
   requests.set(key, request);
+  if (signal) {
+    const removeAbortedRequest = () => {
+      if (requests.get(key) === request) requests.delete(key);
+    };
+    signal.addEventListener("abort", removeAbortedRequest, { once: true });
+    if (signal.aborted) removeAbortedRequest();
+    const settled = () => signal.removeEventListener("abort", removeAbortedRequest);
+    void request.then(settled, settled);
+  }
   return request;
 }
 

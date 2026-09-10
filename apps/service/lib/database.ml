@@ -882,6 +882,8 @@ module Query = struct
               SELECT 1
               FROM narrative_image_assets AS texture
               WHERE texture.category = 'illustration'
+                AND texture.asset_id >= reference.asset_id || '/'
+                AND texture.asset_id < reference.asset_id || '0'
                 AND substr(texture.asset_id, 1, length(reference.asset_id) + 1) =
                     reference.asset_id || '/'
             ) THEN 'true' ELSE 'false' END),
@@ -889,7 +891,8 @@ module Query = struct
           'names', json(reference.names_json), 'objectKey', narrative_image_asset.object_key
         )
         FROM stories AS story
-        JOIN story_narrative_image_references AS reference
+        -- Keep the selected collection outside the reference lookup.
+        CROSS JOIN story_narrative_image_references AS reference
           ON reference.locale = story.locale
          AND reference.story_id = story.story_id
         LEFT JOIN narrative_image_assets AS narrative_image_asset
@@ -911,7 +914,7 @@ module Query = struct
           'objectKey', asset.object_key
         )
         FROM stories AS story
-        JOIN story_narrative_media_references AS reference
+        CROSS JOIN story_narrative_media_references AS reference
           ON reference.locale = story.locale
          AND reference.story_id = story.story_id
         LEFT JOIN narrative_media_assets AS asset
@@ -935,6 +938,8 @@ module Query = struct
               SELECT 1
               FROM narrative_image_assets AS texture
               WHERE texture.category = 'illustration'
+                AND texture.asset_id >= reference.asset_id || '/'
+                AND texture.asset_id < reference.asset_id || '0'
                 AND substr(texture.asset_id, 1, length(reference.asset_id) + 1) =
                     reference.asset_id || '/'
             ) THEN 'true' ELSE 'false' END),
@@ -989,6 +994,8 @@ module Query = struct
               SELECT 1
               FROM narrative_image_assets AS texture
               WHERE texture.category = 'illustration'
+                AND texture.asset_id >= reference.asset_id || '/'
+                AND texture.asset_id < reference.asset_id || '0'
                 AND substr(texture.asset_id, 1, length(reference.asset_id) + 1) =
                     reference.asset_id || '/'
             ) THEN 'true' ELSE 'false' END),
@@ -996,10 +1003,10 @@ module Query = struct
           'objectKey', narrative_image_asset.object_key
         )
         FROM archive_groups AS archive
-        JOIN stories AS story
+        CROSS JOIN stories AS story
           ON story.locale = archive.locale
          AND story.collection_id = archive.collection_id
-        JOIN story_narrative_image_references AS reference
+        CROSS JOIN story_narrative_image_references AS reference
           ON reference.locale = story.locale
          AND reference.story_id = story.story_id
         LEFT JOIN narrative_image_assets AS narrative_image_asset
@@ -1337,8 +1344,9 @@ module Query = struct
         WITH input(query, locale) AS (SELECT lower(trim(?)), ?),
         matching_stories AS MATERIALIZED (
           SELECT story.locale, story.story_id
-          FROM stories AS story
-          CROSS JOIN input
+          -- Resolve the locale before reading the large story rows.
+          FROM input
+          CROSS JOIN stories AS story
           WHERE story.locale = input.locale
             AND instr(
             lower(COALESCE(story.info, '') || ' ' || COALESCE(story.text, '')),
@@ -1348,7 +1356,7 @@ module Query = struct
         matching_story_narrative_image_assets AS MATERIALIZED (
           SELECT DISTINCT reference.locale, reference.category, reference.asset_id
           FROM matching_stories AS story
-          JOIN story_narrative_image_references AS reference
+          CROSS JOIN story_narrative_image_references AS reference
             ON reference.locale = story.locale
            AND reference.story_id = story.story_id
         )
@@ -1364,8 +1372,8 @@ module Query = struct
             ELSE json(entry.parent_json)
           END
         )
-        FROM search_entries AS entry
-        CROSS JOIN input
+        FROM input
+        CROSS JOIN search_entries AS entry
         WHERE entry.locale = input.locale
           AND (
             instr(lower(entry.search_text), input.query) > 0
@@ -1818,11 +1826,20 @@ let sqlite_with_pool_observer ~on_acquire path =
   | Error error -> Error (Caqti_error.show error)
   | Ok pool ->
       let use callback =
-        Caqti_lwt_unix.Pool.use
-          (fun connection ->
-            on_acquire ();
-            callback connection)
-          pool
+        let queued = Timing.now () in
+        let acquired = ref false in
+        Lwt.finalize
+          (fun () ->
+            Caqti_lwt_unix.Pool.use
+              (fun connection ->
+                acquired := true;
+                Timing.add_pool (Timing.elapsed queued);
+                on_acquire ();
+                Timing.database (fun () -> callback connection))
+              pool)
+          (fun () ->
+            if not !acquired then Timing.add_pool (Timing.elapsed queued);
+            Lwt.return_unit)
         >|= function
         | Ok value -> Ok value
         | Error error -> Error (unavailable error)
@@ -2830,7 +2847,13 @@ let start_live ~fetch ~cache_dir ~download_timeout_seconds =
           {
             close;
             check = (fun () -> with_current (fun value -> value.check ()));
-            health = (fun () -> with_current (fun value -> value.health ()));
+            (* The current generation passed its schema check before activation.
+               Readiness must not queue behind application SQL or its workers. *)
+            health =
+              (fun () ->
+                Lwt.return
+                  (if state.closed then Error (`Unavailable "database is closed")
+                   else Ok ()));
             sitemap_data =
               (fun () -> with_current (fun value -> value.sitemap_data ()));
             narrative_image_asset =
