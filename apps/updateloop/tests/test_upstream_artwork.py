@@ -6,6 +6,7 @@ import json
 import logging
 import pickle
 import threading
+import time
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
 from io import BytesIO
@@ -34,6 +35,95 @@ from arkwaifu_updateloop.upstream.artwork import (
     _unzip_resource,
 )
 from arkwaifu_updateloop.upstream.cache import CachedDirectory
+
+
+async def test_cancelled_recipe_waiter_drains_shared_fetch_before_unwinding(tmp_path, monkeypatch):
+    builder = UpstreamArtworkBuilder(
+        version_url="https://example.test/version",
+        asset_base_url="https://example.test/assets",
+        cache=UpstreamCache(tmp_path / "cache"),
+    )
+    started = asyncio.Event()
+    finish = asyncio.Event()
+    calls = 0
+    recipes = artwork_module._GalleryRecipes("v1", "digest", ())
+
+    async def fetch(_client):
+        nonlocal calls
+        calls += 1
+        started.set()
+        await finish.wait()
+        return recipes
+
+    monkeypatch.setattr(builder, "_fetch_gallery_recipes", fetch)
+    cancelled = asyncio.create_task(builder._load_gallery_recipes(None))
+    await started.wait()
+    owned = builder._gallery_recipes_task
+    cancelled.cancel()
+    await asyncio.sleep(0)
+    assert not cancelled.done()
+    assert builder._gallery_recipes_task is owned
+    other = asyncio.create_task(builder._load_gallery_recipes(None))
+    await asyncio.sleep(0)
+    finish.set()
+    with pytest.raises(asyncio.CancelledError):
+        await cancelled
+    assert await other is recipes
+    assert owned.done()
+    assert calls == 1
+
+
+async def test_extraction_worker_limit_covers_mixed_unity_and_usm_work(tmp_path, monkeypatch):
+    active = peak = 0
+    lock = threading.Lock()
+
+    def work(*_args, **_kwargs):
+        nonlocal active, peak
+        with lock:
+            active += 1
+            peak = max(peak, active)
+        time.sleep(0.02)
+        with lock:
+            active -= 1
+
+    class Cache:
+        async def directory(
+            self, namespace, relative, fingerprint, producer, _validator, **_kwargs
+        ):
+            path = tmp_path / namespace / Path(*relative.parts)
+            path.mkdir(parents=True, exist_ok=True)
+            stage = ("fetched", "unwrapped", "extracted", "rendered")[
+                len(json.loads(fingerprint)["formats"]) - 1
+            ]
+            if stage in {"rendered", "extracted"}:
+                await producer(path)
+            value = ArtworkManifest("v1", (), ()) if stage == "rendered" else None
+            return CachedDirectory(path, value)
+
+    monkeypatch.setattr(
+        artwork_module,
+        "ProcessPoolExecutor",
+        lambda max_workers, **_kwargs: ThreadPoolExecutor(max_workers=max_workers),
+    )
+    for name in (
+        "_extract_score_video",
+        "_render_usm_video",
+        "_extract_and_render_artwork_resource",
+    ):
+        monkeypatch.setattr(artwork_module, name, work)
+    builder = UpstreamArtworkBuilder(
+        version_url="https://example.test/version",
+        asset_base_url="https://example.test/assets",
+        cache=Cache(),
+        extraction_workers=1,
+    )
+    resources = [
+        _resource(f"avg/images/{index}.ab") if index % 2 else _resource(f"raw/video/{index}.usm")
+        for index in range(8)
+    ]
+    manifests = await builder._process_resources(None, "v1", resources)
+    assert len(manifests) == 8
+    assert peak == 1
 
 
 def _resource(name: str, content: bytes = b"unity asset bundle") -> _Resource:
