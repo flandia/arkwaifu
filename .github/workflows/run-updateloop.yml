@@ -33,7 +33,7 @@ jobs:
         env:
           UPDATELOOP_ENV: ${{ secrets.UPDATELOOP_ENV }}
           GH_TOKEN: ${{ github.token }}
-        run: bash .github/scripts/updateloop-droplet.sh check
+        run: python3 .github/scripts/updateloop_droplet.py check
       - name: Retain preflight decision
         if: always()
         uses: actions/upload-artifact@v4
@@ -52,9 +52,6 @@ jobs:
       droplet_ids: ${{ steps.provision.outputs.droplet_ids }}
     steps:
       - uses: actions/checkout@v4
-      - uses: digitalocean/action-doctl@v2
-        with:
-          token: ${{ secrets.DIGITALOCEAN_ACCESS_TOKEN }}
       - name: Provision Droplet and run updater
         id: provision
         env:
@@ -62,8 +59,8 @@ jobs:
           UPDATELOOP_ENV: ${{ secrets.UPDATELOOP_ENV }}
           GH_TOKEN: ${{ github.token }}
           DROPLET_REGION: ${{ vars.UPDATELOOP_REGION || 'sgp1' }}
-          DROPLET_SIZE: ${{ vars.UPDATELOOP_SIZE || 'c-8' }}
-        run: bash .github/scripts/updateloop-droplet.sh run
+          DROPLET_SIZE: ${{ vars.UPDATELOOP_SIZE || 's-8vcpu-16gb' }}
+        run: python3 .github/scripts/updateloop_droplet.py run
       - name: Retain run logs
         if: always()
         uses: actions/upload-artifact@v4
@@ -80,11 +77,8 @@ jobs:
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
-      - uses: digitalocean/action-doctl@v2
-        with:
-          token: ${{ secrets.DIGITALOCEAN_ACCESS_TOKEN }}
       - name: Destroy this run's Droplets and SSH key
         env:
           DIGITALOCEAN_ACCESS_TOKEN: ${{ secrets.DIGITALOCEAN_ACCESS_TOKEN }}
           DROPLET_IDS: ${{ needs.update.outputs.droplet_ids || '[]' }}
-        run: bash .github/scripts/updateloop-droplet.sh cleanup
+        run: python3 .github/scripts/updateloop_droplet.py cleanup

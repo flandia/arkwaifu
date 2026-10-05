@@ -1,0 +1,5 @@
+extend = "../../apps/updateloop/pyproject.toml"
+target-version = "py312"
+
+[lint.per-file-ignores]
+"test_*.py" = ["D"]
