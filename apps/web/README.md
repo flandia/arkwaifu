@@ -48,6 +48,19 @@ VITE_API_BASE_URL=http://127.0.0.1:5174
 
 Vite embeds this value at build time. Changing the deployed service origin requires a new build. The app renders object-storage addresses from the API's unified resource fields: cards use `previewUrl`, while detail views use `url`.
 
+### Configure original-file downloads
+
+Before deploying the download buttons, apply and verify the public bucket and
+CDN [CORS configuration](../updateloop/docs/publication.md#allow-browser-downloads-from-the-public-object-store)
+for both production websites. Image display and media playback can succeed
+while JavaScript downloads remain blocked by missing CORS headers.
+
+Downloads fetch the complete original into a browser-owned Blob before handing
+it to the browser's download manager. Large files therefore need temporary
+browser storage for the complete file. Leaving the page cancels an unfinished
+request. A failed request leaves a retryable error beside the button; **Open
+Original** remains available for opening the object directly.
+
 ### Configure Google Analytics
 
 Set the Google Analytics 4 (GA4) web-stream measurement identifier at build time:

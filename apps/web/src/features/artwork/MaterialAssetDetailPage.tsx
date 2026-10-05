@@ -6,6 +6,7 @@ import { useUi, useUiLanguage } from "../../i18n";
 import { requiredLocale, requiredNarrativeImageCategory, useCategoryLabel } from "../../navigation";
 import { ArchivePage, BackLink, PageHeader } from "../../shared/Page";
 import { ActionLink } from "../../shared/ui/Action";
+import { DownloadButton } from "../../shared/ui/DownloadButton";
 import { ArtworkGrid } from "../../shared/ui/ArtworkGrid";
 import { Eyebrow, SectionHeading } from "../../shared/ui/Typography";
 import { ArtworkCard } from "./ArtworkCard";
@@ -88,9 +89,7 @@ export function MaterialAssetDetailPage() {
             ))}
           </dl>
           <div className="grid gap-3">
-            <ActionLink download to={source.url}>
-              {t("artwork.downloadOriginal")}
-            </ActionLink>
+            <DownloadButton url={source.url}>{t("artwork.downloadOriginal")}</DownloadButton>
             <ActionLink
               adornment="external"
               rel="noreferrer"

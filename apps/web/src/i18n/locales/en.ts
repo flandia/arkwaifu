@@ -6,6 +6,8 @@ export const en = {
     open: "Open {{name}}",
     backTo: "Back to {{name}}",
     untitled: "Untitled",
+    downloading: "Downloading…",
+    downloadFailed: "The file could not be downloaded. Try again or open the original file.",
   },
   navigation: {
     primaryLabel: "Primary navigation",
