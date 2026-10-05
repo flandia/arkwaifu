@@ -9,7 +9,9 @@ from arkwaifu_updateloop import MemoryObjectStore, Updater, UpdateRequest, cli
 from arkwaifu_updateloop.database import initialize_or_validate
 
 
-@pytest.mark.parametrize("state", ["current", "changed", "missing", "repair", "invalid"])
+@pytest.mark.parametrize(
+    "state", ["current", "changed", "missing", "repair", "invalid", "incomplete"]
+)
 async def test_check_database_never_builds_or_publishes(state, tmp_path):
     store = MemoryObjectStore()
     if state != "missing":
@@ -21,6 +23,8 @@ async def test_check_database_never_builds_or_publishes(state, tmp_path):
                 connection.execute("DROP INDEX story_narrative_image_references_by_asset")
             if state == "invalid":
                 connection.execute("PRAGMA user_version=99")
+            if state == "incomplete":
+                connection.execute("DROP TABLE movements")
         store.database = database.read_bytes()
     before = store.database
     store.push_database = AsyncMock(side_effect=AssertionError("check must not publish"))
@@ -28,6 +32,9 @@ async def test_check_database_never_builds_or_publishes(state, tmp_path):
     requests = [UpdateRequest("CN", "v2" if state == "changed" else "v1", build)]
     if state == "invalid":
         with pytest.raises(ValueError, match="schema version"):
+            await Updater(store).needs_update(requests)
+    elif state == "incomplete":
+        with pytest.raises(ValueError, match="schema shape"):
             await Updater(store).needs_update(requests)
     else:
         assert await Updater(store).needs_update(requests) is (state != "current")
