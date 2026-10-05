@@ -28,12 +28,25 @@ jobs:
       update_needed: ${{ steps.preflight.outputs.update_needed }}
     steps:
       - uses: actions/checkout@v4
+      - name: Restore preflight database
+        id: database-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: ${{ runner.temp }}/updateloop-database-cache
+          key: updateloop-preflight-db-v1-lookup
+          restore-keys: updateloop-preflight-db-v1-
       - name: Check database versions on GitHub
         id: preflight
         env:
           UPDATELOOP_ENV: ${{ secrets.UPDATELOOP_ENV }}
           GH_TOKEN: ${{ github.token }}
         run: python3 .github/scripts/updateloop_droplet.py check
+      - name: Save verified preflight database
+        if: steps.preflight.outputs.database_cache_key != '' && steps.preflight.outputs.database_cache_key != steps.database-cache.outputs.cache-matched-key
+        uses: actions/cache/save@v4
+        with:
+          path: ${{ runner.temp }}/updateloop-database-cache
+          key: ${{ steps.preflight.outputs.database_cache_key }}
       - name: Retain preflight decision
         if: always()
         uses: actions/upload-artifact@v4

@@ -44,7 +44,9 @@ The workflow sets `UPDATELOOP_IMAGE` to `ghcr.io/flandia/arkwaifu/updateloop:lat
 no repository image variable is required. Both preflight and the Droplet pull
 `latest` before execution. Publishing a new image updates subsequent pulls,
 including the Droplet's pull if a new image appears after preflight. The image
-must include the `check` command; older images fail before provisioning.
+must include `check --database-cache-dir`; older images fail before provisioning.
+After merging a change to this command, wait for the image workflow to publish
+the updated image before dispatching an observed production run.
 The repository's `GITHUB_TOKEN` needs read access to the GHCR package; grant
 this repository Actions access in the package settings if necessary.
 Region capacity and size availability are checked by DigitalOcean at creation.
@@ -67,7 +69,7 @@ charges. Check [current Droplet pricing](https://www.digitalocean.com/pricing/dr
 ## Execution and publication
 
 The preflight reuses the updater's version detectors for artwork and all five
-locales, downloads the published SQLite database into temporary storage, and
+locales, validates a temporary copy of the published SQLite database, and
 compares the recorded versions. Missing databases and required additive-index
 repair also trigger a run. Archive-only backlog does not trigger a Droplet;
 the archive catches up when a database update triggers both commands. An upstream,
@@ -78,10 +80,25 @@ bounded to 60 seconds, respects `Retry-After` and GitHub reset headers, and does
 not repeat preparation or publication. Permanent HTTP errors and invalid version
 data still fail the check.
 
-The preflight performs no bundle extraction, rendering, or remote writes. It does
-download the full database on each check; budget that transfer and GitHub runner
-time separately. It is a snapshot
-decision: the Droplet detects upstream versions again before updating.
+GitHub Actions restores the latest preflight database cache into the runner's
+temporary directory and mounts it at `/preflight-cache`. The check container
+runs as that directory's owner so restored entries remain writable. Each check
+issues an authenticated origin `HEAD`; matching endpoint, bucket, ETag, size,
+and cached SHA-256 allow reuse. A miss, changed generation, or damaged cache
+downloads the full database with `If-Match`, refusing a concurrent replacement.
+The cache retains unchanged source bytes; schema validation and supported repair
+detection always run on a temporary copy. Storage errors still fail preflight.
+
+Only a successful check emits the cache key that authorizes saving a new GitHub
+Actions cache entry. Repairs receive a new key even if the origin ETag is
+unchanged. The cache contains the public database and validation metadata,
+without credentials. Eviction or restore failure causes a normal download.
+Logs report `preflight database cache status=cached` or `status=downloaded`.
+
+The preflight performs no bundle extraction, rendering, or object-store writes.
+Budget database transfer on cache misses and GitHub runner time separately.
+It is a snapshot decision: the Droplet detects upstream versions again before
+updating and downloads its own database without using the preflight cache.
 
 Each needed update uses Ubuntu 24.04, installs Docker, pulls the latest updater image,
 and runs these two commands sequentially:
@@ -186,4 +203,5 @@ cleanup, transient deletion failure, API failure, and deletion that never comple
 They also cover pagination, token forwarding, malformed provisioning responses,
 creation failures without retries, and the pinned SSH host key and runtime deadline.
 The updater's pytest suite also covers read-only version checks, schema errors,
-index repair detection, and archive-only work.
+index repair detection, archive-only work, database cache hits and corruption,
+changed origins, conditional-download failures, and incomplete downloads.

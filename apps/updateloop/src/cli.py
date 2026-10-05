@@ -81,6 +81,11 @@ def _parser() -> argparse.ArgumentParser:
     commands = parser.add_subparsers(dest="command", required=True)
     check = commands.add_parser("check", help="check for pending updates without publishing")
     check.add_argument("--archive", action="store_true", help="also check wrapper archive history")
+    check.add_argument(
+        "--database-cache-dir",
+        type=Path,
+        help="reuse the published database when its origin ETag and cached bytes match",
+    )
     run = commands.add_parser("run", help="update selected units")
     run.add_argument("units", nargs="*", type=_unit)
     run.add_argument("--force", action="store_true")
@@ -121,17 +126,21 @@ def _validate_arguments(parser: argparse.ArgumentParser, args: argparse.Namespac
         parser.error("--archive requires an update request containing artwork")
 
 
-def _updater(settings: Settings) -> Updater:
-    return Updater(
-        S3ObjectStore(
-            bucket=settings.s3_bucket,
-            region=settings.s3_region,
-            access_key_id=settings.s3_access_key_id,
-            secret_access_key=settings.s3_secret_access_key,
-            endpoint_url=settings.s3_endpoint_url,
-            path_style=settings.s3_path_style,
-        ),
+def _object_store(settings: Settings, *, database_cache_dir: Path | None = None) -> S3ObjectStore:
+    """Configure storage, enabling database reuse only for an explicit preflight cache."""
+    return S3ObjectStore(
+        bucket=settings.s3_bucket,
+        region=settings.s3_region,
+        access_key_id=settings.s3_access_key_id,
+        secret_access_key=settings.s3_secret_access_key,
+        endpoint_url=settings.s3_endpoint_url,
+        path_style=settings.s3_path_style,
+        database_cache_dir=database_cache_dir,
     )
+
+
+def _updater(settings: Settings) -> Updater:
+    return Updater(_object_store(settings))
 
 
 def _asset_bundle_archive(settings: Settings) -> S3AssetBundleArchiveStore:
@@ -255,7 +264,7 @@ async def _run(
         )
 
 
-async def _check(*, archive: bool) -> int:
+async def _check(*, archive: bool, database_cache_dir: Path | None = None) -> int:
     """Print a JSON decision after read-only detection of database and archive work."""
 
     try:
@@ -272,7 +281,8 @@ async def _check(*, archive: bool) -> int:
                         if unit != "artwork"
                     ]
                 requests = [artwork.result(), *(task.result() for task in locales)]
-                database_update = await _updater(settings).needs_update(requests)
+                store = _object_store(settings, database_cache_dir=database_cache_dir)
+                database_update = await Updater(store).needs_update(requests)
                 archive_update = False
                 if archive:
                     history = WindowsVersionHistory(
@@ -286,15 +296,14 @@ async def _check(*, archive: bool) -> int:
                     archive_update = any(version not in completed for version in versions)
             finally:
                 await builder.aclose()
-        print(
-            json.dumps(
-                {
-                    "update_needed": database_update or archive_update,
-                    "database_update": database_update,
-                    "archive_update": archive_update,
-                }
-            )
-        )
+        decision: dict[str, object] = {
+            "update_needed": database_update or archive_update,
+            "database_update": database_update,
+            "archive_update": archive_update,
+        }
+        if database_cache_dir is not None:
+            decision["database_cache_key"] = store.database_cache_key
+        print(json.dumps(decision))
         return 0
     except Exception:
         _LOGGER.exception("update check status=failed")
@@ -386,7 +395,7 @@ def main(argv: list[str] | None = None) -> None:
     )
     if args.command in {"run", "check"}:
         operation = (
-            _check(archive=args.archive)
+            _check(archive=args.archive, database_cache_dir=args.database_cache_dir)
             if args.command == "check"
             else _run(
                 args.units,
