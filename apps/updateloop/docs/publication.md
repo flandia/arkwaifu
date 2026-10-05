@@ -173,6 +173,16 @@ Completed entries remain until an operator removes them. Removing only `.cache/<
 
 Locales share `.cache/game-data/archive.zip`. The updater validates the archive against every requested locale version before reuse. Extracted locale data remains under `.cache/<resVersion>/game-data/<unit>/extracted/`.
 
+Read-only preflight can separately cache the published database with
+`check --database-cache-dir PATH`. `PATH/published/database/` holds one unchanged
+generation, bound to the S3 endpoint, bucket, origin ETag, and size. Each check
+revalidates that identity with `HEAD` and the cached bytes with SHA-256. Downloads
+use `If-Match` and replace the entry atomically after byte validation; failed
+refreshes retain the previous entry but fail the check. Schema validation and
+additive-index repair detection run on a temporary copy on every check. A missing
+origin database triggers initialization; other origin errors never use stale
+cached data. This cache does not participate in writer publication.
+
 ## Account for database and storage costs
 
 The updater always uploads the complete SQLite object, even for a small locale change. Each service replica then downloads that complete object.

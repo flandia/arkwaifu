@@ -4,6 +4,7 @@ import argparse
 import ipaddress
 import json
 import os
+import re
 import shlex
 import signal
 import subprocess
@@ -117,7 +118,8 @@ def identity(record):
 def output(name, value):
     """Write a validated decision or resource ID to the workflow output."""
     with Path(os.environ["GITHUB_OUTPUT"]).open("a", encoding="utf-8") as stream:
-        stream.write(f"{name}={json.dumps(value, separators=(',', ':'))}\n")
+        encoded = value if isinstance(value, str) else json.dumps(value, separators=(",", ":"))
+        stream.write(f"{name}={encoded}\n")
 
 
 def environment():
@@ -170,6 +172,9 @@ def logs():
 def check():
     """Publish a decision only after a successful read-only preflight."""
     directory = logs()
+    cache = Path(os.environ["RUNNER_TEMP"]) / "updateloop-database-cache"
+    cache.mkdir(exist_ok=True)
+    owner = cache.stat()
     with tempfile.TemporaryDirectory(dir=os.environ["RUNNER_TEMP"], prefix="updateloop-") as work:
         env_file = Path(work) / ".env.prod"
         env_file.write_bytes(environment())
@@ -189,7 +194,22 @@ def check():
         command(["docker", "pull", image])
         try:
             decision = command(
-                ["docker", "run", "--rm", "--env-file", str(env_file), image, "check"], capture=True
+                [
+                    "docker",
+                    "run",
+                    "--rm",
+                    "--user",
+                    f"{owner.st_uid}:{owner.st_gid}",
+                    "--env-file",
+                    str(env_file),
+                    "--volume",
+                    f"{cache.resolve()}:/preflight-cache",
+                    image,
+                    "check",
+                    "--database-cache-dir",
+                    "/preflight-cache",
+                ],
+                capture=True,
             )
         except subprocess.CalledProcessError as error:
             (directory / "preflight.json").write_bytes(error.stdout or b"")
@@ -199,6 +219,15 @@ def check():
         needed = payload.get("update_needed") if isinstance(payload, dict) else None
         if type(needed) is not bool:
             raise ValueError("Invalid preflight decision")
+        if "database_cache_key" not in payload:
+            raise ValueError("Missing preflight database cache key; publish the updated image")
+        cache_key = payload["database_cache_key"]
+        if cache_key is not None:
+            if not isinstance(cache_key, str) or not re.fullmatch(
+                "[0-9a-f]{64}-[0-9a-f]{32}", cache_key
+            ):
+                raise ValueError("Invalid preflight database cache key")
+            output("database_cache_key", f"updateloop-preflight-db-v1-{cache_key}")
         output("update_needed", needed)
 
 
