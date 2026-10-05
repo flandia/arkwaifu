@@ -29,12 +29,9 @@ jobs:
       - uses: actions/checkout@v4
         with:
           ref: master
-      - uses: digitalocean/action-doctl@v2
-        with:
-          token: ${{ secrets.DIGITALOCEAN_ACCESS_TOKEN }}
       - name: Retry cleanup of the completed or cancelled run
         if: github.event_name == 'workflow_run'
-        run: bash .github/scripts/updateloop-droplet.sh cleanup
+        run: python3 .github/scripts/updateloop_droplet.py cleanup
       - name: Reap expired Droplets even when there is no upstream update
         if: always()
-        run: bash .github/scripts/updateloop-droplet.sh reap
+        run: python3 .github/scripts/updateloop_droplet.py reap

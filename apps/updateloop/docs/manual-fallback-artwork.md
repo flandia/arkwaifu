@@ -10,7 +10,7 @@ Prepare the final Portable Network Graphics (PNG) image for this key:
 ART/{contributing_res_version}/composition/{category}/{escaped_id}.png
 ```
 
-Percent-encode each dynamic path segment exactly once. Use a lowercase logical identifier and a category of `illustration`, `background`, `item`, or `character`.
+Preserve the exact upstream logical identifier, including its case, and use a category of `illustration`, `background`, `item`, or `character`. Percent-encode each dynamic path segment exactly once. Encode the entire identifier as one segment: `AVG_char_501_Durin_1#1$1` becomes `AVG_char_501_Durin_1%231%241`, and `Panel/Top` becomes `Panel%2FTop`.
 
 Record the object key, byte size, width, and height. Treat the key as create-only. When you publish it, use these headers:
 
@@ -66,7 +66,7 @@ For a Character Narrative Image, replace its `narrative_asset_material_reference
 
 A final Narrative Image remains usable without Material rows when the original inputs are unavailable.
 
-Gallery panels use the same tables but keep the final Narrative Image category, set `material_type = 'panel'`, and leave character metadata null. Their Material Reference order must match the vertical top-to-bottom or horizontal left-to-right layout. Do not use `/` in a panel identifier; the final image ID joins ordered panel identifiers with `/` before object-key escaping.
+Gallery panels use the same tables but keep the final Narrative Image category, set `material_type = 'panel'`, and leave character metadata null. Their Material Reference order must match the vertical top-to-bottom or horizontal left-to-right layout. Preserve each panel's upstream identifier, including embedded `/`. The final image ID joins ordered panel identifiers with `/` before object-key escaping: panels `Panel/Top` and `Bottom` produce the logical image ID `Panel/Top/Bottom`, encoded as `Panel%2FTop%2FBottom` in its object key.
 
 ## Adapt Android portrait fallbacks
 

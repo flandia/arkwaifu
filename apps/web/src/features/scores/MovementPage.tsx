@@ -155,6 +155,7 @@ export function MovementPage() {
         </>
       )}
 
+      {movement.items.length ? <h2 className="sr-only">{t("score.orderedSections")}</h2> : null}
       {movement.items.length ? (
         isMainline ? (
           <ol aria-label={t("score.orderedSections")} className="mt-16 grid list-none gap-8 p-0">
