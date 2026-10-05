@@ -97,7 +97,7 @@ Use these optional variables when their defaults do not fit the deployment:
 - `ARKWAIFU_DOWNLOAD_WORKERS`: limits concurrent artwork bundle downloads and defaults to `16`
 - `ARKWAIFU_EXTRACTION_WORKERS`: limits concurrent extraction and Artwork rendering processes; Python selects the process-pool size when this variable is unset
 - `ARKWAIFU_GITHUB_API_URL`: defaults to `https://api.github.com`
-- `ARKWAIFU_GITHUB_TOKEN`: raises the GitHub REST API rate limit for requests such as artwork-version history; public story-history clones do not use it
+- `ARKWAIFU_GITHUB_TOKEN`: authenticates GitHub REST API reads, including locale versions and artwork-version history; the scheduled workflow supplies its job token, while local runs may supply their own. Public story-history clones do not use it
 
 Size `ARKWAIFU_EXTRACTION_WORKERS` for both CPU capacity and peak memory.
 

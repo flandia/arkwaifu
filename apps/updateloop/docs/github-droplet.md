@@ -27,8 +27,10 @@ removed during cleanup; no long-lived SSH credential is needed.
 Set `UPDATELOOP_ENV` using the production values described in the
 [updater guide](../README.md#configure-object-storage), including the main S3
 bucket, endpoint, region, access key, and secret key. Set archive destination
-overrides when the defaults are unsuitable. Optional `ARKWAIFU_GITHUB_TOKEN`
-raises the upstream API rate limit. Production bucket versioning must already
+overrides when the defaults are unsuitable. Both containers use the current job's
+`github.token` as `ARKWAIFU_GITHUB_TOKEN` for public upstream API reads, overriding
+any token in `UPDATELOOP_ENV`. Local runs can still configure their own token.
+Production bucket versioning must already
 be enabled. Do not use the local MinIO environment.
 
 Add these repository Actions variables:
@@ -36,7 +38,7 @@ Add these repository Actions variables:
 | Variable | Value |
 | --- | --- |
 | `UPDATELOOP_REGION` | Optional; defaults to `sgp1` |
-| `UPDATELOOP_SIZE` | Optional; defaults to `c-8` (8 dedicated vCPUs, 16 GiB RAM, 100 GiB disk) |
+| `UPDATELOOP_SIZE` | Optional; defaults to `s-8vcpu-16gb` (8 shared vCPUs, 16 GiB RAM, 320 GB disk) |
 
 The workflow sets `UPDATELOOP_IMAGE` to `ghcr.io/flandia/arkwaifu/updateloop:latest`;
 no repository image variable is required. Both preflight and the Droplet pull
@@ -46,11 +48,17 @@ must include the `check` command; older images fail before provisioning.
 The repository's `GITHUB_TOKEN` needs read access to the GHCR package; grant
 this repository Actions access in the package settings if necessary.
 Region capacity and size availability are checked by DigitalOcean at creation.
+The coordinator uses Python's standard library to call the DigitalOcean API
+directly. It needs no `doctl` installer, third-party Python packages, or separate
+runtime setup on the Ubuntu runner. Inventory reads follow all API pages.
+Creation requests are attempted once; an ambiguous failure is recovered by
+exact-name cleanup rather than provisioning another writer. Provider HTTP status
+and error messages remain visible without logging request bodies or credentials.
 
-The regular CPU-Optimized 8-vCPU plan is listed at $0.25/hour as of September
-2026. Ten minutes of total Droplet lifetime costs approximately $0.042 in
+The Basic 8-vCPU plan is listed at $0.14286/hour as of September
+2026. Ten minutes of total Droplet lifetime costs approximately $0.024 in
 compute. Only checks finding pending work incur Droplet compute costs. If every
-15-minute check needed a ten-minute Droplet, 30 days would cost approximately $120
+15-minute check needed a ten-minute Droplet, 30 days would cost approximately $68.57
 in Droplet compute.
 Boot, package installation, image pulls, execution, and cleanup all count.
 These examples exclude object storage, transfer overages, and any GitHub Actions
@@ -125,7 +133,10 @@ tag, retries deletion, and removes the invocation's SSH key. Only a direct
 DigitalOcean `GET /v2/droplets/<id>` returning 404 confirms deletion; disappearance
 from a tag listing is insufficient. If deletion cannot be confirmed, cleanup fails
 visibly instead of reporting success. It attempts all matched IDs even when one
-deletion fails.
+deletion fails. SSH-key deletion also accepts a direct 404 as success, so repeated
+cleanup does not fail when the key is already absent. Other API errors remain
+failures. Workflow summaries distinguish an update failure from a successful
+update followed by a cleanup failure.
 
 The independent `Clean up updater Droplets` workflow retries exact-run cleanup
 after the production workflow completes, including failure or cancellation.
@@ -155,16 +166,19 @@ cannot be validated by the offline tests.
 
 ## Offline checks
 
-Run the lifecycle tests manually when changing the workflow scripts. Scheduled
-runs start directly with update detection and do not run linters or tests:
+Run the lifecycle tests manually when changing the workflow scripts. The updater
+image workflow also runs them on script or workflow changes. Scheduled runs
+start directly with update detection and do not run linters or tests:
 
 ```sh
-bash .github/scripts/test-updateloop-droplet.sh
+python3 -m unittest discover -s .github/scripts -p 'test_*.py'
 ```
 
-The tests mock DigitalOcean and stop before provisioning. They cover
+The tests mock DigitalOcean and local subprocesses. They cover
 preflight decisions and failures, both update commands and their exit
 statuses, exact-run cleanup, refusal to overlap a live writer, expired writer
 cleanup, transient deletion failure, API failure, and deletion that never completes.
+They also cover pagination, token forwarding, malformed provisioning responses,
+creation failures without retries, and the pinned SSH host key and runtime deadline.
 The updater's pytest suite also covers read-only version checks, schema errors,
 index repair detection, and archive-only work.
