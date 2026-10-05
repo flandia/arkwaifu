@@ -24,7 +24,7 @@ export function PresentationAssetCatalogPage() {
     referenceParam === "referenced" || referenceParam === "orphaned" ? referenceParam : "";
 
   function setFilter(key: string, value: string): void {
-    const next = new URLSearchParams(searchParams);
+    const next = new URLSearchParams(window.location.search);
     if (value) next.set(key, value);
     else next.delete(key);
     setSearchParams(next, { replace: true });
