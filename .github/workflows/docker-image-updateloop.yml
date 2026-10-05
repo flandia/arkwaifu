@@ -7,11 +7,16 @@ on:
     paths:
       - "apps/updateloop/**"
       - ".github/workflows/docker-image-updateloop.yml"
+      - ".github/workflows/run-updateloop.yml"
+      - ".github/workflows/cleanup-updateloop.yml"
+      - ".github/scripts/**"
   pull_request:
-    branches: [master]
     paths:
       - "apps/updateloop/**"
       - ".github/workflows/docker-image-updateloop.yml"
+      - ".github/workflows/run-updateloop.yml"
+      - ".github/workflows/cleanup-updateloop.yml"
+      - ".github/scripts/**"
 
 permissions:
   contents: read
@@ -35,6 +40,14 @@ jobs:
       - run: uv sync --locked --group dev
 
       - run: uv run --no-sync ruff check .
+
+      - run: uv run --no-sync ruff format --check .
+
+      - run: uv run --no-sync ruff check ../../.github/scripts
+
+      - run: uv run --no-sync ruff format --check ../../.github/scripts
+
+      - run: uv run --no-sync python -m unittest discover -s ../../.github/scripts -p 'test_*.py'
 
       - run: uv run --no-sync pytest
 

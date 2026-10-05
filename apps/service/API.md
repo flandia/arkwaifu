@@ -14,6 +14,17 @@ included. Missing records and invalid route values return HTTP 404 with
 `{"error":"not_found"}`. Database or metadata failures return HTTP 503 with
 `{"error":"service_unavailable"}`.
 
+Responses include `Server-Timing` durations in milliseconds: `pool` measures
+connection acquisition, `db` measures work while holding a connection (including
+SQLite worker scheduling and row decoding), and `json` measures response JSON
+construction and serialization. Multiple database calls in one request are summed.
+The service logs these separately with total response time and the URL path;
+search query text is not logged by the timing middleware.
+
+`GET /health` checks the live reader's validated-generation readiness without
+performing SQL. It stays healthy after a failed refresh while the previous
+generation remains available, and becomes unavailable when the reader is closed.
+
 ## Routes
 
 | Route | Result |

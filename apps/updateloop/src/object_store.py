@@ -3,6 +3,13 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
+import json
+import logging
+import re
+import shutil
+import uuid
+from contextlib import closing
 from pathlib import Path
 from typing import Protocol
 
@@ -12,6 +19,7 @@ from botocore.exceptions import ClientError
 
 from .asyncio_tools import await_owned
 from .domain import FileAudioArtifact, FileVideoArtifact, PngImage
+from .upstream.cache import UpstreamCache
 
 DATABASE_OBJECT_KEY = "arkwaifu.sqlite3"
 _DATABASE_CONTENT_TYPE = "application/vnd.sqlite3"
@@ -19,6 +27,7 @@ _PNG_CONTENT_TYPE = "image/png"
 _IMMUTABLE_CACHE_CONTROL = "public, max-age=31536000, immutable"
 _THUMBNAIL_CONTENT_TYPE = "image/webp"
 _MAX_POOL_CONNECTIONS = 16
+_LOGGER = logging.getLogger(__name__)
 
 
 def _error_code(error: ClientError) -> str | None:
@@ -77,9 +86,12 @@ class S3ObjectStore:
         secret_access_key: str,
         endpoint_url: str | None = None,
         path_style: bool = False,
+        database_cache_dir: Path | None = None,
     ) -> None:
         """Configure access to one S3-compatible bucket."""
         self._bucket = bucket
+        self._database_cache = UpstreamCache(database_cache_dir) if database_cache_dir else None
+        self.database_cache_key: str | None = None
         self._client = boto3.client(
             "s3",
             region_name=region,
@@ -94,7 +106,79 @@ class S3ObjectStore:
 
     async def pull_database(self, destination: Path) -> bool:
         """Download the current database if it exists."""
+        if self._database_cache is not None:
+            return await self._pull_cached_database(destination)
         return await await_owned(asyncio.to_thread(self._pull_database, destination))
+
+    async def _pull_cached_database(self, destination: Path) -> bool:
+        """Check the origin ETag, then copy a verified, unchanged generation for this check."""
+        self.database_cache_key = None
+        try:
+            metadata = await await_owned(
+                asyncio.to_thread(
+                    self._client.head_object, Bucket=self._bucket, Key=DATABASE_OBJECT_KEY
+                )
+            )
+        except ClientError as error:
+            if not _is_missing(error):
+                raise
+            destination.unlink(missing_ok=True)
+            return False
+        etag, size = metadata.get("ETag"), metadata.get("ContentLength")
+        if not isinstance(etag, str) or not etag or type(size) is not int or size <= 0:
+            raise ValueError("Invalid published database metadata")
+        fingerprint = hashlib.sha256(
+            json.dumps([self._client.meta.endpoint_url, self._bucket, etag, size]).encode()
+        ).hexdigest()
+        destination.parent.mkdir(parents=True, exist_ok=True)
+
+        def download(directory: Path) -> None:
+            """Download the observed generation, refusing a concurrent replacement."""
+            response = self._client.get_object(
+                Bucket=self._bucket, Key=DATABASE_OBJECT_KEY, IfMatch=etag
+            )
+            with closing(response["Body"]) as body:
+                if response.get("ETag") != etag or response.get("ContentLength") != size:
+                    raise ValueError("Published database changed during download")
+                path = directory / DATABASE_OBJECT_KEY
+                with path.open("wb") as stream:
+                    shutil.copyfileobj(body, stream, length=1024 * 1024)
+            with path.open("rb") as stream:
+                digest = hashlib.file_digest(stream, "sha256").hexdigest()
+            (directory / "metadata.json").write_text(
+                json.dumps({"sha256": digest, "cache_key": f"{fingerprint}-{uuid.uuid4().hex}"}),
+                encoding="utf-8",
+            )
+            _LOGGER.info("preflight database cache status=downloaded bytes=%s", size)
+
+        async def produce(directory: Path) -> None:
+            """Keep the streaming download off the event loop."""
+            await await_owned(asyncio.to_thread(download, directory))
+
+        def validate(directory: Path) -> str:
+            """Verify cached bytes and copy them under the cache lock before validation."""
+            path = directory / DATABASE_OBJECT_KEY
+            cached = json.loads((directory / "metadata.json").read_text(encoding="utf-8"))
+            key = cached["cache_key"]
+            if not isinstance(key, str) or not re.fullmatch(f"{fingerprint}-[0-9a-f]{{32}}", key):
+                raise ValueError("Invalid database cache key")
+            with path.open("rb") as stream:
+                digest = hashlib.file_digest(stream, "sha256").hexdigest()
+            if path.stat().st_size != size or digest != cached["sha256"]:
+                raise ValueError("Invalid database cache content")
+            shutil.copyfile(path, destination)
+            return key
+
+        cached = await self._database_cache.directory(
+            "published",
+            Path("database"),
+            fingerprint,
+            produce,
+            validate,
+            on_hit=lambda: _LOGGER.info("preflight database cache status=cached bytes=%s", size),
+        )
+        self.database_cache_key = cached.value
+        return True
 
     def _pull_database(self, destination: Path) -> bool:
         destination.parent.mkdir(parents=True, exist_ok=True)

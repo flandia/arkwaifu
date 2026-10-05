@@ -23,7 +23,7 @@ export function ArchiveGroupCard({
   const { t } = useUi();
   const backgrounds = previewUrls(group);
   return (
-    <article className="min-w-0 [contain-intrinsic-size:auto_20rem] [content-visibility:auto]">
+    <article className="min-w-0 [contain-intrinsic-block-size:auto_20rem] [content-visibility:auto]">
       <TransitionLink
         className="group relative flex min-h-80 flex-col justify-end overflow-hidden border-r-2 border-b-2 border-ink bg-brand p-6 text-white no-underline"
         to={`/${locale}/archives/${group.archiveCategory}/${encodeURIComponent(group.id)}`}
@@ -66,7 +66,7 @@ export function ArchiveCategoryCard({
 }) {
   const { t } = useUi();
   return (
-    <li className="min-w-0 [contain-intrinsic-size:auto_14rem] [content-visibility:auto]">
+    <li className="min-w-0 [contain-intrinsic-block-size:auto_14rem] [content-visibility:auto]">
       <TransitionLink
         className="grid min-h-56 grid-cols-[3rem_minmax(0,1fr)_auto] items-center gap-5 border-r-2 border-b-2 border-ink bg-surface p-6 no-underline hover:bg-brand-soft"
         to={`/${locale}/archives/${category}`}

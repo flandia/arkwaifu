@@ -7,6 +7,7 @@ encoding the resulting images as PNG.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import math
@@ -65,12 +66,19 @@ _SCORE_ASSET_KINDS = frozenset(_SCORE_ASSET_DIRECTORIES.values())
 _IMAGE_PATH_FIELD = "image_path"
 _VIDEO_PATH_FIELD = "video_path"
 _MEDIA_PATH_FIELD = "media_path"
+
+
 _VIDEO_CONTENT_TYPES = {
     ".m4v": "video/x-m4v",
     ".mov": "video/quicktime",
     ".mp4": "video/mp4",
     ".webm": "video/webm",
 }
+
+
+def _file_sha256(path: Path) -> str:
+    with path.open("rb") as content:
+        return hashlib.file_digest(content, "sha256").hexdigest()
 
 
 @dataclass(frozen=True, slots=True)
@@ -775,6 +783,7 @@ def write_artwork_manifest(manifest: ArtworkManifest, destination: Path) -> None
             {
                 "id": video.id,
                 _VIDEO_PATH_FIELD: persist_video(video.video),
+                "sha256": _file_sha256(video.video.path),
                 "width": video.video.width,
                 "height": video.video.height,
                 "frame_rate_numerator": video.video.frame_rate_numerator,
@@ -788,6 +797,9 @@ def write_artwork_manifest(manifest: ArtworkManifest, destination: Path) -> None
                 "id": media.id,
                 "kind": media.kind,
                 _MEDIA_PATH_FIELD: persist_media(media.artifact),
+                "sha256": _file_sha256(media.artifact.path)
+                if isinstance(media.artifact, FileVideoArtifact)
+                else None,
                 "content_type": media.artifact.content_type,
                 "duration": media.artifact.duration
                 if isinstance(media.artifact, FileAudioArtifact)
@@ -922,8 +934,11 @@ def _read_artwork_manifest(source: Path) -> ArtworkManifest:
                 f"{relative!r}, expected {expected!r}"
             )
         try:
+            path = source / Path(expected)
+            if _file_sha256(path) != _required_string(record, "sha256", context):
+                raise ValueError(f"cached {context} content digest does not match")
             return FileVideoArtifact.from_path(
-                source / Path(expected),
+                path,
                 width=_positive_integer(record, "width", context),
                 height=_positive_integer(record, "height", context),
                 frame_rate_numerator=_positive_integer(record, "frame_rate_numerator", context),
@@ -972,6 +987,8 @@ def _read_artwork_manifest(source: Path) -> ArtworkManifest:
                     sample_rate=sample_rate,
                 )
             if kind == "video":
+                if _file_sha256(path) != _required_string(record, "sha256", context):
+                    raise ValueError(f"cached {context} content digest does not match")
                 content_type = _required_string(record, "content_type", context)
                 return FileVideoArtifact.from_path(
                     path,

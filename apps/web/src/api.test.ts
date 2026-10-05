@@ -559,6 +559,51 @@ describe("archive API client", () => {
     expect(fetch.mock.calls[0]?.[0]).toBe(apiUrl("/api/EN/search?q=Amiya%20%26%20Grani"));
   });
 
+  it("aborts stale searches and lets the same query retry before the old fetch settles", async () => {
+    const staleResponse = Promise.withResolvers<Response>();
+    const fetch = spyOn(globalThis, "fetch")
+      .mockReturnValueOnce(staleResponse.promise)
+      .mockResolvedValueOnce(jsonResponse([]));
+    const staleController = new AbortController();
+    const first = getSearchResults("EN", "Rhodes", staleController.signal).catch(
+      (error: unknown) => error,
+    );
+    const fetchSignal = fetch.mock.calls[0]?.[1]?.signal;
+
+    staleController.abort();
+    expect(fetchSignal?.aborted).toBe(true);
+
+    const currentController = new AbortController();
+    const second = getSearchResults("EN", "Rhodes", currentController.signal);
+    expect(fetch).toHaveBeenCalledTimes(2);
+    staleResponse.reject(staleController.signal.reason);
+    expect(await first).toBe(staleController.signal.reason);
+    expect(await second).toEqual([]);
+
+    currentController.abort();
+    expect(getSearchResults("EN", "Rhodes")).toBe(second);
+    expect(fetch).toHaveBeenCalledTimes(2);
+  });
+
+  it("keeps the request timeout when a search has a caller cancellation signal", async () => {
+    const timeoutController = new AbortController();
+    const timeout = spyOn(AbortSignal, "timeout").mockReturnValue(timeoutController.signal);
+    const response = Promise.withResolvers<Response>();
+    const fetch = spyOn(globalThis, "fetch").mockReturnValue(response.promise);
+    const controller = new AbortController();
+    const request = getSearchResults("EN", "Rhodes island", controller.signal).catch(
+      (error: unknown) => error,
+    );
+
+    timeoutController.abort(new DOMException("Timed out", "TimeoutError"));
+    response.reject(timeoutController.signal.reason);
+
+    expect(timeout).toHaveBeenCalledWith(120_000);
+    expect(fetch.mock.calls[0]?.[1]?.signal?.aborted).toBe(true);
+    expect(controller.signal.aborted).toBe(false);
+    expect(await request).toBeInstanceOf(ApiError);
+  });
+
   it("lists and loads presentation assets with encoded identifiers", async () => {
     const summary: PresentationAssetSummary = {
       namespace: "presentation",
