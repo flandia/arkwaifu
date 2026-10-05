@@ -86,6 +86,29 @@ async def test_retry_budget_and_permanent_errors(status, headers, attempts, wait
     assert delays == waits
 
 
+@pytest.mark.parametrize("retry_after,attempts,waits", [(50, 3, [50, 10]), (60, 2, [60])])
+async def test_transport_errors_share_the_rate_limit_wait_budget(
+    retry_after, attempts, waits, monkeypatch
+):
+    requests, delays = [], []
+
+    async def sleep(delay):
+        delays.append(delay)
+
+    def respond(request):
+        requests.append(request)
+        if len(requests) == 1:
+            return httpx.Response(429, headers={"Retry-After": str(retry_after)})
+        raise httpx.ConnectTimeout("temporary", request=request)
+
+    monkeypatch.setattr(version_module.asyncio, "sleep", sleep)
+    async with httpx.AsyncClient(transport=httpx.MockTransport(respond)) as client:
+        with pytest.raises(httpx.ConnectTimeout, match="temporary"):
+            await version_module.version_response(client, "https://upstream.test/version")
+    assert len(requests) == attempts
+    assert delays == waits
+
+
 async def test_malformed_version_is_not_retried(monkeypatch):
     calls = []
 

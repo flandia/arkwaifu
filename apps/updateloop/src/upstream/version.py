@@ -39,7 +39,7 @@ async def version_response(client: httpx.AsyncClient, url: str, **kwargs) -> htt
             if attempt == 2 or waited + delay > 60:
                 raise
         except httpx.TransportError:
-            if attempt == 2:
+            if attempt == 2 or waited + delay > 60:
                 raise
         waited += delay
         await asyncio.sleep(delay)
