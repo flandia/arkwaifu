@@ -60,6 +60,7 @@ from ..domain import (
 )
 from ..extraction import extract_assets
 from .cache import UpstreamCache
+from .version import version_response
 
 _ARTWORK_PATTERNS = (
     "avg/imgs/**",
@@ -586,8 +587,7 @@ class UpstreamArtworkBuilder:
         """Get the current ``resVersion`` from the configured version API."""
 
         async with httpx.AsyncClient(timeout=30, follow_redirects=True) as client:
-            response = await client.get(self._version_url)
-            response.raise_for_status()
+            response = await version_response(client, self._version_url)
             version = response.json().get("resVersion")
         if not isinstance(version, str) or not version:
             raise ValueError("upstream version response does not contain resVersion")

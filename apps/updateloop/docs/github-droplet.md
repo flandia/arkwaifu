@@ -64,6 +64,11 @@ compares the recorded versions. Missing databases and required additive-index
 repair also trigger a run. Archive-only backlog does not trigger a Droplet;
 the archive catches up when a database update triggers both commands. An upstream,
 storage, or schema error fails the check and prevents provisioning.
+Artwork and locale version reads get at most three attempts for transient
+transport failures, HTTP 500/502/503/504, and recognized rate limits. Backoff is
+bounded to 60 seconds, respects `Retry-After` and GitHub reset headers, and does
+not repeat preparation or publication. Permanent HTTP errors and invalid version
+data still fail the check.
 
 The preflight performs no bundle extraction, rendering, or remote writes. It does
 download the full database on each check; budget that transfer and GitHub runner

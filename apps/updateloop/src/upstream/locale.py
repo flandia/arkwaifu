@@ -24,6 +24,7 @@ from ..domain import LocaleManifest, LocaleUnit
 from ..local_path import resolve_local_path, safe_relative_path
 from ..locale import parse_galleries, parse_story_data
 from .cache import UpstreamCache
+from .version import version_response
 
 _REPOSITORY = "ArknightsAssets/ArknightsGamedata"
 _BRANCH = "master"
@@ -602,12 +603,12 @@ class UpstreamLocaleBuilder:
         """Read one server's current version directly from the branch."""
 
         server = _SERVER_DIRECTORIES[unit]
-        response = await client.get(
+        response = await version_response(
+            client,
             f"{self._api_url}/repos/{_REPOSITORY}/contents/{server}/hot_update_list.json",
             params={"ref": _BRANCH},
             headers={"Accept": _RAW_CONTENT_ACCEPT},
         )
-        response.raise_for_status()
         return _version_id(response.json(), f"{unit} branch hot_update_list.json")
 
     async def _download(
