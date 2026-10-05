@@ -282,9 +282,14 @@ class LifecycleTests(unittest.TestCase):
         cleanup.assert_called_once()
 
     def test_preflight_requires_valid_success_and_forwards_token(self):
+        cache_key = "a" * 64 + "-" + "b" * 32
         for payload, failure in [
-            (b'{"update_needed":false}', False),
-            (b'{"update_needed":true}', False),
+            (json.dumps({"update_needed": False, "database_cache_key": cache_key}).encode(), False),
+            (b'{"update_needed":true,"database_cache_key":null}', False),
+            (b'{"update_needed":false}', True),
+            (b'{"update_needed":false,"database_cache_key":"bad\\nupdate_needed=true"}', True),
+            (b'{"update_needed":false,"database_cache_key":123}', True),
+            (b'{"update_needed":"false","database_cache_key":null}', True),
             (b"{}", True),
         ]:
             with self.subTest(payload=payload):
@@ -294,6 +299,17 @@ class LifecycleTests(unittest.TestCase):
                     if args[:2] == ["docker", "run"]:
                         env_file = Path(args[args.index("--env-file") + 1]).read_text()
                         self.assertIn("ARKWAIFU_GITHUB_TOKEN=workflow-token", env_file)
+                        cache = self.root / "updateloop-database-cache"
+                        self.assertEqual(
+                            args[args.index("--volume") + 1], f"{cache.resolve()}:/preflight-cache"
+                        )
+                        owner = cache.stat()
+                        self.assertEqual(
+                            args[args.index("--user") + 1], f"{owner.st_uid}:{owner.st_gid}"
+                        )
+                        self.assertEqual(
+                            args[-3:], ["check", "--database-cache-dir", "/preflight-cache"]
+                        )
                         return payload
                     return b""
 
@@ -304,10 +320,20 @@ class LifecycleTests(unittest.TestCase):
                         self.assertEqual((self.root / "output").read_text(), "")
                     else:
                         workflow.check()
-                        self.assertIn("update_needed=", (self.root / "output").read_text())
+                        outputs = (self.root / "output").read_text()
+                        self.assertIn("update_needed=", outputs)
+                        if json.loads(payload)["database_cache_key"] is None:
+                            self.assertNotIn("database_cache_key=", outputs)
+                        else:
+                            self.assertIn(
+                                f"database_cache_key=updateloop-preflight-db-v1-{cache_key}\n",
+                                outputs,
+                            )
 
     def test_failed_preflight_never_emits_a_decision(self):
-        decision = b'{"update_needed":false}'
+        decision = json.dumps(
+            {"update_needed": False, "database_cache_key": "a" * 64 + "-" + "b" * 32}
+        ).encode()
 
         def execute(args, **kwargs):
             if args[:2] == ["docker", "run"]:

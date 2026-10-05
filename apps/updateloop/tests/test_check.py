@@ -1,7 +1,7 @@
 import json
 import sqlite3
 from types import SimpleNamespace
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, Mock
 
 import pytest
 
@@ -52,8 +52,9 @@ async def test_check_database_never_builds_or_publishes(state, tmp_path):
         (False, {"v2"}, True),  # An older missing manifest also needs catch-up.
     ],
 )
+@pytest.mark.parametrize("cache_key", [False, None, "a" * 64 + "-" + "b" * 32])
 async def test_check_includes_archive_only_work(
-    monkeypatch, capsys, database_update, completed, archive_update
+    monkeypatch, capsys, tmp_path, database_update, completed, archive_update, cache_key
 ):
     settings = SimpleNamespace(github_api_url="unused", github_token=None)
     monkeypatch.setattr(cli.Settings, "from_environment", lambda: settings)
@@ -69,7 +70,10 @@ async def test_check_includes_archive_only_work(
 
     monkeypatch.setattr(cli, "_prepare_locale", prepare_locale)
     updater = SimpleNamespace(needs_update=AsyncMock(return_value=database_update))
-    monkeypatch.setattr(cli, "_updater", lambda _: updater)
+    store = SimpleNamespace(database_cache_key=cache_key)
+    factory = Mock(return_value=store)
+    monkeypatch.setattr(cli, "_object_store", factory)
+    monkeypatch.setattr(cli, "Updater", lambda _: updater)
     monkeypatch.setattr(
         cli,
         "WindowsVersionHistory",
@@ -81,12 +85,17 @@ async def test_check_includes_archive_only_work(
         lambda _: SimpleNamespace(completed_versions=AsyncMock(return_value=completed)),
     )
 
-    assert await cli._check(archive=True) == 0
-    assert json.loads(capsys.readouterr().out) == {
+    directory = tmp_path / "cache" if cache_key is not False else None
+    assert await cli._check(archive=True, database_cache_dir=directory) == 0
+    expected = {
         "update_needed": database_update or archive_update,
         "database_update": database_update,
         "archive_update": archive_update,
     }
+    if directory is not None:
+        expected["database_cache_key"] = cache_key
+    assert json.loads(capsys.readouterr().out) == expected
+    factory.assert_called_once_with(settings, database_cache_dir=directory)
     assert {request.unit for request in updater.needs_update.call_args.args[0]} == set(
         cli._ALL_UNITS
     )
@@ -108,3 +117,15 @@ async def test_failed_detection_is_not_reported_as_no_update(monkeypatch, capsys
     assert await cli._check(archive=True) == 1
     assert capsys.readouterr().out == ""
     builder.aclose.assert_awaited_once()
+
+
+def test_check_command_passes_database_cache_path(monkeypatch, tmp_path):
+    check = AsyncMock(return_value=0)
+    monkeypatch.setattr(cli, "_check", check)
+    monkeypatch.setattr(cli, "load_dotenv", lambda *args, **kwargs: False)
+    monkeypatch.setattr(cli, "_configure_logging", lambda **kwargs: None)
+    directory = tmp_path / "preflight"
+    with pytest.raises(SystemExit) as exited:
+        cli.main(["check", "--database-cache-dir", str(directory)])
+    assert exited.value.code == 0
+    check.assert_awaited_once_with(archive=False, database_cache_dir=directory)
