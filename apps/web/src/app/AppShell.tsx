@@ -2,6 +2,7 @@ import { useEffect, useRef, type ReactNode } from "react";
 import { useParams } from "react-router";
 import { useUi } from "../i18n";
 import { isLocale, TransitionLink } from "../navigation";
+import { BackgroundMotionControl } from "../shared/BackgroundMotion";
 import { LocaleControls } from "./LocaleControls";
 import { SiteNavigation } from "./SiteNavigation";
 
@@ -105,7 +106,7 @@ export function AppShell({ children }: { children: ReactNode }) {
         <div className="min-w-0 bg-paper">
           <section
             aria-label={t("utility.statusAndLocale")}
-            className="grid min-h-18 gap-3 border-b-2 border-ink bg-surface px-[max(1rem,env(safe-area-inset-left))] py-3 min-[74rem]:flex min-[74rem]:items-center min-[74rem]:justify-between min-[74rem]:px-10"
+            className="grid min-h-18 gap-3 border-b-2 border-ink bg-surface px-[max(1rem,env(safe-area-inset-left))] py-3 min-[74rem]:flex min-[74rem]:flex-wrap min-[74rem]:items-center min-[74rem]:justify-between min-[74rem]:px-10"
             style={{ viewTransitionName: "persistent-utility" }}
           >
             <p className="hidden items-center gap-2 font-mono text-xs tracking-wider uppercase min-[74rem]:flex">
@@ -113,6 +114,7 @@ export function AppShell({ children }: { children: ReactNode }) {
               {t("utility.publicArchive")}
             </p>
             <LocaleControls locale={locale} />
+            <BackgroundMotionControl />
           </section>
           <main className="min-h-[calc(100vh-12rem)]" id="main-content" tabIndex={-1}>
             {children}

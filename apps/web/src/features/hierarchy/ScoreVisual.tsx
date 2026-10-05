@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import type { ScoreImage, ScoreVideo } from "../../api/types";
-import { useUi } from "../../i18n";
+import { useBackgroundMotion } from "../../shared/BackgroundMotion";
 import { cn } from "../../shared/ui/cn";
 
 /** The nested Score-directory mark used by the in-game archive navigation. */
@@ -13,25 +13,6 @@ export function ScoreArchiveMark({ className }: { className?: string }) {
       <span className="absolute top-[4%] left-1/2 size-0 -translate-x-1/2 border-x-[0.8em] border-t-[1em] border-x-transparent border-t-current" />
     </span>
   );
-}
-
-function reducedMotionPreference(): boolean {
-  return (
-    typeof window !== "undefined" && window.matchMedia("(prefers-reduced-motion: reduce)").matches
-  );
-}
-
-function useReducedMotion(): boolean {
-  const [reduced, setReduced] = useState(reducedMotionPreference);
-
-  useEffect(() => {
-    const query = window.matchMedia("(prefers-reduced-motion: reduce)");
-    const update = () => setReduced(query.matches);
-    query.addEventListener("change", update);
-    return () => query.removeEventListener("change", update);
-  }, []);
-
-  return reduced;
 }
 
 export function ScoreImageAsset({
@@ -76,27 +57,22 @@ export function ScoreBackdrop({
   priority?: boolean;
   viewportGated?: boolean;
 }) {
-  const { t } = useUi();
-  const reducedMotion = useReducedMotion();
+  const { paused, reducedMotion } = useBackgroundMotion();
   const containerRef = useRef<HTMLDivElement>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
   const [nearViewport, setNearViewport] = useState(!viewportGated);
   const [failedVideo, setFailedVideo] = useState<string>();
-  const [paused, setPaused] = useState(false);
   const poster = image?.image?.url;
   const videoUrl = video?.video?.url;
   const activeVideo =
     !reducedMotion && nearViewport && failedVideo !== videoUrl ? video?.video : null;
 
-  function togglePlayback(): void {
-    if (paused) {
-      setPaused(false);
-      void videoRef.current?.play().catch(() => setPaused(true));
-    } else {
-      videoRef.current?.pause();
-      setPaused(true);
-    }
-  }
+  useEffect(() => {
+    const element = videoRef.current;
+    if (!element) return;
+    if (paused) element.pause();
+    else void element.play().catch(() => {});
+  }, [paused, activeVideo?.url]);
 
   useEffect(() => {
     if (!viewportGated) {
@@ -149,15 +125,6 @@ export function ScoreBackdrop({
           />
         ) : null}
       </div>
-      {activeVideo ? (
-        <button
-          className="absolute top-4 right-4 z-20 min-h-11 border-2 border-white bg-black/80 px-3 py-2 text-xs font-bold text-white hover:bg-black"
-          onClick={togglePlayback}
-          type="button"
-        >
-          {paused ? t("score.resumeAnimation") : t("score.pauseAnimation")}
-        </button>
-      ) : null}
     </>
   );
 }

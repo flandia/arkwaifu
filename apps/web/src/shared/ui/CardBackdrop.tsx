@@ -1,4 +1,5 @@
 import { useMemo, useState, type CSSProperties } from "react";
+import { useBackgroundMotion } from "../BackgroundMotion";
 import { cn } from "./cn";
 
 const scrims = {
@@ -23,6 +24,7 @@ export function CardBackdrop({
   scrim = "dark",
   sources = [],
 }: CardBackdropProps) {
+  const { paused } = useBackgroundMotion();
   const [failedSources, setFailedSources] = useState<ReadonlySet<string>>(() => new Set());
   const [loadedSources, setLoadedSources] = useState<ReadonlySet<string>>(() => new Set());
   const [{ interval, startingPoint }] = useState(() => ({
@@ -80,6 +82,7 @@ export function CardBackdrop({
               "--preview-delay": `${-(previewCount - index) * interval}ms`,
               "--preview-duration": `${previewCount * interval}ms`,
               objectPosition: position,
+              animationPlayState: paused ? "paused" : undefined,
             } as CSSProperties
           }
           width="1600"

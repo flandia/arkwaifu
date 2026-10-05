@@ -16,6 +16,8 @@ it("offers a playback control and omits decorative video for reduced motion", as
   });
   try {
     const { ScoreBackdrop } = await import("./ScoreVisual");
+    const { BackgroundMotionProvider, BackgroundMotionControl } =
+      await import("../../shared/BackgroundMotion");
     const backdrop = createElement(ScoreBackdrop, {
       image: null,
       video: {
@@ -33,13 +35,22 @@ it("offers a playback control and omits decorative video for reduced motion", as
         },
       },
     });
-    const animated = renderToStaticMarkup(backdrop);
+    const render = () =>
+      renderToStaticMarkup(
+        createElement(
+          BackgroundMotionProvider,
+          null,
+          backdrop,
+          createElement(BackgroundMotionControl),
+        ),
+      );
+    const animated = render();
     expect(animated).toContain("<video");
     expect(animated).toContain("</div><button");
     reducedMotion = true;
-    const still = renderToStaticMarkup(backdrop);
+    const still = render();
     expect(still).not.toContain("<video");
-    expect(still).not.toContain("<button");
+    expect(still).toContain("disabled");
   } finally {
     for (const [key, descriptor] of [
       ["document", documentDescriptor],

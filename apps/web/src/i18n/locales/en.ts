@@ -33,6 +33,7 @@ export const en = {
     publicArchive: "Public Archive",
     archiveLocale: "Archive Locale",
     uiLanguage: "UI Language",
+    reducedMotion: "Reduced motion enabled",
   },
   languages: {
     en: "English",
@@ -168,8 +169,8 @@ export const en = {
     collectionReferences: "Used by Sections and Groups",
   },
   score: {
-    pauseAnimation: "Pause Animation",
-    resumeAnimation: "Resume Animation",
+    pauseAnimation: "Pause background motion",
+    resumeAnimation: "Resume background motion",
     title: "Scores",
     description: "Arknights stories arranged as Movements and canonical sections in Scores.",
     indexEyebrow: "Score Index / S",

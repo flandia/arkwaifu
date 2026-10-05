@@ -35,6 +35,7 @@ export const zhCN = {
     publicArchive: "公共档案",
     archiveLocale: "档案语言",
     uiLanguage: "界面语言",
+    reducedMotion: "已启用减少动态效果",
   },
   languages: {
     en: "English",
@@ -167,8 +168,8 @@ export const zhCN = {
     collectionReferences: "由乐部与剧情组直接使用",
   },
   score: {
-    pauseAnimation: "暂停动画",
-    resumeAnimation: "继续动画",
+    pauseAnimation: "暂停背景动态效果",
+    resumeAnimation: "继续背景动态效果",
     title: "曲谱",
     description: "收录于曲谱，并按照乐章及其乐部整理的《明日方舟》剧情。",
     indexEyebrow: "曲谱目录 / S",

@@ -4,6 +4,7 @@ import { BrowserRouter } from "react-router";
 import "@fontsource-variable/atkinson-hyperlegible-next";
 import "./i18n";
 import App from "./App";
+import { BackgroundMotionProvider } from "./shared/BackgroundMotion";
 import "./styles.css";
 
 const root = document.getElementById("root");
@@ -12,7 +13,9 @@ if (!root) throw new Error("Missing application root");
 createRoot(root).render(
   <StrictMode>
     <BrowserRouter useTransitions={false}>
-      <App />
+      <BackgroundMotionProvider>
+        <App />
+      </BackgroundMotionProvider>
     </BrowserRouter>
   </StrictMode>,
 );
