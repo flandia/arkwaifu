@@ -86,14 +86,17 @@ export function NarrativeImageAssetPage() {
         title={title}
         titleLanguage={names.length ? localeLanguageTag(locale) : undefined}
       />
-      <div className="mt-12 grid items-start gap-8 min-[56rem]:grid-cols-[minmax(0,1.4fr)_minmax(18rem,0.6fr)]">
+      <div className="mt-12 grid grid-cols-1 items-start gap-8 min-[56rem]:grid-cols-[minmax(0,1.4fr)_minmax(18rem,0.6fr)]">
         <ArtworkHero artwork={artwork} title={`${title} — ${artwork.id}`} />
         <aside
-          className="border-2 border-ink bg-surface p-6 min-[56rem]:sticky min-[56rem]:top-6"
+          className="min-w-0 border-2 border-ink bg-surface p-6 min-[56rem]:sticky min-[56rem]:top-6"
           aria-label={t("artwork.detailsLabel")}
         >
           <Eyebrow>{t("artwork.archiveIdentity")}</Eyebrow>
-          <code className="mb-8 block break-words text-sm font-extrabold" translate="no">
+          <code
+            className="mb-8 block text-sm font-extrabold [overflow-wrap:anywhere]"
+            translate="no"
+          >
             narrative/{artwork.category}/{artwork.id}
           </code>
           <dl className="mb-8 border-t-2 border-ink">

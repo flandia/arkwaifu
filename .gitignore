@@ -3,3 +3,4 @@
 dev/dev.env
 dev/*.log
 .vscode/tasks.json
+/.github/scripts/__pycache__/

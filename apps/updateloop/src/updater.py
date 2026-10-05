@@ -293,6 +293,22 @@ class Updater:
         self._object_store = object_store
         self._upload_workers = upload_workers
 
+    async def needs_update(self, requests: Sequence[UpdateRequest]) -> bool:
+        """Check published versions and schema repair needs without publishing or building."""
+
+        self._validate_requests(requests)
+        with tempfile.TemporaryDirectory(prefix="arkwaifu-check-") as temporary:
+            database_path = Path(temporary) / "arkwaifu.sqlite3"
+            await await_owned(self._object_store.pull_database(database_path))
+            database_changed = await await_owned(
+                asyncio.to_thread(initialize_or_validate, database_path)
+            )
+            active_versions = await await_owned(asyncio.to_thread(read_versions, database_path))
+            return database_changed or any(
+                active_versions.get(request.unit) != request.res_version or request.complete
+                for request in requests
+            )
+
     async def run(
         self,
         requests: Sequence[UpdateRequest],

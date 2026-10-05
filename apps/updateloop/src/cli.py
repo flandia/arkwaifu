@@ -79,6 +79,13 @@ def _unit(value: str) -> UpdateUnit:
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="updateloop")
     commands = parser.add_subparsers(dest="command", required=True)
+    check = commands.add_parser("check", help="check for pending updates without publishing")
+    check.add_argument("--archive", action="store_true", help="also check wrapper archive history")
+    check.add_argument(
+        "--database-cache-dir",
+        type=Path,
+        help="reuse the published database when its origin ETag and cached bytes match",
+    )
     run = commands.add_parser("run", help="update selected units")
     run.add_argument("units", nargs="*", type=_unit)
     run.add_argument("--force", action="store_true")
@@ -119,17 +126,21 @@ def _validate_arguments(parser: argparse.ArgumentParser, args: argparse.Namespac
         parser.error("--archive requires an update request containing artwork")
 
 
-def _updater(settings: Settings) -> Updater:
-    return Updater(
-        S3ObjectStore(
-            bucket=settings.s3_bucket,
-            region=settings.s3_region,
-            access_key_id=settings.s3_access_key_id,
-            secret_access_key=settings.s3_secret_access_key,
-            endpoint_url=settings.s3_endpoint_url,
-            path_style=settings.s3_path_style,
-        ),
+def _object_store(settings: Settings, *, database_cache_dir: Path | None = None) -> S3ObjectStore:
+    """Configure storage, enabling database reuse only for an explicit preflight cache."""
+    return S3ObjectStore(
+        bucket=settings.s3_bucket,
+        region=settings.s3_region,
+        access_key_id=settings.s3_access_key_id,
+        secret_access_key=settings.s3_secret_access_key,
+        endpoint_url=settings.s3_endpoint_url,
+        path_style=settings.s3_path_style,
+        database_cache_dir=database_cache_dir,
     )
+
+
+def _updater(settings: Settings) -> Updater:
+    return Updater(_object_store(settings))
 
 
 def _asset_bundle_archive(settings: Settings) -> S3AssetBundleArchiveStore:
@@ -253,6 +264,52 @@ async def _run(
         )
 
 
+async def _check(*, archive: bool, database_cache_dir: Path | None = None) -> int:
+    """Print a JSON decision after read-only detection of database and archive work."""
+
+    try:
+        settings = Settings.from_environment()
+        with tempfile.TemporaryDirectory(prefix="arkwaifu-preflight-") as temporary:
+            cache = UpstreamCache(Path(temporary))
+            builder = _locale_builder(settings, cache)
+            try:
+                async with asyncio.TaskGroup() as group:
+                    artwork = group.create_task(_prepare_artwork(settings, cache))
+                    locales = [
+                        group.create_task(_prepare_locale(builder, cast(LocaleUnit, unit)))
+                        for unit in _ALL_UNITS
+                        if unit != "artwork"
+                    ]
+                requests = [artwork.result(), *(task.result() for task in locales)]
+                store = _object_store(settings, database_cache_dir=database_cache_dir)
+                database_update = await Updater(store).needs_update(requests)
+                archive_update = False
+                if archive:
+                    history = WindowsVersionHistory(
+                        github_api_url=settings.github_api_url,
+                        github_raw_url="https://raw.githubusercontent.com",
+                        github_token=settings.github_token,
+                        cache=cache,
+                    )
+                    versions = await history.versions(artwork.result().res_version)
+                    completed = await _asset_bundle_archive(settings).completed_versions()
+                    archive_update = any(version not in completed for version in versions)
+            finally:
+                await builder.aclose()
+        decision: dict[str, object] = {
+            "update_needed": database_update or archive_update,
+            "database_update": database_update,
+            "archive_update": archive_update,
+        }
+        if database_cache_dir is not None:
+            decision["database_cache_key"] = store.database_cache_key
+        print(json.dumps(decision))
+        return 0
+    except Exception:
+        _LOGGER.exception("update check status=failed")
+        return 1
+
+
 async def _run_with_cache(
     settings: Settings,
     units: list[UpdateUnit],
@@ -332,30 +389,27 @@ def main(argv: list[str] | None = None) -> None:
     _validate_arguments(parser, args)
     load_dotenv(Path.cwd() / ".env", override=False)
     _configure_logging(
-        suppress_incomplete_upstream_warnings=args.suppress_incomplete_upstream_warnings
+        suppress_incomplete_upstream_warnings=getattr(
+            args, "suppress_incomplete_upstream_warnings", False
+        )
     )
-    if args.command == "run":
+    if args.command in {"run", "check"}:
+        operation = (
+            _check(archive=args.archive, database_cache_dir=args.database_cache_dir)
+            if args.command == "check"
+            else _run(
+                args.units,
+                force=args.force,
+                complete=args.complete,
+                archive=args.archive,
+                use_cache=not args.no_cache,
+            )
+        )
         if sys.platform == "win32":
             loop_factory = lambda: asyncio.SelectorEventLoop(selectors.SelectSelector())
             with asyncio.Runner(loop_factory=loop_factory) as runner:
-                exit_code = runner.run(
-                    _run(
-                        args.units,
-                        force=args.force,
-                        complete=args.complete,
-                        archive=args.archive,
-                        use_cache=not args.no_cache,
-                    )
-                )
+                exit_code = runner.run(operation)
         else:
-            exit_code = asyncio.run(
-                _run(
-                    args.units,
-                    force=args.force,
-                    complete=args.complete,
-                    archive=args.archive,
-                    use_cache=not args.no_cache,
-                )
-            )
+            exit_code = asyncio.run(operation)
         raise SystemExit(exit_code)
     raise AssertionError(f"unhandled command: {args.command}")

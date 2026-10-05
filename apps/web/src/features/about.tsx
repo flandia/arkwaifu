@@ -48,7 +48,10 @@ export function AboutPage() {
             {t("about.feedbackAfterPullRequest")}
           </p>
         </section>
-        <aside className="self-start border-[3px] border-ink bg-brand p-8 text-white shadow-hard">
+        <aside
+          aria-label={t("about.startReading")}
+          className="self-start border-[3px] border-ink bg-brand p-8 text-white shadow-hard"
+        >
           <Eyebrow className="text-white/70">{t("about.startReading")}</Eyebrow>
           <h2 className="mb-6 text-[clamp(2rem,4vw,3.5rem)] leading-none font-black tracking-tight uppercase">
             {t("about.followIndex")}

@@ -47,7 +47,10 @@ export function PresentationAssetDetailPage() {
             </video>
           )}
         </figure>
-        <aside className="border-2 border-ink bg-surface p-6">
+        <aside
+          aria-label={t("presentation.identity")}
+          className="border-2 border-ink bg-surface p-6"
+        >
           <Eyebrow>{t("presentation.identity")}</Eyebrow>
           <code className="mb-8 block break-all">
             presentation/{asset.category}/{asset.id}
@@ -70,7 +73,7 @@ export function PresentationAssetDetailPage() {
               ))}
           </dl>
           <ActionLink adornment="external" target="_blank" to={asset.url}>
-            {t("artwork.openOriginal")}
+            {asset.format === "video" ? t("mediaAsset.openOriginal") : t("artwork.openOriginal")}
           </ActionLink>
         </aside>
       </div>
