@@ -169,6 +169,8 @@ Anime KV resources under `avg/animatedkv/` keep all four stages under the versio
 
 Every completed directory carries `.arkwaifu-cache.json`. Unwrapped directories contain the original relative bundle path, extracted directories contain Unity exports or demuxed video, and rendered directories contain `manifest.json` plus ordinal media files under `processed/`. Shared manifests are rebound to the contributing version when read; shared cache paths do not change published object keys.
 
+Rendered video records retain a SHA-256 digest of their file. Cache admission streams the file through the digest check before trusting its saved metadata. Video entries without a digest, or whose bytes changed, are rejected and rebuilt from compatible earlier stages when that resource is selected; this does not trigger a full artwork rebuild.
+
 Completed entries remain until an operator removes them. Removing only `.cache/<resVersion>/` leaves ordinary shared processing products available. Use `--no-cache` to rebuild with an isolated temporary cache.
 
 Locales share `.cache/game-data/archive.zip`. The updater validates the archive against every requested locale version before reuse. Extracted locale data remains under `.cache/<resVersion>/game-data/<unit>/extracted/`.
