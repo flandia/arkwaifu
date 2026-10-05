@@ -1,0 +1,131 @@
+import json
+import sqlite3
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, Mock
+
+import pytest
+
+from arkwaifu_updateloop import MemoryObjectStore, Updater, UpdateRequest, cli
+from arkwaifu_updateloop.database import initialize_or_validate
+
+
+@pytest.mark.parametrize(
+    "state", ["current", "changed", "missing", "repair", "invalid", "incomplete"]
+)
+async def test_check_database_never_builds_or_publishes(state, tmp_path):
+    store = MemoryObjectStore()
+    if state != "missing":
+        database = tmp_path / "database.sqlite3"
+        initialize_or_validate(database)
+        with sqlite3.connect(database) as connection:
+            connection.execute("INSERT INTO unit_versions VALUES ('CN', 'v1')")
+            if state == "repair":
+                connection.execute("DROP INDEX story_narrative_image_references_by_asset")
+            if state == "invalid":
+                connection.execute("PRAGMA user_version=99")
+            if state == "incomplete":
+                connection.execute("DROP TABLE movements")
+        store.database = database.read_bytes()
+    before = store.database
+    store.push_database = AsyncMock(side_effect=AssertionError("check must not publish"))
+    build = AsyncMock(side_effect=AssertionError("check must not build"))
+    requests = [UpdateRequest("CN", "v2" if state == "changed" else "v1", build)]
+    if state == "invalid":
+        with pytest.raises(ValueError, match="schema version"):
+            await Updater(store).needs_update(requests)
+    elif state == "incomplete":
+        with pytest.raises(ValueError, match="schema shape"):
+            await Updater(store).needs_update(requests)
+    else:
+        assert await Updater(store).needs_update(requests) is (state != "current")
+    assert store.database == before
+    build.assert_not_called()
+    store.push_database.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    ("database_update", "completed", "archive_update"),
+    [
+        (False, {"v1", "v2"}, False),
+        (True, {"v1", "v2"}, False),
+        (False, {"v1"}, True),
+        (False, {"v2"}, True),  # An older missing manifest also needs catch-up.
+    ],
+)
+@pytest.mark.parametrize("cache_key", [False, None, "a" * 64 + "-" + "b" * 32])
+async def test_check_includes_archive_only_work(
+    monkeypatch, capsys, tmp_path, database_update, completed, archive_update, cache_key
+):
+    settings = SimpleNamespace(github_api_url="unused", github_token=None)
+    monkeypatch.setattr(cli.Settings, "from_environment", lambda: settings)
+    build = AsyncMock(side_effect=AssertionError("check must not build"))
+    locale_builder = SimpleNamespace(aclose=AsyncMock())
+    monkeypatch.setattr(cli, "_locale_builder", lambda *_: locale_builder)
+    monkeypatch.setattr(
+        cli, "_prepare_artwork", AsyncMock(return_value=UpdateRequest("artwork", "v2", build))
+    )
+
+    async def prepare_locale(_builder, unit):
+        return UpdateRequest(unit, "v2", build)
+
+    monkeypatch.setattr(cli, "_prepare_locale", prepare_locale)
+    updater = SimpleNamespace(needs_update=AsyncMock(return_value=database_update))
+    store = SimpleNamespace(database_cache_key=cache_key)
+    factory = Mock(return_value=store)
+    monkeypatch.setattr(cli, "_object_store", factory)
+    monkeypatch.setattr(cli, "Updater", lambda _: updater)
+    monkeypatch.setattr(
+        cli,
+        "WindowsVersionHistory",
+        lambda **_: SimpleNamespace(versions=AsyncMock(return_value=("v1", "v2"))),
+    )
+    monkeypatch.setattr(
+        cli,
+        "_asset_bundle_archive",
+        lambda _: SimpleNamespace(completed_versions=AsyncMock(return_value=completed)),
+    )
+
+    directory = tmp_path / "cache" if cache_key is not False else None
+    assert await cli._check(archive=True, database_cache_dir=directory) == 0
+    expected = {
+        "update_needed": database_update or archive_update,
+        "database_update": database_update,
+        "archive_update": archive_update,
+    }
+    if directory is not None:
+        expected["database_cache_key"] = cache_key
+    assert json.loads(capsys.readouterr().out) == expected
+    factory.assert_called_once_with(settings, database_cache_dir=directory)
+    assert {request.unit for request in updater.needs_update.call_args.args[0]} == set(
+        cli._ALL_UNITS
+    )
+    locale_builder.aclose.assert_awaited_once()
+    build.assert_not_called()
+
+
+async def test_failed_detection_is_not_reported_as_no_update(monkeypatch, capsys):
+    monkeypatch.setattr(cli.Settings, "from_environment", lambda: object())
+    builder = SimpleNamespace(aclose=AsyncMock())
+    monkeypatch.setattr(cli, "_locale_builder", lambda *_: builder)
+    monkeypatch.setattr(
+        cli, "_prepare_artwork", AsyncMock(side_effect=RuntimeError("upstream down"))
+    )
+    monkeypatch.setattr(
+        cli, "_prepare_locale", AsyncMock(side_effect=RuntimeError("upstream down"))
+    )
+
+    assert await cli._check(archive=True) == 1
+    assert capsys.readouterr().out == ""
+    builder.aclose.assert_awaited_once()
+
+
+def test_check_command_passes_database_cache_path(monkeypatch, tmp_path):
+    check = AsyncMock(return_value=0)
+    monkeypatch.setattr(cli, "_check", check)
+    monkeypatch.setattr(cli, "load_dotenv", lambda *args, **kwargs: False)
+    monkeypatch.setattr(cli, "_configure_logging", lambda **kwargs: None)
+    directory = tmp_path / "preflight"
+    with pytest.raises(SystemExit) as exited:
+        cli.main(["check", "--database-cache-dir", str(directory)])
+    assert exited.value.code == 0
+    check.assert_awaited_once_with(archive=False, database_cache_dir=directory)

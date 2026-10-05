@@ -47,6 +47,31 @@ async def test_file_cache_validates_hits_and_replaces_corruption(tmp_path: Path)
 
 
 @pytest.mark.asyncio
+async def test_file_cache_replaces_a_directory_at_the_cache_path(tmp_path: Path):
+    cache = UpstreamCache(tmp_path / ".cache")
+    destination = cache.root / "version-1/artwork/bundle.dat"
+    destination.mkdir(parents=True)
+    (destination / "corrupt.txt").write_text("corrupt", encoding="utf-8")
+    produced = 0
+
+    async def produce(path: Path) -> None:
+        nonlocal produced
+        produced += 1
+        path.write_text("valid", encoding="utf-8")
+
+    def validate(path: Path) -> None:
+        assert path.read_text(encoding="utf-8") == "valid"
+
+    for _ in range(2):
+        rebuilt = await cache.file(
+            "version-1", PurePosixPath("artwork", "bundle.dat"), produce, validate
+        )
+        assert rebuilt == destination
+        assert rebuilt.read_text(encoding="utf-8") == "valid"
+    assert produced == 1
+
+
+@pytest.mark.asyncio
 async def test_directory_cache_exposes_only_completed_fingerprint(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ):

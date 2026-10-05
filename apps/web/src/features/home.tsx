@@ -30,7 +30,7 @@ function EntryCard({
   return (
     <TransitionLink
       className={cn(
-        "group grid min-h-48 grid-cols-[2.5rem_minmax(0,1fr)_auto] gap-4 border-r-2 border-b-2 border-ink bg-surface p-5 no-underline transition-colors hover:bg-brand-soft [contain-intrinsic-size:auto_12rem] [content-visibility:auto]",
+        "group grid min-h-48 grid-cols-[2.5rem_minmax(0,1fr)_auto] gap-4 border-r-2 border-b-2 border-ink bg-surface p-5 no-underline transition-colors hover:bg-brand-soft [contain-intrinsic-block-size:auto_12rem] [content-visibility:auto]",
         featured && "bg-brand text-white hover:bg-brand/90",
       )}
       to={to}
