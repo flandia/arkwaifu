@@ -132,6 +132,56 @@ module Query = struct
     (unit ->! int)
       "SELECT EXISTS(SELECT 1 FROM sqlite_schema WHERE name = 'unit_versions')"
 
+  (* Resolve every reader column without scanning archive contents. *)
+  let schema_probe =
+    (unit ->* int)
+      {|
+        SELECT 1 FROM
+          (SELECT unit, res_version FROM unit_versions),
+          (SELECT category, asset_id, object_key, size, width, height
+           FROM narrative_image_assets),
+          (SELECT category, asset_id, material_type, character_id, role, variant,
+                  object_key, size, width, height FROM material_assets),
+          (SELECT category, asset_id, position, material_category, material_asset_id
+           FROM narrative_asset_material_references),
+          (SELECT category, asset_id, object_key, size, width, height
+           FROM presentation_image_assets),
+          (SELECT category, asset_id, object_key, mime, size, width, height,
+                  frame_rate_numerator, frame_rate_denominator, frame_count
+           FROM presentation_video_assets),
+          (SELECT category, asset_id, object_key, mime, size, duration, sample_rate,
+                  width, height, frame_rate_numerator, frame_rate_denominator,
+                  frame_count FROM narrative_media_assets),
+          (SELECT locale, collection_id, collection_kind FROM story_collections),
+          (SELECT locale, movement_id, position, movement_type, name, icon_asset_id,
+                  logo_asset_id, background_asset_id, start_time FROM movements),
+          (SELECT locale, section_id, collection_id, section_type, name,
+                  review_group_id, sort_by_year, sort_within_year,
+                  key_visual_asset_id, title_asset_id, background_asset_id,
+                  decoration_asset_id, retro_background_asset_id, description
+           FROM sections),
+          (SELECT locale, movement_id, location_id, position, location_type,
+                  section_id, divider_icon_asset_id, divider_sub_name, video_id
+           FROM movement_locations),
+          (SELECT locale, archive_id, collection_id, position, name,
+                  archive_category, story_type FROM archive_groups),
+          (SELECT locale, story_id, collection_id, tag, tag_text, code, name,
+                  info, text, position FROM stories),
+          (SELECT locale, story_id, position, asset_id, kind, category, title,
+                  subtitle, names_json FROM story_narrative_image_references),
+          (SELECT locale, story_id, position, asset_id, category, usage
+           FROM story_narrative_media_references),
+          (SELECT locale, gallery_id, collection_id, position, name, description
+           FROM galleries),
+          (SELECT locale, gallery_id, group_id, position, name, description,
+                  related_story_id, related_stage_id FROM gallery_groups),
+          (SELECT locale, gallery_id, group_id, position, cg_id, asset_id, category
+           FROM gallery_narrative_asset_references),
+          (SELECT locale, kind, entry_id, category, title, subtitle, search_text,
+                  parent_json, thumbnail_object_key FROM search_entries)
+        WHERE 0
+      |}
+
   let sitemap_movements =
     (unit ->* t2 string string)
       "SELECT locale, movement_id FROM movements ORDER BY locale, position"
@@ -882,6 +932,8 @@ module Query = struct
               SELECT 1
               FROM narrative_image_assets AS texture
               WHERE texture.category = 'illustration'
+                AND texture.asset_id >= reference.asset_id || '/'
+                AND texture.asset_id < reference.asset_id || '0'
                 AND substr(texture.asset_id, 1, length(reference.asset_id) + 1) =
                     reference.asset_id || '/'
             ) THEN 'true' ELSE 'false' END),
@@ -889,7 +941,8 @@ module Query = struct
           'names', json(reference.names_json), 'objectKey', narrative_image_asset.object_key
         )
         FROM stories AS story
-        JOIN story_narrative_image_references AS reference
+        -- Keep the selected collection outside the reference lookup.
+        CROSS JOIN story_narrative_image_references AS reference
           ON reference.locale = story.locale
          AND reference.story_id = story.story_id
         LEFT JOIN narrative_image_assets AS narrative_image_asset
@@ -911,7 +964,7 @@ module Query = struct
           'objectKey', asset.object_key
         )
         FROM stories AS story
-        JOIN story_narrative_media_references AS reference
+        CROSS JOIN story_narrative_media_references AS reference
           ON reference.locale = story.locale
          AND reference.story_id = story.story_id
         LEFT JOIN narrative_media_assets AS asset
@@ -935,6 +988,8 @@ module Query = struct
               SELECT 1
               FROM narrative_image_assets AS texture
               WHERE texture.category = 'illustration'
+                AND texture.asset_id >= reference.asset_id || '/'
+                AND texture.asset_id < reference.asset_id || '0'
                 AND substr(texture.asset_id, 1, length(reference.asset_id) + 1) =
                     reference.asset_id || '/'
             ) THEN 'true' ELSE 'false' END),
@@ -989,6 +1044,8 @@ module Query = struct
               SELECT 1
               FROM narrative_image_assets AS texture
               WHERE texture.category = 'illustration'
+                AND texture.asset_id >= reference.asset_id || '/'
+                AND texture.asset_id < reference.asset_id || '0'
                 AND substr(texture.asset_id, 1, length(reference.asset_id) + 1) =
                     reference.asset_id || '/'
             ) THEN 'true' ELSE 'false' END),
@@ -996,10 +1053,10 @@ module Query = struct
           'objectKey', narrative_image_asset.object_key
         )
         FROM archive_groups AS archive
-        JOIN stories AS story
+        CROSS JOIN stories AS story
           ON story.locale = archive.locale
          AND story.collection_id = archive.collection_id
-        JOIN story_narrative_image_references AS reference
+        CROSS JOIN story_narrative_image_references AS reference
           ON reference.locale = story.locale
          AND reference.story_id = story.story_id
         LEFT JOIN narrative_image_assets AS narrative_image_asset
@@ -1337,8 +1394,9 @@ module Query = struct
         WITH input(query, locale) AS (SELECT lower(trim(?)), ?),
         matching_stories AS MATERIALIZED (
           SELECT story.locale, story.story_id
-          FROM stories AS story
-          CROSS JOIN input
+          -- Resolve the locale before reading the large story rows.
+          FROM input
+          CROSS JOIN stories AS story
           WHERE story.locale = input.locale
             AND instr(
             lower(COALESCE(story.info, '') || ' ' || COALESCE(story.text, '')),
@@ -1348,7 +1406,7 @@ module Query = struct
         matching_story_narrative_image_assets AS MATERIALIZED (
           SELECT DISTINCT reference.locale, reference.category, reference.asset_id
           FROM matching_stories AS story
-          JOIN story_narrative_image_references AS reference
+          CROSS JOIN story_narrative_image_references AS reference
             ON reference.locale = story.locale
            AND reference.story_id = story.story_id
         )
@@ -1364,8 +1422,8 @@ module Query = struct
             ELSE json(entry.parent_json)
           END
         )
-        FROM search_entries AS entry
-        CROSS JOIN input
+        FROM input
+        CROSS JOIN search_entries AS entry
         WHERE entry.locale = input.locale
           AND (
             instr(lower(entry.search_text), input.query) > 0
@@ -1818,11 +1876,20 @@ let sqlite_with_pool_observer ~on_acquire path =
   | Error error -> Error (Caqti_error.show error)
   | Ok pool ->
       let use callback =
-        Caqti_lwt_unix.Pool.use
-          (fun connection ->
-            on_acquire ();
-            callback connection)
-          pool
+        let queued = Timing.now () in
+        let acquired = ref false in
+        Lwt.finalize
+          (fun () ->
+            Caqti_lwt_unix.Pool.use
+              (fun connection ->
+                acquired := true;
+                Timing.add_pool (Timing.elapsed queued);
+                on_acquire ();
+                Timing.database (fun () -> callback connection))
+              pool)
+          (fun () ->
+            if not !acquired then Timing.add_pool (Timing.elapsed queued);
+            Lwt.return_unit)
         >|= function
         | Ok value -> Ok value
         | Error error -> Error (unavailable error)
@@ -1841,7 +1908,9 @@ let sqlite_with_pool_observer ~on_acquire path =
               (Error
                  (`Unavailable
                    (Printf.sprintf "unsupported SQLite schema version %d" version)))
-        | Ok _ -> health ()
+        | Ok _ ->
+            use (fun (module Db) -> Db.collect_list Query.schema_probe ())
+            >|= Result.map (fun _ -> ())
       in
       let sitemap_data () =
         use (fun (module Db) ->
@@ -2662,7 +2731,12 @@ let clean_database_cache path =
               || String.ends_with ~suffix:".sqlite3.part" name)
          then remove_if_exists (Filename.concat path name))
 
-type generation = { database : t; path : string }
+type generation = {
+  database : t;
+  path : string;
+  mutable readers : int;
+  readers_finished : unit Lwt_condition.t;
+}
 
 type fetch_result =
   [ `Not_modified | `Fetched of string option | `Failed of string ]
@@ -2721,7 +2795,11 @@ let download_generation ~fetch ~cache_dir ~counter ~etag ~timeout_seconds =
             | Error `Not_found -> cleanup "database health check failed"
             | Ok () ->
                 candidate := None;
-                Lwt.return (`Fetched ({ database; path }, response_etag))))
+                Lwt.return
+                  (`Fetched
+                    ( { database; path; readers = 0;
+                        readers_finished = Lwt_condition.create () },
+                      response_etag ))))
   in
   Lwt.catch
     (fun () -> Lwt_unix.with_timeout timeout_seconds download)
@@ -2741,7 +2819,14 @@ type live_state = {
 }
 
 let retire generation =
-  generation.database.close () >|= fun () -> remove_if_exists generation.path
+  let rec wait_for_readers () =
+    if generation.readers = 0 then Lwt.return_unit
+    else
+      Lwt_condition.wait generation.readers_finished >>= wait_for_readers
+  in
+  Lwt.no_cancel
+    (wait_for_readers () >>= generation.database.close >|= fun () ->
+     remove_if_exists generation.path)
 
 let refresh_once ~fetch ~cache_dir ~download_timeout_seconds state =
   Lwt_mutex.with_lock state.refresh_lock (fun () ->
@@ -2783,7 +2868,20 @@ let start_live ~fetch ~cache_dir ~download_timeout_seconds =
             refresh_lock = Lwt_mutex.create ();
           }
         in
-        let with_current callback = callback !(state.current).database in
+        let with_current callback =
+          if state.closed then
+            Lwt.return (Error (`Unavailable "database is closed"))
+          else
+            let generation = !(state.current) in
+            generation.readers <- generation.readers + 1;
+            Lwt.finalize
+              (fun () -> callback generation.database)
+              (fun () ->
+                generation.readers <- generation.readers - 1;
+                if generation.readers = 0 then
+                  Lwt_condition.broadcast generation.readers_finished ();
+                Lwt.return_unit)
+        in
         let close_task = ref None in
         let close () =
           match !close_task with
@@ -2801,7 +2899,13 @@ let start_live ~fetch ~cache_dir ~download_timeout_seconds =
           {
             close;
             check = (fun () -> with_current (fun value -> value.check ()));
-            health = (fun () -> with_current (fun value -> value.health ()));
+            (* The current generation passed its schema check before activation.
+               Readiness must not queue behind application SQL or its workers. *)
+            health =
+              (fun () ->
+                Lwt.return
+                  (if state.closed then Error (`Unavailable "database is closed")
+                   else Ok ()));
             sitemap_data =
               (fun () -> with_current (fun value -> value.sitemap_data ()));
             narrative_image_asset =

@@ -23,7 +23,7 @@ export function MaterialAssetCard({
       ? t(`artwork.${source.role === "whole_body" ? "wholeBody" : source.role}`)
       : t("artwork.artworkPanel", { position: index + 1 });
   return (
-    <article className="min-w-0 border-2 border-ink bg-surface [contain-intrinsic-size:auto_28rem] [content-visibility:auto]">
+    <article className="min-w-0 border-2 border-ink bg-surface [contain-intrinsic-block-size:auto_28rem] [content-visibility:auto]">
       <TransitionLink
         aria-label={t("artwork.openMaterialAsset", { role: role.toLocaleLowerCase(language) })}
         className="checkerboard group relative grid min-h-72 max-h-[30rem] place-items-center overflow-hidden border-b-2 border-ink text-inherit no-underline"

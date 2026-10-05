@@ -30,6 +30,7 @@ import time
 import zipfile
 from concurrent.futures import ProcessPoolExecutor
 from dataclasses import asdict, dataclass, replace
+from functools import partial
 from pathlib import Path, PurePosixPath
 from typing import Any, cast
 from urllib.parse import quote
@@ -60,6 +61,7 @@ from ..domain import (
 )
 from ..extraction import extract_assets
 from .cache import UpstreamCache
+from .version import version_response
 
 _ARTWORK_PATTERNS = (
     "avg/imgs/**",
@@ -586,8 +588,7 @@ class UpstreamArtworkBuilder:
         """Get the current ``resVersion`` from the configured version API."""
 
         async with httpx.AsyncClient(timeout=30, follow_redirects=True) as client:
-            response = await client.get(self._version_url)
-            response.raise_for_status()
+            response = await version_response(client, self._version_url)
             version = response.json().get("resVersion")
         if not isinstance(version, str) or not version:
             raise ValueError("upstream version response does not contain resVersion")
@@ -874,7 +875,7 @@ class UpstreamArtworkBuilder:
             )
             self._gallery_recipes_task = task
         try:
-            return await asyncio.shield(task)
+            return await await_owned(task)
         except BaseException:
             if self._gallery_recipes_task is task:
                 self._gallery_recipes_task = None
@@ -1326,7 +1327,7 @@ class UpstreamArtworkBuilder:
                             *_resource_member_path(resource.name).parts
                         )
                         await await_owned(
-                            asyncio.to_thread(_extract_score_video, source, extracted)
+                            loop.run_in_executor(executor, _extract_score_video, source, extracted)
                         )
                         log("extract", "done", time.perf_counter() - started)
 
@@ -1339,13 +1340,16 @@ class UpstreamArtworkBuilder:
                     )
                     started = time.perf_counter()
                     await await_owned(
-                        asyncio.to_thread(
-                            _render_usm_video,
-                            extracted.path,
-                            rendered,
-                            version,
-                            video_id,
-                            score=score_video,
+                        loop.run_in_executor(
+                            executor,
+                            partial(
+                                _render_usm_video,
+                                extracted.path,
+                                rendered,
+                                version,
+                                video_id,
+                                score=score_video,
+                            ),
                         )
                     )
                     log("compose", "done", time.perf_counter() - started)

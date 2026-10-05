@@ -159,7 +159,10 @@ function GalleryGroupLayout({
         <figure className="checkerboard m-0 grid min-h-96 place-items-center overflow-hidden border-[3px] border-ink">
           {media}
         </figure>
-        <aside className="border-2 border-ink bg-surface p-5 min-[64rem]:sticky min-[64rem]:top-6">
+        <aside
+          aria-label={t("gallery.groupArtworks")}
+          className="border-2 border-ink bg-surface p-5 min-[64rem]:sticky min-[64rem]:top-6"
+        >
           <ViewerNavigation
             group={group}
             galleryID={gallery.id}

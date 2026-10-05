@@ -83,17 +83,26 @@ export function PresentationAssetCatalogPage() {
         <ArtworkGrid>
           {visible.map((asset) => (
             <article
-              className="flex min-w-0 flex-col border-2 border-ink bg-surface"
+              className="flex min-w-0 flex-col border-2 border-ink bg-surface [contain-intrinsic-block-size:auto_24rem] [content-visibility:auto]"
               key={`${asset.category}:${asset.id}`}
             >
               <TransitionLink
+                aria-label={t("common.open", { name: asset.id })}
                 className="checkerboard grid aspect-video place-items-center overflow-hidden border-b-2 border-ink bg-black text-white no-underline"
                 state={{ from: `${location.pathname}${location.search}` }}
                 to={`/${locale}/assets/presentation/${asset.category}/${encodeURIComponent(asset.id)}`}
                 transition="forward"
               >
                 {asset.previewUrl ? (
-                  <img alt="" className="size-full object-contain" src={asset.previewUrl} />
+                  <img
+                    alt=""
+                    className="size-full object-contain"
+                    decoding="async"
+                    height={asset.height ?? undefined}
+                    loading="lazy"
+                    src={asset.previewUrl}
+                    width={asset.width ?? undefined}
+                  />
                 ) : (
                   <span className="font-mono text-xs font-bold uppercase">{asset.format}</span>
                 )}

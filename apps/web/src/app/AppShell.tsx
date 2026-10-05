@@ -48,6 +48,7 @@ export function AppShell({ children }: { children: ReactNode }) {
       </a>
       <div className="min-h-screen bg-paper pt-[calc(4rem+env(safe-area-inset-top))] min-[56.001rem]:grid min-[56.001rem]:grid-cols-[20rem_minmax(0,1fr)] min-[56.001rem]:pt-0">
         <aside
+          aria-label={t("navigation.siteLabel")}
           className="scrollbar-none sticky top-0 hidden h-screen overflow-y-auto overscroll-contain border-r-2 border-ink min-[56.001rem]:block"
           style={{ viewTransitionName: "persistent-nav" }}
         >

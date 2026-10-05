@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import struct
 from dataclasses import replace
 from pathlib import Path
@@ -13,7 +14,7 @@ from arkwaifu_updateloop.artwork.video import (
     remux_ivf_to_webm,
     validate_ivf,
 )
-from arkwaifu_updateloop.domain import ArtworkManifest, ScoreVideoRecord
+from arkwaifu_updateloop.domain import ArtworkManifest, MediaRecord, ScoreVideoRecord
 
 
 def _tiny_ivf(path: Path) -> bytes:
@@ -141,3 +142,31 @@ def test_ivf_validation_rejects_truncated_frames(tmp_path: Path):
 
     with pytest.raises(ValueError, match="invalid IVF frame size"):
         validate_ivf(ivf[:-1])
+
+
+@pytest.mark.parametrize("kind", ["score", "narrative"])
+@pytest.mark.parametrize("damage", ["truncated", "same_size", "missing_digest"])
+def test_cached_video_rejects_changed_bytes_or_missing_digest(tmp_path: Path, kind, damage):
+    rendered = tmp_path / "rendered"
+    source = tmp_path / "source.ivf"
+    metadata = validate_ivf(_tiny_ivf(source))
+    artifact = remux_ivf_to_webm(source, tmp_path / "source.webm", metadata)
+    manifest = ArtworkManifest(
+        "v1",
+        (),
+        (),
+        score_videos=(ScoreVideoRecord("loop", artifact),) if kind == "score" else (),
+        media=(MediaRecord("story", "video", artifact),) if kind == "narrative" else (),
+    )
+    write_artwork_manifest(manifest, rendered)
+    cached = read_artwork_manifest(rendered)
+    video = cached.score_videos[0].video if kind == "score" else cached.media[0].artifact
+    if damage == "missing_digest":
+        path = rendered / "manifest.json"
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        del payload["score_videos" if kind == "score" else "media"][0]["sha256"]
+        path.write_text(json.dumps(payload), encoding="utf-8")
+    else:
+        video.path.write_bytes(b"not a video" if damage == "truncated" else b"x" * video.byte_size)
+    with pytest.raises(ValueError, match="digest|sha256"):
+        read_artwork_manifest(rendered)
