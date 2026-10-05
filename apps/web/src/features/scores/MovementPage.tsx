@@ -1,4 +1,4 @@
-import { use, useEffect, useRef, useState } from "react";
+import { use } from "react";
 import { useParams } from "react-router";
 import { getMovement } from "../../api/scores";
 import type { MovementDetail, SectionItem, SectionSummary, MovementDivider } from "../../api/types";
@@ -49,7 +49,7 @@ function MainlineSectionShortcuts({ movement }: { movement: MovementDetail }) {
   );
 }
 
-function SectionMasonry({
+function SectionList({
   locale,
   movementID,
   sections,
@@ -58,45 +58,16 @@ function SectionMasonry({
   movementID: string;
   sections: SectionSummary[];
 }) {
-  const containerRef = useRef<HTMLDivElement>(null);
-  const [isTwoColumn, setIsTwoColumn] = useState(false);
-
-  useEffect(() => {
-    const container = containerRef.current;
-    if (!container || typeof ResizeObserver === "undefined") return;
-
-    const updateColumns = (width: number) => {
-      const nextIsTwoColumn = width >= 672;
-      setIsTwoColumn((current) => (current === nextIsTwoColumn ? current : nextIsTwoColumn));
-    };
-    updateColumns(container.clientWidth);
-
-    const observer = new ResizeObserver(([entry]) => {
-      if (entry) updateColumns(entry.contentRect.width);
-    });
-    observer.observe(container);
-    return () => observer.disconnect();
-  }, []);
-
-  const renderSection = (section: SectionSummary) => (
-    <SectionCard key={section.id} locale={locale} movementID={movementID} section={section} />
-  );
-
+  const { t } = useUi();
   return (
-    <div className="relative z-10 mt-16" ref={containerRef}>
-      {isTwoColumn ? (
-        <div className="grid grid-cols-2 items-start gap-8">
-          <ol className="m-0 grid min-w-0 list-none content-start gap-8 p-0">
-            {sections.filter((_, index) => index % 2 === 0).map(renderSection)}
-          </ol>
-          <ol className="m-0 grid min-w-0 list-none content-start gap-8 p-0">
-            {sections.filter((_, index) => index % 2 === 1).map(renderSection)}
-          </ol>
-        </div>
-      ) : (
-        <ol className="m-0 grid list-none gap-8 p-0">{sections.map(renderSection)}</ol>
-      )}
-    </div>
+    <ol
+      aria-label={t("score.orderedSections")}
+      className="relative z-10 mt-16 grid list-none grid-cols-1 items-start gap-8 p-0 @min-[42rem]/page:grid-cols-2"
+    >
+      {sections.map((section) => (
+        <SectionCard key={section.id} locale={locale} movementID={movementID} section={section} />
+      ))}
+    </ol>
   );
 }
 
@@ -201,7 +172,7 @@ export function MovementPage() {
             )}
           </ol>
         ) : (
-          <SectionMasonry
+          <SectionList
             locale={locale}
             movementID={movement.id}
             sections={movementSections(movement)}
