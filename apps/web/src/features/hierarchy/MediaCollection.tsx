@@ -79,7 +79,7 @@ function MediaCard({
           )}
         </div>
       ) : (
-        <div className="border-b-2 border-ink bg-white p-5">
+        <div className="grid aspect-[3/1] shrink-0 place-items-center border-b-2 border-ink bg-white px-5">
           {asset.url ? (
             // oxlint-disable-next-line jsx-a11y/media-has-caption
             <audio
