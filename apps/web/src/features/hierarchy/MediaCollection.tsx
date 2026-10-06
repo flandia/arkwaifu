@@ -79,7 +79,7 @@ function MediaCard({
           )}
         </div>
       ) : (
-        <div className="border-b-2 border-ink bg-white p-5">
+        <div className="grid aspect-[3/1] shrink-0 place-items-center border-b-2 border-ink bg-white px-5">
           {asset.url ? (
             // oxlint-disable-next-line jsx-a11y/media-has-caption
             <audio
@@ -97,13 +97,39 @@ function MediaCard({
       )}
       <div className="flex min-w-0 flex-1 flex-col p-5">
         <Eyebrow>{label}</Eyebrow>
-        <code className="block break-all text-sm font-extrabold" translate="no">
-          {asset.id}
+        <code
+          className={`block break-all text-sm font-extrabold ${isVideo ? "" : "mb-5"}`}
+          translate="no"
+        >
+          {!isVideo && asset.url ? (
+            <TransitionLink
+              aria-label={t("common.open", { name: asset.id })}
+              className="underline decoration-2 underline-offset-4 hover:bg-brand-soft"
+              state={{ from }}
+              to={destination}
+              transition="forward"
+            >
+              {asset.id}
+            </TransitionLink>
+          ) : (
+            asset.id
+          )}
         </code>
-        {asset.mime || asset.size ? (
-          <div className="mt-5 flex flex-wrap gap-x-5 gap-y-2 border-t border-line pt-4 font-mono text-xs text-muted">
-            {asset.mime ? <span>{asset.mime}</span> : null}
-            {asset.size ? <span>{formatBytes(asset.size)}</span> : null}
+        {!isVideo || asset.mime || asset.size ? (
+          <div
+            className={`flex flex-wrap gap-x-5 gap-y-2 border-t border-line pt-4 font-mono text-xs text-muted ${isVideo ? "mt-5" : "mt-auto"}`}
+          >
+            {isVideo ? (
+              <>
+                {asset.mime ? <span>{asset.mime}</span> : null}
+                {asset.size ? <span>{formatBytes(asset.size)}</span> : null}
+              </>
+            ) : (
+              <>
+                <span>{asset.mime || "N/A"}</span>
+                <span>{asset.size == null ? "N/A" : formatBytes(asset.size)}</span>
+              </>
+            )}
           </div>
         ) : null}
       </div>
