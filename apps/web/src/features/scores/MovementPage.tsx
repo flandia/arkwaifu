@@ -1,4 +1,4 @@
-import { use } from "react";
+import { use, useLayoutEffect, useRef } from "react";
 import { useParams } from "react-router";
 import { getMovement } from "../../api/scores";
 import type { MovementDetail, SectionItem, SectionSummary, MovementDivider } from "../../api/types";
@@ -59,10 +59,39 @@ function SectionList({
   sections: SectionSummary[];
 }) {
   const { t } = useUi();
+  const listRef = useRef<HTMLOListElement>(null);
+
+  useLayoutEffect(() => {
+    const list = listRef.current;
+    if (!list || typeof ResizeObserver === "undefined") return;
+    const cards = [...list.querySelectorAll<HTMLElement>(":scope > li > a")];
+    const update = () => {
+      const style = getComputedStyle(list);
+      const masonry = style.gridTemplateColumns.split(" ").length > 1;
+      const gap = parseFloat(style.columnGap);
+      const heights = cards.map((card) => card.getBoundingClientRect().height);
+      cards.forEach((card, index) => {
+        card.parentElement!.style.gridRowEnd = masonry
+          ? `span ${Math.ceil(heights[index]! + gap)}`
+          : "";
+      });
+      list.dataset.masonry = String(masonry);
+    };
+    const observer = new ResizeObserver(update);
+    cards.forEach((card) => observer.observe(card, { box: "border-box" }));
+    update();
+    return () => {
+      observer.disconnect();
+      delete list.dataset.masonry;
+      cards.forEach((card) => card.parentElement!.style.removeProperty("grid-row-end"));
+    };
+  }, [sections]);
+
   return (
     <ol
       aria-label={t("score.orderedSections")}
-      className="relative z-10 mt-16 grid list-none grid-cols-1 items-start gap-8 p-0 @min-[42rem]/page:grid-cols-2"
+      className="relative z-10 mt-16 grid list-none grid-cols-1 items-start gap-8 p-0 data-[masonry=true]:auto-rows-[1px] data-[masonry=true]:gap-y-0 @min-[42rem]/page:grid-cols-2 [&>li]:[content-visibility:visible]"
+      ref={listRef}
     >
       {sections.map((section) => (
         <SectionCard key={section.id} locale={locale} movementID={movementID} section={section} />
