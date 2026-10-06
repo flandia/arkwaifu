@@ -120,9 +120,8 @@ export function SectionCard({
         className={
           textBelow
             ? "group block w-full overflow-hidden bg-black text-white no-underline @container/card"
-            : "group relative grid w-full overflow-hidden bg-transparent text-white no-underline @container/card"
+            : "group relative grid w-full grid-cols-1 overflow-hidden bg-transparent text-white no-underline @container/card"
         }
-        style={textBelow ? undefined : imageRatio(section)}
         to={`/${locale}/scores/${encodeURIComponent(movementID)}/${encodeURIComponent(section.id)}`}
         transition="forward"
       >
@@ -135,17 +134,24 @@ export function SectionCard({
             />
           </div>
         ) : (
-          <ScoreImageAsset
-            alt=""
-            asset={section.keyVisual}
-            className="absolute inset-0 size-full object-contain brightness-70 transition-[filter,transform] duration-500 group-hover:scale-[1.02] group-hover:brightness-100 motion-reduce:transform-none"
-          />
+          <>
+            <span
+              aria-hidden="true"
+              className="col-start-1 row-start-1"
+              style={imageRatio(section)}
+            />
+            <ScoreImageAsset
+              alt=""
+              asset={section.keyVisual}
+              className="absolute inset-0 size-full object-contain brightness-70 transition-[filter,transform] duration-500 group-hover:scale-[1.02] group-hover:brightness-100 motion-reduce:transform-none"
+            />
+          </>
         )}
         <div
           className={
             textBelow
               ? "border-t border-white/20 p-6"
-              : "relative z-10 mt-auto flex min-h-full flex-col justify-end p-6"
+              : "relative z-10 col-start-1 row-start-1 mt-auto flex flex-col justify-end p-6"
           }
         >
           <ScoreImageAsset
@@ -161,7 +167,7 @@ export function SectionCard({
             {section.name || t("score.untitledSection")}
           </h3>
           <p
-            className="mb-6 hidden line-clamp-3 leading-relaxed text-white/65 @min-[24rem]/card:block"
+            className="mb-6 hidden leading-relaxed text-white/65 @min-[24rem]/card:line-clamp-3"
             lang={language}
           >
             {section.description}
