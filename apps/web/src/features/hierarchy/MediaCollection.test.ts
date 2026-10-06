@@ -46,3 +46,34 @@ it("links available story and orphan audio to their asset details", async () => 
   }
   expect(storyMarkup).not.toContain('href="/EN/assets/narrative/audio/unavailable"');
 });
+
+it("keeps both metadata fields on audio cards when values are missing", async () => {
+  Object.defineProperty(globalThis, "document", {
+    configurable: true,
+    value: { documentElement: { lang: "" } },
+  });
+  const { StoryMediaCollection } = await import("./MediaCollection");
+  const asset = { namespace: "narrative" as const, category: "audio" as const, id: "missing" };
+  const cases = [
+    { fields: {}, values: ["N/A", "N/A"] },
+    { fields: { mime: "audio/wav" }, values: ["audio/wav", "N/A"] },
+    { fields: { size: 1024 }, values: ["N/A", "1\u00a0KiB"] },
+    { fields: { mime: "audio/wav", size: 0 }, values: ["audio/wav", "0\u00a0B"] },
+  ];
+
+  for (const { fields, values } of cases) {
+    const markup = renderToStaticMarkup(
+      createElement(
+        MemoryRouter,
+        null,
+        createElement(StoryMediaCollection, {
+          from: "/EN/scores/main/chapter",
+          locale: "EN",
+          media: [{ asset, ...fields }],
+        }),
+      ),
+    );
+    expect(markup).toContain(`<span>${values[0]}</span><span>${values[1]}</span>`);
+    expect(markup).not.toContain('href="/EN/assets/narrative/audio/missing"');
+  }
+});
