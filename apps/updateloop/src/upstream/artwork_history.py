@@ -33,8 +33,8 @@ _RAW_CONCURRENCY = 8
 _CACHE_PATH = PurePosixPath("artwork", "windows-version-history.txt")
 _VERSION_PATTERN = re.compile(
     r"(?P<year>\d{2})-(?P<month>\d{2})-(?P<day>\d{2})-"
-    r"(?P<hour>\d{2})-(?P<minute>\d{2})-(?P<second>\d{2})_"
-    r"(?P<revision>[0-9a-f]{6})"
+    r"(?P<hour>\d{2})-(?P<minute>\d{2})-(?P<second>\d{2})"
+    r"(?:_[0-9a-f]{6}|-[0-9]{8})"
 )
 _LOGGER = logging.getLogger(__name__)
 

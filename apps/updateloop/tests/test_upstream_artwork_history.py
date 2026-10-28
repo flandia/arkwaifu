@@ -10,7 +10,7 @@ import pytest
 from arkwaifu_updateloop.upstream.artwork_history import WindowsVersionHistory
 from arkwaifu_updateloop.upstream.cache import UpstreamCache
 
-_CURRENT = "26-08-07-10-51-39_26e0fc"
+_CURRENT = "26-10-22-13-56-52-86025105"
 _MIDDLE = "26-05-27-13-34-07_688e6e"
 _EARLIEST = "26-03-09-09-45-56_fd97a4"
 
@@ -56,7 +56,8 @@ async def test_history_pages_orders_deduplicates_and_appends_current(tmp_path: P
         revision = request.url.path.split("/")[3]
         return httpx.Response(200, json={"version": {"resVersion": raw_versions[revision]}})
 
-    versions = await _history(tmp_path, respond).versions(_CURRENT)
+    history = _history(tmp_path, respond)
+    versions = await history.versions(_CURRENT)
 
     assert versions == (_EARLIEST, _MIDDLE, _CURRENT)
     assert api_pages == [1, 2]
@@ -64,6 +65,8 @@ async def test_history_pages_orders_deduplicates_and_appends_current(tmp_path: P
     assert cache.read_text(encoding="utf-8") == f"{_EARLIEST}\n{_MIDDLE}\n{_CURRENT}\n"
     assert "OpenBachelorS" not in cache.read_text(encoding="utf-8")
     assert "oldest" not in cache.read_text(encoding="utf-8")
+    assert await history.versions(_CURRENT) == versions
+    assert api_pages == [1, 2]
 
 
 @pytest.mark.asyncio
@@ -131,6 +134,11 @@ async def test_historical_raw_downloads_have_bounded_concurrency(tmp_path: Path)
         ({"version": {"clientVersion": "2.5.01"}}, "does not contain a resVersion"),
         ({"version": {"resVersion": "not-a-version"}}, "malformed Windows resVersion"),
         ({"version": {"resVersion": "26-02-31-00-00-00_abcdef"}}, "malformed.*timestamp"),
+        ({"version": {"resVersion": "26-02-31-00-00-00-12345678"}}, "malformed.*timestamp"),
+        ({"version": {"resVersion": "26-10-22-13-56-52-1234567"}}, "malformed Windows resVersion"),
+        ({"version": {"resVersion": "26-10-22-13-56-52-1234567a"}}, "malformed Windows resVersion"),
+        ({"version": {"resVersion": "26-10-22-13-56-52_12345678"}}, "malformed Windows resVersion"),
+        ({"version": {"resVersion": "26-10-22-13-56-52-abcdef"}}, "malformed Windows resVersion"),
     ],
 )
 async def test_malformed_historical_version_fails_without_skipping(
