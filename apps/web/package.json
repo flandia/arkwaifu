@@ -20,7 +20,7 @@
     "lru-cache": "^11.5.2",
     "react": "19.3.0-canary-bfb7a768-20260811",
     "react-dom": "19.3.0-canary-bfb7a768-20260811",
-    "react-error-boundary": "^6.1.2",
+    "react-error-boundary": "^6.1.6",
     "react-i18next": "^17.0.11",
     "react-router": "8.3.0",
     "tailwind-merge": "^3.6.0"
