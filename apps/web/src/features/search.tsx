@@ -1,6 +1,6 @@
 import { startTransition, useEffect, useId, useState } from "react";
 import type { TFunction } from "i18next";
-import { useParams, useSearchParams } from "react-router";
+import { useLocation, useNavigationType, useParams, useSearchParams } from "react-router";
 import { getSearchResults } from "../api/search";
 import type { Locale, SearchResult } from "../api/types";
 import { useUi } from "../i18n";
@@ -17,9 +17,7 @@ import { ArchivePage, EmptyState, PageHeader } from "../shared/Page";
 import { Eyebrow } from "../shared/ui/Typography";
 
 interface SearchState {
-  query: string;
   results: SearchResult[];
-  loading: boolean;
   error: unknown;
 }
 
@@ -115,25 +113,96 @@ function SearchResultCard({
   );
 }
 
+function SearchResults({ locale, query }: { locale: Locale; query: string }) {
+  const { t } = useUi();
+  const [request, setRequest] = useState<{
+    locale: Locale;
+    query: string;
+    state: SearchState | null;
+  }>({
+    locale,
+    query,
+    state: null,
+  });
+  const current = request.locale === locale && request.query === query;
+  const state = current ? request.state : null;
+  if (!current) setRequest({ locale, query, state: null });
+
+  useEffect(() => {
+    if (!query) return;
+    const controller = new AbortController();
+    let active = true;
+    const timeout = window.setTimeout(() => {
+      void getSearchResults(locale, query, controller.signal).then(
+        (results) => {
+          if (active) setRequest({ locale, query, state: { results, error: null } });
+        },
+        (error: unknown) => {
+          if (active) setRequest({ locale, query, state: { results: [], error } });
+        },
+      );
+    }, 250);
+    return () => {
+      active = false;
+      window.clearTimeout(timeout);
+      controller.abort();
+    };
+  }, [locale, query]);
+
+  if (state?.error) throw state.error;
+  const settled = Boolean(query) && state !== null;
+
+  return (
+    <>
+      <p
+        className="m-0 mb-5 min-h-5 border-b-2 border-ink pb-8 text-sm text-muted md:mb-9"
+        aria-live="polite"
+        aria-atomic="true"
+      >
+        {query && !state
+          ? t("search.loading")
+          : settled
+            ? t("search.resultCount", { count: state!.results.length })
+            : null}
+      </p>
+      {!query ? (
+        <EmptyState title={t("search.initial")}>{t("search.initialHint")}</EmptyState>
+      ) : settled && state!.results.length === 0 ? (
+        <EmptyState title={t("search.noResults")}>{t("search.noResultsHint")}</EmptyState>
+      ) : (
+        <ol className="m-0 grid list-none grid-cols-[repeat(auto-fit,minmax(min(100%,22rem),1fr))] border-t-2 border-l-2 border-ink p-0">
+          {state?.results.map((result, index) => (
+            <SearchResultCard
+              index={index}
+              key={`${result.kind}:${result.category ?? ""}:${result.id}`}
+              locale={locale}
+              result={result}
+            />
+          ))}
+        </ol>
+      )}
+    </>
+  );
+}
+
 export function SearchPage() {
   const { t } = useUi();
   const locale = requiredLocale(useParams().locale);
   const [searchParams, setSearchParams] = useSearchParams();
+  const navigationType = useNavigationType();
+  const locationKey = useLocation().key;
   const urlQuery = searchParams.get("q") ?? "";
-  const [query, setQuery] = useState(urlQuery);
-  const fieldID = useId();
-  const [state, setState] = useState<SearchState>({
-    query: "",
-    results: [],
-    loading: false,
-    error: null,
+  const urlSearch = searchParams.toString();
+  const [draft, setDraft] = useState<{ base: string; query: string; pending: string | null }>({
+    base: locationKey,
+    query: urlQuery,
+    pending: null,
   });
-
-  useEffect(() => {
-    // Browser navigation can change the URL independently of the input.
-    // oxlint-disable-next-line react/set-state-in-effect
-    setQuery(urlQuery);
-  }, [urlQuery]);
+  const sameLocation = draft.base === locationKey;
+  const ownReplace = navigationType === "REPLACE" && draft.pending === urlSearch;
+  const query = sameLocation || ownReplace ? draft.query : urlQuery;
+  if (!sameLocation) setDraft({ base: locationKey, query, pending: null });
+  const fieldID = useId();
 
   useEffect(() => {
     if (query === urlQuery) return;
@@ -141,51 +210,11 @@ export function SearchPage() {
       const next = new URLSearchParams(searchParams);
       if (query) next.set("q", query);
       else next.delete("q");
+      setDraft((previous) => ({ ...previous, pending: next.toString() }));
       startTransition(() => setSearchParams(next, { replace: true }));
     }, 250);
     return () => window.clearTimeout(timeout);
   }, [query, searchParams, setSearchParams, urlQuery]);
-
-  const normalizedQuery = query.trim();
-  useEffect(() => {
-    let active = true;
-    if (!normalizedQuery) {
-      // Clear the previous request state as soon as the search is cleared.
-      // oxlint-disable-next-line react/set-state-in-effect
-      setState({ query: "", results: [], loading: false, error: null });
-      return () => {
-        active = false;
-      };
-    }
-
-    const controller = new AbortController();
-    // Show loading during the debounce as well as the request.
-    // oxlint-disable-next-line react/set-state-in-effect
-    setState((previous) => ({ ...previous, query: normalizedQuery, loading: true, error: null }));
-    const timeout = window.setTimeout(() => {
-      void getSearchResults(locale, normalizedQuery, controller.signal).then(
-        (results) => {
-          if (!active) return;
-          setState({ query: normalizedQuery, results, loading: false, error: null });
-        },
-        (error: unknown) => {
-          if (!active) return;
-          setState((previous) => ({ ...previous, query: normalizedQuery, loading: false, error }));
-        },
-      );
-    }, 250);
-
-    return () => {
-      active = false;
-      window.clearTimeout(timeout);
-      controller.abort();
-    };
-  }, [locale, normalizedQuery]);
-
-  if (state.error) throw state.error;
-
-  const hasQuery = Boolean(query.trim());
-  const settled = hasQuery && state.query === normalizedQuery && !state.loading;
 
   return (
     <ArchivePage description={t("search.description")} noIndex title={t("search.title")}>
@@ -195,10 +224,7 @@ export function SearchPage() {
         title={t("search.title")}
       />
 
-      <section
-        className="my-8 grid gap-3 border-b-2 border-ink pb-8 md:mb-12"
-        aria-label={t("search.title")}
-      >
+      <section className="mt-8 grid gap-3" aria-label={t("search.title")}>
         <label
           className="text-[0.68rem] font-extrabold tracking-[0.07em] uppercase"
           htmlFor={fieldID}
@@ -210,37 +236,17 @@ export function SearchPage() {
           className="min-h-14 w-full rounded-none border-2 border-ink bg-surface px-4 py-3 text-lg text-ink"
           id={fieldID}
           name="q"
-          onChange={(event) => setQuery(event.currentTarget.value)}
+          onChange={(event) => {
+            const value = event.currentTarget.value;
+            setDraft((previous) => ({ ...previous, base: locationKey, query: value }));
+          }}
           placeholder={t("search.placeholder")}
           spellCheck={false}
           type="search"
           value={query}
         />
-        <p className="m-0 min-h-5 text-sm text-muted" aria-live="polite" aria-atomic="true">
-          {state.loading
-            ? t("search.loading")
-            : settled
-              ? t("search.resultCount", { count: state.results.length })
-              : null}
-        </p>
+        <SearchResults locale={locale} query={query.trim()} />
       </section>
-
-      {!hasQuery ? (
-        <EmptyState title={t("search.initial")}>{t("search.initialHint")}</EmptyState>
-      ) : settled && state.results.length === 0 ? (
-        <EmptyState title={t("search.noResults")}>{t("search.noResultsHint")}</EmptyState>
-      ) : (
-        <ol className="m-0 grid list-none grid-cols-[repeat(auto-fit,minmax(min(100%,22rem),1fr))] border-t-2 border-l-2 border-ink p-0">
-          {state.results.map((result, index) => (
-            <SearchResultCard
-              index={index}
-              key={`${result.kind}:${result.category ?? ""}:${result.id}`}
-              locale={locale}
-              result={result}
-            />
-          ))}
-        </ol>
-      )}
     </ArchivePage>
   );
 }
