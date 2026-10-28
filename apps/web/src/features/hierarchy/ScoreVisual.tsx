@@ -77,28 +77,21 @@ export function ScoreBackdrop({
 }) {
   const reducedMotion = useReducedMotion();
   const containerRef = useRef<HTMLDivElement>(null);
-  const [nearViewport, setNearViewport] = useState(!viewportGated);
+  const [nearViewport, setNearViewport] = useState(false);
   const [failedVideo, setFailedVideo] = useState<string>();
   const poster = image?.image?.url;
   const videoUrl = video?.video?.url;
 
   useEffect(() => {
-    if (!viewportGated) {
-      setNearViewport(true);
-      return;
-    }
     const element = containerRef.current;
-    if (!element || typeof IntersectionObserver === "undefined") {
-      setNearViewport(true);
-      return;
-    }
+    if (!element || typeof IntersectionObserver === "undefined") return;
     const observer = new IntersectionObserver(
       ([entry]) => setNearViewport(entry?.isIntersecting ?? false),
       { rootMargin: "240px 0px", threshold: 0.01 },
     );
     observer.observe(element);
     return () => observer.disconnect();
-  }, [viewportGated]);
+  }, []);
 
   return (
     <div
@@ -112,7 +105,10 @@ export function ScoreBackdrop({
         className={cn("size-full object-cover", imageClassName)}
         eager={priority}
       />
-      {!reducedMotion && nearViewport && video?.video && failedVideo !== videoUrl ? (
+      {!reducedMotion &&
+      (!viewportGated || typeof IntersectionObserver === "undefined" || nearViewport) &&
+      video?.video &&
+      failedVideo !== videoUrl ? (
         // The upstream Score videos are visual loops without meaningful dialogue.
         // oxlint-disable-next-line jsx-a11y/media-has-caption
         <video
