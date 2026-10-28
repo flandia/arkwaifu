@@ -84,11 +84,15 @@ export function ScoreBackdrop({
 
   useEffect(() => {
     if (!viewportGated) {
+      // A prop change can disable gating after the observer has hidden the video.
+      // oxlint-disable-next-line react/set-state-in-effect
       setNearViewport(true);
       return;
     }
     const element = containerRef.current;
     if (!element || typeof IntersectionObserver === "undefined") {
+      // Without an observer, keep the video available rather than gating it forever.
+      // oxlint-disable-next-line react/set-state-in-effect
       setNearViewport(true);
       return;
     }

@@ -35,7 +35,7 @@
     "@vitejs/plugin-react": "6.0.5",
     "oxfmt": "^0.63.0",
     "oxlint": "^1.89.0",
-    "oxlint-tsgolint": "^7.0.2001",
+    "oxlint-tsgolint": "^7.0.2003",
     "tailwindcss": "^4.3.3",
     "vite": "8.2.4"
   },

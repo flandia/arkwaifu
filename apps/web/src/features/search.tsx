@@ -130,6 +130,8 @@ export function SearchPage() {
   });
 
   useEffect(() => {
+    // Browser navigation can change the URL independently of the input.
+    // oxlint-disable-next-line react/set-state-in-effect
     setQuery(urlQuery);
   }, [urlQuery]);
 
@@ -148,6 +150,8 @@ export function SearchPage() {
   useEffect(() => {
     let active = true;
     if (!normalizedQuery) {
+      // Clear the previous request state as soon as the search is cleared.
+      // oxlint-disable-next-line react/set-state-in-effect
       setState({ query: "", results: [], loading: false, error: null });
       return () => {
         active = false;
@@ -155,6 +159,8 @@ export function SearchPage() {
     }
 
     const controller = new AbortController();
+    // Show loading during the debounce as well as the request.
+    // oxlint-disable-next-line react/set-state-in-effect
     setState((previous) => ({ ...previous, query: normalizedQuery, loading: true, error: null }));
     const timeout = window.setTimeout(() => {
       void getSearchResults(locale, normalizedQuery, controller.signal).then(
