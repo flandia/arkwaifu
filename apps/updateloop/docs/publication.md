@@ -117,6 +117,37 @@ ART/<resVersion>/thumbnail/<category>/<escaped-id>.webp
 
 Thumbnail uploads set `image/webp` and use the object store’s cache defaults. Material Assets do not receive thumbnails.
 
+## Allow browser downloads from the public object store
+
+Deploy the bucket and CDN CORS configuration before the web download buttons.
+The browser fetches an original file into a Blob, then starts a native download
+without leaving the archive. Displaying an image or playing media alone does
+not verify CORS access.
+
+In DigitalOcean Spaces, open the `arkwaifu` bucket's **Settings → CORS
+Configurations → Add** and save this read-only rule:
+
+| Setting | Value |
+| --- | --- |
+| Origin | `*` |
+| Allowed Methods | `GET`, `HEAD` |
+| Allowed Headers | Leave empty |
+| Access Control Max Age | `5` seconds |
+
+The wildcard allows browser reads of this already-public archive without
+credentials. Keep existing bucket permissions and immutable object metadata.
+Purge the Spaces CDN cache after saving the rule so cached responses receive
+the new headers, as described in the [DigitalOcean CORS guide](https://docs.digitalocean.com/products/spaces/how-to/configure-cors/).
+The `assets.cn.arkwaifu.cc` mirror must forward `Origin`, preserve the resulting
+`Access-Control-Allow-Origin` header, and purge any cached responses that lack
+it.
+
+Verify representative PNG, audio, and video GET responses through both public
+asset hosts with `Origin: https://arkwaifu.cc` and
+`Origin: https://cn.arkwaifu.cc`. They must return
+`Access-Control-Allow-Origin: *`. Then test a download from each website in a
+browser. Local MinIO must also permit reads from the configured Vite origin.
+
 ## Process artwork with bounded resources
 
 Each selected artwork resource passes through four cache stages. These stage names describe cache products, not CLI commands.

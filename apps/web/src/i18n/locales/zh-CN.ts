@@ -8,6 +8,8 @@ export const zhCN = {
     open: "打开{{name}}",
     backTo: "返回{{name}}",
     untitled: "未命名",
+    downloading: "正在下载……",
+    downloadFailed: "无法下载文件，请重试或打开原始文件。",
   },
   navigation: {
     primaryLabel: "主导航",

@@ -19,6 +19,7 @@ import {
 } from "../../navigation";
 import { ArchivePage, BackLink, PageHeader } from "../../shared/Page";
 import { ActionLink } from "../../shared/ui/Action";
+import { DownloadButton } from "../../shared/ui/DownloadButton";
 import { Eyebrow, SectionHeading } from "../../shared/ui/Typography";
 import { StoryOccurrences } from "../artwork/NarrativeImageReverseReferences";
 
@@ -175,9 +176,7 @@ export function NarrativeMediaAssetPage() {
             ))}
           </dl>
           <div className="grid gap-3">
-            <ActionLink download to={media.url}>
-              {t("mediaAsset.downloadOriginal")}
-            </ActionLink>
+            <DownloadButton url={media.url}>{t("mediaAsset.downloadOriginal")}</DownloadButton>
             <ActionLink
               adornment="external"
               rel="noreferrer"
